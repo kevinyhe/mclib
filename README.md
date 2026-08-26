@@ -300,3 +300,52 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## VelocityMechanism
+
+A closed-loop velocity mechanism whose state is the target RPM. The velocity
+sensor and the voltage output are injected as callbacks, so it is not tied to
+any particular device.
+
+```cpp
+ml::device::MotorGroup motors({1, -2}, ml::device::Gearset::Blue);
+
+ml::mechanism::VelocityMechanismConfig config;
+config.kv = 12.0 / 600.0;  // volts per RPM, roughly max volts / free speed
+config.kp = 0.01;
+config.tolerance_rpm = 50.0;
+config.dwell_ms = 200.0;
+
+ml::mechanism::VelocityMechanism spinner(
+    [&motors] { return motors.getAverageActualVelocity(); },
+    [&motors](double volts) { motors.setVoltage(volts); },
+    config);
+
+spinner.setTargetRpm(500.0);
+spinner.getCurrentRpm();
+spinner.atSpeed();      // within tolerance_rpm for dwell_ms straight
+spinner.isSpinningUp(); // target commanded, not there yet
+spinner.stop();         // coasts down
+```
+
+Output is `kv * target_rpm` feedforward plus PID correction, clamped to the
+sign of the target so the mechanism is never driven backwards to brake. The
+integral only accumulates within `integral_range_rpm` of the target, which
+keeps it from winding up during spin-up.
+
+`applyState` runs from `periodic()`, so the mechanism has to be registered with
+the scheduler or nothing moves:
+
+```cpp
+std::unique_ptr<Command> spinner_stop;
+std::unique_ptr<Command> spinner_hold;   // holds speed, never finishes
+std::unique_ptr<Command> spinner_ready;  // finishes at speed or on timeout
+
+void initialize() {
+  spinner_stop = spinner.makeStopCommand();
+  spinner_hold = spinner.makeSpinCommand(500.0);
+  spinner_ready = spinner.makeSpinUpCommand(500.0, 2000.0);
+
+  CommandScheduler::registerSubsystem(&spinner, spinner_stop.get());
+}
+```
