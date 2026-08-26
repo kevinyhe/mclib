@@ -300,3 +300,59 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## MultiPositionMechanism
+
+`mclib::mechanism::MultiPositionMechanism<StateT>` is for a mechanism that moves
+between a fixed, ordered list of setpoints: arm presets, lift stages, hood
+angles. You give it a table mapping each state to a number and a sink that
+accepts that number. Every scheduler tick it pushes the current state's setpoint
+into the sink, so it works with any position controller without knowing about
+it.
+
+```cpp
+enum class LiftStage { Down, Middle, High };
+
+double lift_target = 0.0;
+
+mclib::mechanism::MultiPositionMechanism<LiftStage> lift(
+    LiftStage::Down,
+    {{LiftStage::Down, 0.0}, {LiftStage::Middle, 12.5}, {LiftStage::High, 30.0}},
+    [](double setpoint) { lift_target = setpoint; });
+
+lift.setPosition(LiftStage::Middle);
+lift.next();      // -> High, and stays at High if called again
+lift.previous();  // -> Middle
+lift.cycle();     // -> High, then wraps to Down
+
+auto lift_hold = lift.idleCommand();
+CommandScheduler::registerSubsystem(&lift, lift_hold.get());
+
+auto to_high = lift.makePositionCommand(LiftStage::High);
+auto step_up = lift.makeNextCommand();      // one-shot, finishes immediately
+auto step_dn = lift.makePreviousCommand();  // one-shot
+auto rotate  = lift.makeCycleCommand();     // one-shot
+```
+
+The mechanism only moves once it is registered with `CommandScheduler`, which
+is what calls `periodic()`. Register it with an idle default command, not with
+`makePositionCommand(...)`: a position command runs forever and re-asserts its
+state every tick, so if it is the default it will undo a `makeNextCommand()`
+press on the tick right after that one-shot finishes.
+
+`next()` and `previous()` clamp at the ends of the table. `cycle()` is the one
+that wraps from the last entry back to the first. The table order, not the
+numeric setpoints, decides what "next" means.
+
+Degenerate cases are safe because `applyState` runs every tick. With an empty
+table, or when the current state is not in the table, the sink is given the
+default setpoint (constructor argument, `0.0` unless you pass one). That is the
+same number `setpointFor()` and `currentSetpoint()` report, so an at-target
+check never disagrees with what the sink was actually given. `currentIndex()`
+returns `kNoPosition` for a state that is off the table, and `positionAt()`
+returns `nullptr` for an index that is out of range. Calling `next()`,
+`previous()`, or `cycle()` while the state is off the table moves to the first
+entry, which is the home position by convention.
+
+The table is searched front to back and the first match wins, so listing a
+state twice makes the later entry unreachable. List each state once.
