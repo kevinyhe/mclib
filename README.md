@@ -300,3 +300,52 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Lift
+
+`mclib::mechanism::Lift` is a preset-based PID lift. It reads position from a
+`device::Rotation` and drives a `device::MotorGroup`.
+
+```cpp
+mclib::mechanism::LiftConfig config;
+config.motor_ports = {11, -12};
+config.rotation_port = 13;
+config.kp = 0.09;
+config.down_deg = 0.0;
+config.low_deg = 70.0;
+config.mid_deg = 150.0;
+config.high_deg = 250.0;
+
+mclib::mechanism::Lift lift(config);
+
+// periodic() only runs for registered subsystems, and the PID lives there, so
+// the lift must be registered or it never drives the motors.
+// idleCommand() never finishes and never touches the target, so the PID keeps
+// holding the last commanded preset whenever nothing else is scheduled.
+auto lift_idle = lift.idleCommand();
+CommandScheduler::registerSubsystem(&lift, lift_idle.get());
+
+lift.setPreset(mclib::mechanism::LiftPreset::Mid);
+lift.next();      // Mid -> High
+lift.next();      // stays at High, presets do not wrap
+lift.previous();  // High -> Mid
+
+lift.moveTo(120.0);          // raw angle; getPreset() snaps to the nearest one
+lift.setManualVoltage(6.0);  // manual override until the next preset/moveTo
+lift.stop();
+
+// Keep the unique_ptr alive; the scheduler stores the raw pointer.
+auto lift_high =
+    lift.makePresetCommand(mclib::mechanism::LiftPreset::High, 1500.0);
+lift_high->schedule();
+```
+
+`makePresetCommand` finishes when `atTarget()` is true or the timeout elapses
+(pass `0.0` for no timeout). `makeNextCommand`, `makePreviousCommand`, and
+`makeStopCommand` are one-shot and finish immediately; `makeManualCommand` runs
+until interrupted.
+
+`PID::update` zeroes its output once it has arrived, so the lift watches for
+drift past `big_error_deg` and resets the PID to drive back to the target. The
+motors also sit in `BrakeMode::Hold`, and `stop()` brakes instead of commanding
+0 V, so an idle lift resists gravity mechanically as well.
