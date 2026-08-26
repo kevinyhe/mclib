@@ -300,3 +300,52 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Wings
+
+`mechanism/wings.hpp` drives two independently actuated wings (doinkers) from one
+subsystem. The cached state is the logical "is extended" value per side; each
+solenoid's polarity lives in `device::Pneumatic`, so a side plumbed backwards
+never flips the cached state.
+
+`isExtended(WingSide::Both)` is true only when both wings are extended.
+`toggle(WingSide::Both)` inverts each side on its own.
+
+Every command factory except `makeExtendForCommand` terminates after a single
+scheduler pass, so the default command takes the subsystem back right away. Use
+`idleCommand()` as the default so nothing undoes the wings you just moved:
+
+```cpp
+using mclib::mechanism::WingSide;
+
+mclib::mechanism::WingsConfig config;
+config.left_port = 'A';
+config.right_port = 'B';
+config.right_extended_state = false;  // right solenoid is plumbed inverted
+config.default_state = false;         // both wings start retracted
+
+mclib::mechanism::Wings wings(config);
+
+std::unique_ptr<Command> wings_idle;
+std::unique_ptr<Command> left_out;
+std::unique_ptr<Command> both_in;
+std::unique_ptr<Command> right_toggle;
+std::unique_ptr<Command> left_pulse;
+
+void initialize() {
+  wings_idle = wings.idleCommand();
+  left_out = wings.makeExtendCommand(WingSide::Left);
+  both_in = wings.makeRetractCommand(WingSide::Both);
+  right_toggle = wings.makeToggleCommand(WingSide::Right);
+  left_pulse = wings.makeExtendForCommand(WingSide::Left, 500 * millisecond);
+
+  CommandScheduler::registerSubsystem(&wings, wings_idle.get());
+}
+```
+
+`applyState` only runs from `periodic()`, so the solenoids move only once the
+subsystem is registered.
+
+`makeExtendForCommand` is the one factory that runs for a while: it holds one
+fixed state for the full duration, so the other side's value is snapshotted when
+the command is built, not when it runs. It does not retract on end.
