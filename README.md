@@ -300,3 +300,50 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Hood
+
+`mclib::mechanism::Hood` decodes two solenoids into three named angles. The
+decode table in `HoodConfig` is the only place the mapping lives.
+
+| `HoodState` | first solenoid | second solenoid |
+|-------------|----------------|-----------------|
+| `Down`      | retracted      | retracted       |
+| `Mid`       | extended       | retracted       |
+| `Up`        | extended       | extended        |
+
+The fourth combination, `(retracted, extended)`, is unused by default. Replace
+`HoodConfig::decode` to use it or to reorder the angles. A state outside the
+table is ignored by `applyState`, which runs every scheduler tick.
+
+```cpp
+using namespace mclib::mechanism;
+
+HoodConfig config;
+config.first_port = 'A';
+config.second_port = 'B';
+config.second_extended_state = false;  // second solenoid is plumbed inverted
+config.default_state = false;          // logical value both solenoids open at
+config.initial_state = HoodState::Down;  // logical seed, kept separate
+
+Hood hood(config);
+
+hood.setHoodState(HoodState::Mid);
+hood.next();      // Mid -> Up, then stays at Up
+hood.previous();  // Up -> Mid
+hood.next();      // Mid -> Up
+hood.cycle();     // Up -> Down, where next() would have stayed at Up
+
+hood.getHoodState();
+hood.outputFor(HoodState::Up);  // { first = true, second = true }
+```
+
+Every command factory terminates on its own:
+
+```cpp
+hood.makeHoodStateCommand(HoodState::Up);
+hood.makeHoodStateForCommand(HoodState::Up, 500 * millisecond);
+hood.makeNextCommand();
+hood.makePreviousCommand();
+hood.makeCycleCommand();
+```

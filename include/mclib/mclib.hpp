@@ -21,6 +21,7 @@
 #include "mclib/device/rotation.hpp"
 #include "mclib/device/types.hpp"
 #include "mclib/mechanism/arm.hpp"
+#include "mclib/mechanism/hood.hpp"
 #include "mclib/mechanism/intake.hpp"
 #include "mclib/mechanism/mechanism.hpp"
 #include "mclib/mechanism/motor_state_mechanism.hpp"
