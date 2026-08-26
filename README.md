@@ -300,3 +300,51 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## PositionMechanism
+
+`mechanism/position_mechanism.hpp` is a generic PID position mechanism. The
+state is the target position, and the device is injected as two callables, so
+the same class works with a rotation sensor, a motor encoder, or a
+potentiometer.
+
+```cpp
+mclib::device::MotorGroup lift_motors({1, -2}, mclib::device::Gearset::Green);
+mclib::device::Rotation lift_sensor(3);
+
+mclib::mechanism::PositionMechanismConfig cfg;
+cfg.kp = 0.09;
+cfg.max_voltage = 10.0;
+cfg.small_error = 1.5;
+
+mclib::mechanism::PositionMechanism lift(
+    [&] { return lift_sensor.getPositionDeg(); },
+    [&](double volts) { lift_motors.setVoltage(volts); },
+    cfg);
+```
+
+`moveTo(target)` starts closed-loop control and restarts the PID every time,
+even when the target is unchanged, so re-issuing a target after a manual
+override takes control back. `setManualVoltage(volts)` overrides the loop until
+the next `moveTo()`. `stop()` brakes rather than coasts: it latches the present
+position as the target and holds it, which keeps a loaded arm from falling.
+Call `setManualVoltage(0.0)` if you want it to go limp instead. A mechanism
+starts idle at 0 V until one of those is called.
+
+Commands:
+
+```cpp
+lift.makeMoveToCommand(90.0);            // finishes on atTarget()
+lift.makeMoveToCommand(90.0, 1500.0);    // also finishes after 1.5 s
+lift.makeHoldCommand();                  // hold the current target
+lift.makeManualCommand(6.0);             // 6 V while scheduled
+lift.makeStopCommand();                  // hold where it is
+```
+
+`makeMoveToCommand` is the only factory that ends on its own; the others run
+until interrupted.
+
+`PID` stops driving once it flags arrival, so a settled mechanism has no
+holding torque. `PositionMechanism` re-arms the loop when the position drifts
+back outside `small_error`, and `atTarget()` stays true across that re-arm so a
+finished move does not restart.
