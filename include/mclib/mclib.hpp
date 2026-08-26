@@ -1,0 +1,33 @@
+// mclib
+#pragma once
+
+#include "mclib/math.hpp"
+#include "mclib/utils.hpp"
+#include "mclib/pid.hpp"
+#include "mclib/auton/autonomous_routine.hpp"
+#include "mclib/config.hpp"
+#include "mclib/control.hpp"
+#include "mclib/chassis/chassis.hpp"
+#include "mclib/chassis/chassis_controller.hpp"
+#include "mclib/command/includes.h"
+#include "mclib/device/controller.hpp"
+#include "mclib/device/distance.hpp"
+#include "mclib/device/imu.hpp"
+#include "mclib/device/inertial.hpp"
+#include "mclib/device/line.hpp"
+#include "mclib/device/motor.hpp"
+#include "mclib/device/motor_group.hpp"
+#include "mclib/device/pneumatic.hpp"
+#include "mclib/device/rotation.hpp"
+#include "mclib/device/types.hpp"
+#include "mclib/mechanism/arm.hpp"
+#include "mclib/mechanism/intake.hpp"
+#include "mclib/mechanism/mechanism.hpp"
+#include "mclib/mechanism/motor_state_mechanism.hpp"
+#include "mclib/mechanism/motor_subsystem.hpp"
+#include "mclib/mechanism/pneumatic_subsystem.hpp"
+#include "mclib/snapshot/snapshot_config.hpp"
+
+#ifndef MCLIB_NO_ALIAS
+namespace ml = mclib;
+#endif
