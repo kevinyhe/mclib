@@ -300,3 +300,62 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+
+## HomingMechanism
+
+`mechanism/homing_mechanism.hpp` finds a mechanism's zero by driving into a hard
+stop, then re-zeroing the position sensor. All hardware access is injected, so it
+works with a `device::Motor`, a `device::MotorGroup`, a `device::Rotation`, or any
+mix of them.
+
+```cpp
+mclib::mechanism::HomingMechanismConfig cfg;
+cfg.homing_voltage = -3.0;         // signed: direction matters
+cfg.current_threshold_amps = 2.0;  // <= 0 disables the current detector
+cfg.velocity_threshold_rpm = 5.0;  // <= 0 disables the stall detector
+cfg.stall_dwell_ms = 150.0;
+cfg.startup_grace_ms = 150.0;      // ramp-up window
+cfg.timeout_ms = 3000.0;
+cfg.backoff_voltage = 2.0;         // 0 or backoff_ms 0 disables back-off
+cfg.backoff_ms = 150.0;
+
+mclib::mechanism::HomingMechanism homing(
+    cfg, [&](double volts) { arm_motors.setVoltage(volts); });
+
+homing.setVelocitySource([&] { return arm_motors.getAverageActualVelocity(); });
+// getAverageCurrentDraw() is in milliamps; the config threshold is in amps.
+homing.setCurrentSource(
+    [&] { return arm_motors.getAverageCurrentDraw() / 1000.0; });
+homing.setPositionReset([&] { arm_rotation.resetPosition(); });
+
+// Optional third detector, any predicate that is true at the stop.
+pros::adi::DigitalIn arm_limit('A');
+homing.setLimitSwitch([&] { return arm_limit.get_value() != 0; });
+```
+
+Three stop detectors can be enabled independently, and the first one to fire
+wins: the limit-switch predicate, current draw above `current_threshold_amps`,
+and a velocity stall (`|rpm| < velocity_threshold_rpm` held for
+`stall_dwell_ms`). Inrush current is ignored for the first `startup_grace_ms`,
+and the stall detector arms once the mechanism has been seen moving — or once
+that window has passed, which covers a mechanism that starts out already resting
+against the stop. The sensor is zeroed at the stop, before any back-off.
+
+Drive it either from the state machine directly (`startHoming()`,
+`cancelHoming()`, `isHoming()`, `isHomed()`, `hasFailed()`) or with a command:
+
+```cpp
+CommandScheduler::registerSubsystem(&homing, nullptr);
+
+auto home_arm = homing.makeHomeCommand(4000 * millisecond);
+home_arm->schedule();
+while (home_arm->scheduled()) {
+  pros::delay(10);
+}
+```
+
+`makeHomeCommand` always finishes — on success, on failure, or on its own
+timeout — and stops the motor on every exit path, interruption included. It also
+steps the state machine from `execute()`, so it still works if the mechanism is
+not registered with the scheduler.
