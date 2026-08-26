@@ -26,6 +26,7 @@
 #include "mclib/mechanism/motor_state_mechanism.hpp"
 #include "mclib/mechanism/motor_subsystem.hpp"
 #include "mclib/mechanism/pneumatic_subsystem.hpp"
+#include "mclib/mechanism/pto_mechanism.hpp"
 #include "mclib/snapshot/snapshot_config.hpp"
 
 #ifndef MCLIB_NO_ALIAS

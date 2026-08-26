@@ -300,3 +300,71 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+
+## PTO (`mechanism/pto_mechanism.hpp`)
+
+`PTOMechanism` is one set of motors mechanically switched between two consumers —
+usually the drivetrain and a lift. It is a `StateMechanism<bool>`: `true` means the
+motors are routed to the engaged consumer, `false` to the disengaged one.
+
+```cpp
+mclib::mechanism::PTOConfig pto_config{
+    .motor_ports = {1, -2},
+    .adi_port = 'A',
+    .engaged_when_extended = true,   // extending the solenoid routes to the lift
+    .shift_settle_time = 250 * millisecond,
+    .drive_timeout = 100 * millisecond,
+};
+
+mclib::mechanism::PTOMechanism pto(pto_config);
+std::unique_ptr<Command> pto_idle;
+
+void initialize() {
+  // The default command must never finish and must not force a state: an
+  // instant default would re-disengage the PTO on the tick after every engage.
+  pto_idle = pto.idleCommand();
+  CommandScheduler::registerSubsystem(&pto, pto_idle.get());
+}
+
+void opcontrol() {
+  while (true) {
+    // Drive writes are tagged with the side asking for them.
+    pto.driveDisengaged(12.0);  // drivetrain: accepted while the PTO is disengaged
+    pto.driveEngaged(12.0);     // lift: dropped while the PTO is disengaged
+
+    CommandScheduler::run();
+    pros::delay(10);
+  }
+}
+```
+
+Both drive calls return `true` when the write was accepted and `false` when it was
+dropped. The accepted voltage reaches the motors on the next `periodic()` tick, so
+register the mechanism with `CommandScheduler`. A write from the side that does not
+own the PTO is discarded, not queued: a lift command writing volts while the motors
+are geared to the wheels would drive the robot across the field.
+
+Shifting under load shears gear teeth, so `engage()`, `disengage()` and `toggle()`
+zero and brake the motors, throw the solenoid immediately, and refuse drive writes
+from both sides for `shift_settle_time` (default 250 ms). A commanded voltage of
+zero brakes rather than coasts, so a raised lift stays put. `isShiftSettled()` and
+`remainingSettleTime()` report where the transition is.
+
+The owning side is expected to write every tick. If it stops for longer than
+`drive_timeout` (default 100 ms) the commanded voltage decays to zero instead of
+latching on the motors; set `drive_timeout` to 0 to keep the last value.
+
+`motors()` exposes the shared `device::MotorGroup` for brake modes, encoders, and
+temperatures. Writing voltage through it bypasses the guard; use
+`motorsFor(engaged_side)` for ownership-checked configuration and telemetry, and
+re-fetch it every tick rather than caching it across a shift. Voltage always goes
+through the drive calls: `periodic()` rewrites the commanded voltage every tick, so
+a direct `setVoltage()` is overwritten on the next scheduler pass. The same holds
+for the constructor that takes an existing `MotorGroup` — once the PTO shares it,
+the drivetrain must write through `driveDisengaged()` too.
+
+Commands: `makeEngageCommand()`, `makeDisengageCommand()` and `makeToggleCommand()`
+are one-shot and finish immediately. `makeShiftCommand(engaged)` requires the
+mechanism for the whole settle window and finishes only once the shift has settled,
+so nothing can drive into a half-thrown gearbox.
