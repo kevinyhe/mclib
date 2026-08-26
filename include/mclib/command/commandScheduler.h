@@ -29,6 +29,41 @@ private:
 
 	CommandScheduler() = default;
 
+	// Snapshot of the registered subsystems, so callbacks can register or
+	// unregister subsystems without invalidating an in-flight iteration
+	static std::vector<Subsystem *> registeredSubsystems()
+	{
+		CommandScheduler &instance = getInstance();
+
+		std::vector<Subsystem *> subsystems;
+		subsystems.reserve(instance.subsystems.size());
+
+		for (const auto &pair : instance.subsystems)
+		{
+			subsystems.push_back(pair.first);
+		}
+
+		return subsystems;
+	}
+
+	// Give back only the subsystems still owned by command. An entry that some
+	// other command claimed in the meantime, from inside an end() callback, must
+	// be left alone.
+	static void releaseRequirements(Command *command, const std::vector<Subsystem *> &held)
+	{
+		CommandScheduler &instance = getInstance();
+
+		for (auto requirement : held)
+		{
+			auto owner = instance.requirements.find(requirement);
+
+			if (owner != instance.requirements.end() && owner->second == command)
+			{
+				instance.requirements.erase(owner);
+			}
+		}
+	}
+
 public:
 	// Singleton pattern
 	static CommandScheduler &getInstance()
@@ -37,17 +72,206 @@ public:
 		return instance;
 	}
 
+	/**
+	 * @brief Register a subsystem and the default command to run on it
+	 *
+	 * @details The scheduler calls \refitem Subsystem::runPeriodic on every
+	 * registered subsystem each frame, and re-schedules the default command
+	 * whenever nothing else requires the subsystem. The scheduler does NOT take
+	 * ownership of default_command, the caller must keep it alive. Prefer
+	 * \refitem Subsystem::setDefaultCommand plus \refitem Subsystem::registerSelf,
+	 * which makes the subsystem the owner.
+	 *
+	 * ```C
+	 * // command must outlive the scheduler registration
+	 * std::unique_ptr<Command> intake_idle = intake.makeDisableCommand();
+	 * CommandScheduler::registerSubsystem(&intake, intake_idle.get());
+	 * ```
+	 *
+	 * @param subsystem The subsystem to register. Ignored if null or already
+	 * registered.
+	 * @param default_command Non owning pointer to the default command. May be
+	 * null, the subsystem is still registered and still gets runPeriodic() every
+	 * frame, it just has no default command.
+	 */
 	static void registerSubsystem(Subsystem *subsystem, Command *default_command)
 	{
 		CommandScheduler &instance = getInstance();
 
-		// Make sure the subsystem isn't already registered
-		assert(!instance.subsystems.contains(subsystem));
+		// Ignore null subsystems and double registration instead of asserting,
+		// asserts compile out in release builds
+		if (subsystem == nullptr || instance.subsystems.contains(subsystem))
+		{
+			return;
+		}
 
-		// Make sure the default command isn't null
-		assert(default_command != nullptr);
-
+		// A null default command still registers the subsystem, runPeriodic()
+		// matters even with no command attached
 		instance.subsystems[subsystem] = default_command;
+	}
+
+	/**
+	 * @brief Register a subsystem using the default command it already owns
+	 *
+	 * @details Reads \refitem Subsystem::getDefaultCommand, so call \refitem
+	 * Subsystem::setDefaultCommand first if you want a default command. A subsystem
+	 * with no default command is still registered, its \refitem
+	 * Subsystem::runPeriodic runs every frame with no command attached.
+	 *
+	 * ```C
+	 * intake.setDefaultCommand(intake.makeDisableCommand());
+	 * CommandScheduler::registerSubsystem(&intake);
+	 * ```
+	 *
+	 * @param subsystem The subsystem to register. Ignored if null or already
+	 * registered.
+	 */
+	static void registerSubsystem(Subsystem *subsystem)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (subsystem == nullptr || instance.subsystems.contains(subsystem))
+		{
+			return;
+		}
+
+		instance.subsystems[subsystem] = subsystem->getDefaultCommand();
+	}
+
+	/**
+	 * @brief Drop every reference the scheduler holds to a command WITHOUT calling
+	 * end() on it
+	 *
+	 * @details Removes the command from the scheduled list, from the deferred
+	 * schedule and cancel queues, and from any requirement entry that still points
+	 * at it. Use this when the command object is about to be destroyed and running
+	 * its end() callback would be unsafe, for example from a destructor. Prefer
+	 * cancel() when the command is still alive and should end cleanly.
+	 *
+	 * @param command The command to forget. Null is a no-op.
+	 */
+	static void forgetCommand(Command *command)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (command == nullptr)
+		{
+			return;
+		}
+
+		std::erase(instance.scheduledCommands, command);
+		std::erase(instance.toSchedule, command);
+		std::erase(instance.toCancel, command);
+
+		for (auto it = instance.requirements.begin(); it != instance.requirements.end();)
+		{
+			if (it->second == command)
+			{
+				it = instance.requirements.erase(it);
+			}
+			else
+			{
+				++it;
+			}
+		}
+	}
+
+	/**
+	 * @brief Drop every reference the scheduler holds to a subsystem WITHOUT
+	 * cancelling anything
+	 *
+	 * @details Removes the subsystem's registration and requirement entries, so
+	 * \refitem Subsystem::runPeriodic stops being called on it. Commands that
+	 * required it are left alone. Use this from a destructor, where running command
+	 * callbacks against a half destroyed object is unsafe. Prefer
+	 * unregisterSubsystem otherwise.
+	 *
+	 * @param subsystem The subsystem to forget. Null is a no-op.
+	 */
+	static void forgetSubsystem(Subsystem *subsystem)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (subsystem == nullptr)
+		{
+			return;
+		}
+
+		instance.requirements.erase(subsystem);
+		instance.subsystems.erase(subsystem);
+	}
+
+	/**
+	 * @brief Point an already registered subsystem at a different default command
+	 *
+	 * @details Only updates the stored pointer. It does not cancel the old default
+	 * command and it does not register an unregistered subsystem, \refitem
+	 * Subsystem::setDefaultCommand handles both around this call.
+	 *
+	 * @param subsystem The registered subsystem
+	 * @param default_command Non owning pointer to the new default command, may be
+	 * null
+	 */
+	static void setDefaultCommand(Subsystem *subsystem, Command *default_command)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (subsystem == nullptr)
+		{
+			return;
+		}
+
+		auto registration = instance.subsystems.find(subsystem);
+
+		if (registration != instance.subsystems.end())
+		{
+			registration->second = default_command;
+		}
+	}
+
+	/**
+	 * @brief Remove a subsystem from the scheduler
+	 *
+	 * @details Cancels the command currently requiring the subsystem and the
+	 * subsystem's default command, drops the subsystem's requirement entry, and
+	 * stops its \refitem Subsystem::runPeriodic from being called. Safe to call on
+	 * a subsystem that was never registered.
+	 *
+	 * @param subsystem The subsystem to unregister
+	 */
+	static void unregisterSubsystem(Subsystem *subsystem)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (subsystem == nullptr)
+		{
+			return;
+		}
+
+		auto requiring = instance.requirements.find(subsystem);
+
+		if (requiring != instance.requirements.end())
+		{
+			// Copy the pointer, cancel() erases the map entry we are looking at
+			Command *command = requiring->second;
+
+			cancel(command);
+			forgetCommand(command);
+		}
+
+		auto registration = instance.subsystems.find(subsystem);
+
+		if (registration != instance.subsystems.end() && registration->second != nullptr)
+		{
+			// A default command with no declared requirements never shows up in
+			// the requirements map, so cancel it explicitly
+			Command *default_command = registration->second;
+
+			cancel(default_command);
+			forgetCommand(default_command);
+		}
+
+		forgetSubsystem(subsystem);
 	}
 
 	static void schedule(Command *command)
@@ -86,7 +310,13 @@ public:
 			if (std::find(requirements.begin(), requirements.end(), requirement.first) != requirements.end())
 			{
 				all_interruptible &= requirement.second->getCancelBehavior() == CommandCancelBehavior::CancelRunning;
-				intersection.push_back(requirement.second);
+
+				// One command can hold several of the required subsystems, only
+				// interrupt it once
+				if (std::find(intersection.begin(), intersection.end(), requirement.second) == intersection.end())
+				{
+					intersection.push_back(requirement.second);
+				}
 			}
 		}
 
@@ -94,8 +324,20 @@ public:
 		{
 			for (auto intersect : intersection)
 			{
+				// Read the requirements BEFORE end(true). end() can schedule a
+				// replacement command that claims some of them, and we must not
+				// erase the entries that replacement just took.
+				auto held = intersect->getRequirements();
+
 				intersect->end(true);
+
 				std::erase(instance.scheduledCommands, intersect);
+
+				// Release EVERY subsystem the interrupted command held, not just
+				// the ones the incoming command wants. Otherwise a subsystem it
+				// held alone stays owned by a dead command forever and its
+				// default command never restarts.
+				releaseRequirements(intersect, held);
 			}
 
 			for (auto requirement : requirements)
@@ -125,10 +367,12 @@ public:
 	{
 		CommandScheduler &instance = getInstance();
 
-		// Run the periodic for all registered subsystems
-		for (const auto &pair : instance.subsystems)
+		// Run the periodic for all registered subsystems. runPeriodic is non
+		// virtual and skips disabled subsystems before calling periodic().
+		// Iterate over a copy, a periodic() is allowed to unregister subsystems.
+		for (auto subsystem : registeredSubsystems())
 		{
-			pair.first->periodic();
+			subsystem->runPeriodic();
 		}
 
 		// Poll user set event loops
@@ -142,21 +386,43 @@ public:
 
 		instance.inRunLoop = true;
 
-		for (auto command : instance.scheduledCommands)
+		// Iterate over a copy, the loop body erases from scheduledCommands and
+		// mutating the vector we are ranging over is undefined behavior
+		std::vector<Command *> running = instance.scheduledCommands;
+
+		std::vector<Command *> finished;
+
+		for (auto command : running)
 		{
+			// A command may have been cancelled or forgotten by an earlier command
+			// in this same pass. Cancels inside the run loop are deferred to
+			// toCancel, so check that queue too or we would execute a command that
+			// has already been cancelled.
+			if (!scheduled(command) ||
+			    std::find(instance.toCancel.begin(), instance.toCancel.end(), command) != instance.toCancel.end())
+			{
+				continue;
+			}
+
 			command->execute();
 
 			if (command->isFinished())
 			{
+				// Same ordering rule as the interrupt path, read the requirements
+				// before end() gets a chance to hand them to another command
+				auto held = command->getRequirements();
+
 				command->end(false);
 
-				for (auto requirement : command->getRequirements())
-				{
-					instance.requirements.erase(requirement);
-				}
+				releaseRequirements(command, held);
 
-				std::erase(instance.scheduledCommands, command);
+				finished.push_back(command);
 			}
+		}
+
+		for (auto command : finished)
+		{
+			std::erase(instance.scheduledCommands, command);
 		}
 
 		instance.inRunLoop = false;
@@ -174,9 +440,27 @@ public:
 		instance.toCancel.clear();
 		instance.toSchedule.clear();
 
-		for (auto [subsystem, command] : instance.subsystems)
+		// Copy again, schedule() runs command callbacks that may unregister a
+		// subsystem and invalidate this iteration
+		for (auto subsystem : registeredSubsystems())
 		{
-			if (!instance.requirements.contains(subsystem))
+			auto registration = instance.subsystems.find(subsystem);
+
+			if (registration == instance.subsystems.end())
+			{
+				continue;
+			}
+
+			Command *command = registration->second;
+
+			// A subsystem registered before its default command was set stores a
+			// null entry, fall back to whatever it owns now
+			if (command == nullptr)
+			{
+				command = subsystem->getDefaultCommand();
+			}
+
+			if (command != nullptr && !instance.requirements.contains(subsystem))
 			{
 				schedule(command);
 			}
@@ -222,14 +506,15 @@ public:
 			return;
 		}
 
+		// Read the requirements before end(true), it may schedule a replacement
+		// that legitimately claims some of them
+		auto held = command->getRequirements();
+
 		command->end(true);
 
 		std::erase(instance.scheduledCommands, command);
 
-		for (auto requirement : command->getRequirements())
-		{
-			instance.requirements.erase(requirement);
-		}
+		releaseRequirements(command, held);
 	}
 };
 

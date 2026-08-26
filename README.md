@@ -300,3 +300,107 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Subsystem lifecycle
+
+Command factories return `std::unique_ptr<Command>`, but the scheduler stores raw
+`Command*`. That mismatch is easy to get wrong:
+
+```cpp
+// BROKEN. The unique_ptr dies at the end of the statement, so the scheduler is
+// left holding a dangling pointer.
+intake.makeIndexCommand()->schedule();
+```
+
+The subsystem itself is the owner. Hand it the default command with
+`setDefaultCommand` and register with `registerSelf`:
+
+```cpp
+Intake intake{...};
+Arm arm{...};
+
+void initialize() {
+  intake.setName("intake");
+  intake.setDefaultCommand(intake.makeDisableCommand());
+  intake.registerSelf();
+
+  arm.setName("arm");
+  arm.setDefaultCommand(arm.makeStopCommand());
+  arm.registerSelf();
+}
+```
+
+No global `std::unique_ptr` variables and no lifetime bookkeeping. The subsystem
+keeps the default command alive for as long as it is alive.
+
+The older two-argument form still works, and is still the right tool when the
+default command must live somewhere other than the subsystem. You keep ownership,
+so the command has to outlive the registration:
+
+```cpp
+std::unique_ptr<Command> intake_idle;
+
+void initialize() {
+  intake_idle = intake.makeDisableCommand();
+  CommandScheduler::registerSubsystem(&intake, intake_idle.get());
+}
+```
+
+Commands that are not defaults still need an owner. Store the `unique_ptr`
+somewhere that outlives the scheduling, then schedule the raw pointer:
+
+```cpp
+std::unique_ptr<Command> index;
+
+void opcontrol() {
+  index = intake.makeIndexCommand();
+  index->schedule();
+}
+```
+
+### Subsystem API
+
+| Method | What it does |
+| --- | --- |
+| `setDefaultCommand(std::unique_ptr<Command>)` | Take ownership of the default command. Destroys any previous one. |
+| `getDefaultCommand()` | Non owning `Command*`, or `nullptr` if none was set. |
+| `registerSelf()` | Register with the `CommandScheduler` using the stored default command. |
+| `setName(std::string)` / `getName()` | Human readable name, useful for logging. |
+| `setEnabled(bool)` / `isEnabled()` | A disabled subsystem skips `periodic()`. It does not stop the hardware, see below. |
+| `runPeriodic()` | Non virtual. Called by the scheduler, checks `isEnabled()` and then calls the virtual `periodic()`. Override `periodic()`, not this. |
+
+`setEnabled(false)` parks a subsystem without unregistering it. Commands can still
+be scheduled against it, they just have no effect until it is enabled again.
+Because `runPeriodic()` is non virtual and does the check, this works for
+subclasses that override `periodic()`, such as `StateMechanism` and
+`ChassisController`.
+
+It does not stop the hardware. PROS motors hold the last voltage they were
+given, so a disabled `StateMechanism` keeps driving at whatever `applyState`
+last wrote. Command a safe state first, then disable. And a `periodic()` that
+integrates sensor deltas, like `ChassisController` updating odometry, misses
+everything that happens while disabled and folds it into one step when
+re-enabled, which corrupts the pose.
+
+### Scheduler API
+
+```cpp
+CommandScheduler::registerSubsystem(&intake);                  // uses the stored default command
+CommandScheduler::registerSubsystem(&intake, intake_idle.get());  // caller owned default command
+CommandScheduler::unregisterSubsystem(&intake);                // cancels its command, stops periodic()
+```
+
+Registering a null subsystem, or one that is already registered, is a no-op
+rather than an assertion failure. Asserts compile out in release builds, so they
+were not a real guard.
+
+`unregisterSubsystem` cancels whatever command currently requires the subsystem
+and its default command, drops its requirement entry, and stops `runPeriodic()`
+from being called on it. It is safe to call on a subsystem that was never
+registered. `~Subsystem` does the same cleanup automatically, minus the `end()`
+callbacks, so a subsystem that goes out of scope cannot leave the scheduler
+holding dangling pointers.
+
+`setDefaultCommand` is also safe to call after registration: the old default
+command is cancelled and scrubbed from the scheduler before it is destroyed, and
+the registration is repointed at the new one.
