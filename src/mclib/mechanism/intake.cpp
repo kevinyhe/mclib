@@ -1,6 +1,8 @@
 // mclib
 #include "mclib/mechanism/intake.hpp"
 
+#include <cstddef>
+
 namespace mclib {
 namespace mechanism {
 
@@ -9,25 +11,47 @@ Intake::Intake(const IntakeConfig& config)
           {config.bottom_port, config.top_port},
           config.gearset,
           IntakeState::Disabled,
-          [config](const IntakeState& state) {
-            return voltagesForState(config, state);
-          }),
+          // Safe: the base only stores the map here and calls it from
+          // applyState(), which runs after m_config is initialized.
+          [this](const IntakeState& state) { return voltagesFor(state); }),
       m_config(config) {}
 
-void Intake::setState(IntakeState state) {
-  MotorStateMechanism<IntakeState>::setState(state);
+const IntakeConfig& Intake::config() const {
+  return m_config;
 }
 
-IntakeState Intake::getState() const {
-  return MotorStateMechanism<IntakeState>::getState();
+std::vector<double> Intake::voltagesFor(IntakeState state) const {
+  double bottom = 0.0;
+  double top = 0.0;
+
+  switch (state) {
+    case IntakeState::Index:
+      bottom = m_config.index_voltage;
+      break;
+    case IntakeState::Score:
+      bottom = m_config.score_voltage;
+      top = m_config.score_voltage;
+      break;
+    case IntakeState::Reverse:
+      bottom = m_config.reverse_voltage;
+      top = m_config.reverse_voltage;
+      break;
+    case IntakeState::Disabled:
+    default:
+      break;
+  }
+
+  return {bottom, top};
+}
+
+void Intake::setBrakeMode(device::BrakeMode mode) {
+  for (std::size_t i = 0; i < motorCount(); ++i) {
+    motor(i).setBrakeMode(mode);
+  }
 }
 
 void Intake::disable() {
   setState(IntakeState::Disabled);
-}
-
-std::unique_ptr<Command> Intake::makeStateCommand(IntakeState state) {
-  return MotorStateMechanism<IntakeState>::makeStateCommand(state);
 }
 
 std::unique_ptr<Command> Intake::makeIndexCommand() {
@@ -44,31 +68,6 @@ std::unique_ptr<Command> Intake::makeReverseCommand() {
 
 std::unique_ptr<Command> Intake::makeDisableCommand() {
   return makeStateCommand(IntakeState::Disabled);
-}
-
-std::vector<double> Intake::voltagesForState(const IntakeConfig& config,
-                                             IntakeState state) {
-  double bottom = 0.0;
-  double top = 0.0;
-
-  switch (state) {
-    case IntakeState::Index:
-      bottom = config.index_voltage;
-      break;
-    case IntakeState::Score:
-      bottom = config.score_voltage;
-      top = config.score_voltage;
-      break;
-    case IntakeState::Reverse:
-      bottom = config.reverse_voltage;
-      top = config.reverse_voltage;
-      break;
-    case IntakeState::Disabled:
-    default:
-      break;
-  }
-
-  return {bottom, top};
 }
 
 }  // namespace mechanism

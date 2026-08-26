@@ -300,3 +300,43 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Intake API
+
+`mclib::mechanism::Intake` derives from `MotorStateMechanism<IntakeState>` and
+does not redeclare the state API. `setState`, `getState`, and the generic
+`makeState*` command factories come from `StateMechanism<IntakeState>`, so
+calling them through a base reference and through an `Intake` gives the same
+behaviour.
+
+```cpp
+mclib::mechanism::Intake intake({
+    .bottom_port = -20,
+    .top_port = -21,
+    .gearset = mclib::device::Gearset::Blue,
+    .index_voltage = 12.0,
+    .score_voltage = 12.0,
+    .reverse_voltage = -12.0,
+});
+
+intake.setBrakeMode(mclib::device::BrakeMode::Coast);
+
+intake.setState(mclib::mechanism::IntakeState::Score);
+mclib::mechanism::IntakeState state = intake.getState();
+
+const mclib::mechanism::IntakeConfig& cfg = intake.config();
+std::vector<double> volts = intake.voltagesFor(mclib::mechanism::IntakeState::Index);
+// volts == {cfg.index_voltage, 0.0} - Index drives only the bottom motor.
+
+std::unique_ptr<Command> index = intake.makeIndexCommand();
+std::unique_ptr<Command> score = intake.makeScoreCommand();
+std::unique_ptr<Command> reverse = intake.makeReverseCommand();
+std::unique_ptr<Command> idle = intake.makeDisableCommand();
+```
+
+- `config()` returns the `IntakeConfig` the intake was built from; it is the
+  single source of truth for the voltages applied each `periodic()`.
+- `voltagesFor(state)` returns `{bottom, top}` volts for a state without
+  commanding the motors.
+- `setBrakeMode(mode)` forwards to every motor via `motorCount()` / `motor(i)`.
+- `disable()` is shorthand for `setState(IntakeState::Disabled)`.
