@@ -245,15 +245,17 @@ std::unique_ptr<Command> arm_low;
 std::unique_ptr<Command> arm_stop;
 std::unique_ptr<Command> wings_out;
 std::unique_ptr<Command> wings_in;
+std::unique_ptr<Command> wings_idle;
 
 void initialize() {
   arm_low = arm.makeMoveToCommand(45.0, 2000.0);
   arm_stop = arm.makeStopCommand();
   wings_out = wings.makeExtendCommand();
   wings_in = wings.makeRetractCommand();
+  wings_idle = wings.idleCommand();
 
   CommandScheduler::registerSubsystem(&arm, arm_stop.get());
-  CommandScheduler::registerSubsystem(&wings, wings_in.get());
+  CommandScheduler::registerSubsystem(&wings, wings_idle.get());
 }
 ```
 
@@ -300,3 +302,46 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+
+## PneumaticSubsystem: polarity and command termination
+
+`PneumaticSubsystem` state is always the logical state. `true` means the
+cylinder is extended, `false` means it is retracted. Wiring polarity is a
+separate flag and stays inside `device::Pneumatic`, which maps
+`raw = (logical == extended_state)`. Nothing above the device layer sees the
+solenoid pin level.
+
+```cpp
+// Normal solenoid: pin high extends.
+mclib::mechanism::PneumaticSubsystem wings({'E', 'F'});
+
+// Inverted solenoid: pin low extends. Starts extended.
+mclib::mechanism::PneumaticSubsystem clamp({'G'}, /*initial_extended=*/true,
+                                           /*extended_state=*/false);
+
+clamp.isExtended();  // true, for either wiring, and from construction on
+```
+
+The second constructor argument is the logical starting state, not a pin
+level. The constructor drives the solenoids to that state, so `isExtended()`
+agrees with the hardware before the first `periodic()` tick.
+
+Command termination:
+
+- `makeSetCommand`, `makeExtendCommand`, `makeRetractCommand`, and
+  `makeToggleCommand` all set the state once and finish. Setting a solenoid is
+  a one-shot action, so holding the subsystem requirement forever is wrong.
+- `makeExtendForCommand(500 * millisecond)` extends, holds, then finishes.
+- `makeHoldCommand(extended)` forces a state on every tick and never finishes.
+  Do not register it as a default command: the scheduler reschedules the
+  default as soon as a one-shot command releases the requirement, so a hold
+  default would drag the cylinder back one tick after every `makeExtendCommand`.
+  Register `idleCommand()` instead. `periodic()` keeps re-applying the cached
+  state, so the cylinder stays where the last command put it.
+
+Accessors: `count()`, `group()` for direct device access, and `rawValues()`
+for the per-solenoid values the device layer reports. Those values are logical
+too, not pin levels; they are for spotting one solenoid out of sync with the
+rest of the group. Writes through `group()` do not update the cached state and
+are overwritten by the next `periodic()`.
