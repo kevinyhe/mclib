@@ -300,3 +300,53 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Clamp
+
+`mclib::mechanism::Clamp` is a pneumatic mobile-goal clamp. Its state is a bool:
+`true` = clamped, `false` = released. The solenoid's raw pin value is derived
+from `extended_state` only when the state is written to hardware, so an
+inverted solenoid never flips the cached logical state.
+
+```cpp
+mclib::mechanism::ClampConfig config;
+config.adi_port = 'A';
+config.extended_state = false;   // solenoid low is the clamped position
+config.default_state = false;    // start released
+config.distance_port = 7;        // 0 for no sensor
+config.auto_clamp_threshold_mm = 50.0;
+config.auto_clamp_enabled = true;
+config.min_confidence = 10;      // PROS pins confidence at 10 under 200mm
+
+mclib::mechanism::Clamp clamp(config);
+
+clamp.clamp();
+clamp.release();
+clamp.toggle();
+bool held = clamp.isClamped();
+double mm = clamp.distanceMm();  // -1.0 if untrusted, 9999 if nothing in range
+clamp.setAutoClamp(false);
+```
+
+With auto-clamp armed and a distance sensor configured, `periodic()` closes the
+clamp as soon as a trusted reading drops below `auto_clamp_threshold_mm`.
+Mid-range readings are ignored unless the sensor's confidence is at least
+`min_confidence`. PROS reports a fixed confidence of 10 for anything closer than
+200mm, so `min_confidence` has to stay at or below 10 for a clamp threshold
+under 200mm, otherwise every useful reading is thrown away and auto-clamp never
+fires. A manual `release()` latches auto-clamp off so the driver can push a goal
+away without it being grabbed again; the latch clears once the sensor reports
+nothing in range, a trusted reading rises back above the threshold, or the clamp
+is closed by hand.
+
+All command factories terminate on their own:
+
+```cpp
+auto a = clamp.makeClampCommand();
+auto b = clamp.makeReleaseCommand();
+auto c = clamp.makeToggleCommand();
+auto d = clamp.makeAutoClampCommand(2000 * millisecond);  // 0 for no timeout
+```
+
+`makeAutoClampCommand` arms auto-clamp, finishes once clamped or on timeout, and
+restores the previous arming when it ends.
