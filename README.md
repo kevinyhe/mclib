@@ -300,3 +300,49 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## Flywheel
+
+`mclib::mechanism::Flywheel` is a closed-loop flywheel. Its state is the target
+wheel RPM. Output is a `kv` feedforward plus a PID correction on the RPM error,
+clamped to `[0, max_voltage]` so the motors never brake against the wheel's
+inertia. The integral only accumulates near the target, so spin-up does not wind
+it up.
+
+```cpp
+#include "mclib/mclib.hpp"
+
+// Ports and gearset only; everything else keeps its default.
+ml::mechanism::Flywheel flywheel({1, -2}, ml::device::Gearset::Blue);
+
+// Or with full tuning.
+ml::mechanism::FlywheelConfig config;
+config.motor_ports = {1, -2};
+config.ratio = 2.0;          // wheel RPM = motor RPM * ratio
+config.kp = 0.02;
+config.ki = 0.0005;
+config.kv = 12.0 / 1200.0;   // volts per wheel RPM at free speed
+config.tolerance_rpm = 40.0;
+config.dwell_ms = 150.0;
+ml::mechanism::Flywheel tuned(config);
+
+// applyState only runs from periodic(), so the subsystem has to be registered
+// or the motors never move.
+auto flywheel_stop = flywheel.makeStopCommand();
+CommandScheduler::registerSubsystem(&flywheel, flywheel_stop.get());
+
+// Blue cartridge at ratio 1.0 tops out near 600 wheel RPM, so keep targets
+// under the free speed or the wheel never reaches the band.
+flywheel.setTargetRpm(500.0);
+flywheel.getCurrentRpm();
+flywheel.atSpeed();          // true only after dwell_ms inside the band
+flywheel.stop();             // target 0, coasts down
+
+// Commands
+flywheel.makeSpinCommand(500.0);              // holds, never finishes
+flywheel.makeSpinUpCommand(500.0, 3000.0);    // finishes at speed or on timeout
+flywheel.makeStopCommand();
+
+// tuned has ratio 2.0, so its ceiling is about 1200 wheel RPM.
+tuned.setTargetRpm(1000.0);
+```
