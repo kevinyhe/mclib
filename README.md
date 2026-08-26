@@ -300,3 +300,68 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+
+## ToggleMechanism
+
+`mclib::mechanism::ToggleMechanism` is a two-state mechanism built on
+`StateMechanism<bool>`. It drives a `std::function<void(bool)>` actuator, so one
+type covers solenoids, motor-driven two-position mechanisms, and test mocks.
+
+The logical state ("is extended") is kept separate from the raw value written to
+the actuator, so `isExtended()` always answers the question you asked.
+
+```cpp
+#include "mclib/mclib.hpp"
+
+using mclib::mechanism::ToggleMechanism;
+using mclib::mechanism::ToggleMechanismConfig;
+
+// One solenoid, wired so that false on the port means extended. Tell the
+// device about the wiring; do not set ToggleMechanismConfig::inverted here.
+ToggleMechanism clamp(std::make_shared<mclib::device::Pneumatic>('A', false, false));
+
+// Several pneumatics driven together.
+ToggleMechanism wings(std::vector<std::shared_ptr<mclib::device::Pneumatic>>{
+    std::make_shared<mclib::device::Pneumatic>('E'),
+    std::make_shared<mclib::device::Pneumatic>('F'),
+});
+
+// Any actuator at all. `inverted` belongs here, on raw actuators, where
+// nothing else already flips the value.
+ToggleMechanism motor_latch([](bool value) { printf("%d\n", value); },
+                            ToggleMechanismConfig{
+                                .initial_extended = false,
+                                .inverted = true,
+                            });
+```
+
+`set()`, `extend()`, `retract()` and `toggle()` write the actuator immediately,
+even when the value did not change, so they work before the scheduler is
+running. Once registered, `periodic()` rewrites it every tick.
+
+Every command factory finishes on its own, unlike `PneumaticSubsystem` where
+only the toggle command terminates:
+
+```cpp
+CommandController primary(mclib::device::ControllerId::Master);
+
+std::unique_ptr<Command> wings_in;
+std::unique_ptr<Command> wings_toggle;
+std::unique_ptr<Command> wings_pulse;
+
+void initialize() {
+  wings_in = wings.makeRetractCommand();
+  wings_toggle = wings.makeToggleCommand();
+  wings_pulse = wings.makeExtendForCommand(500 * millisecond);
+
+  CommandScheduler::registerSubsystem(&wings, wings_in.get());
+
+  primary.getTrigger(mclib::device::DigitalButton::L1)
+      ->onTrue(wings_toggle.get());
+}
+```
+
+`makeSetCommand`, `makeExtendCommand`, `makeRetractCommand` and
+`makeToggleCommand` act once and end. The `...ForCommand(QTime)` variants hold
+the state for the duration, then end and leave the mechanism in that state --
+they do not restore the previous one.
