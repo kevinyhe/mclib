@@ -23,6 +23,7 @@
 #include "mclib/mechanism/arm.hpp"
 #include "mclib/mechanism/intake.hpp"
 #include "mclib/mechanism/mechanism.hpp"
+#include "mclib/mechanism/mechanism_manager.hpp"
 #include "mclib/mechanism/motor_state_mechanism.hpp"
 #include "mclib/mechanism/motor_subsystem.hpp"
 #include "mclib/mechanism/pneumatic_subsystem.hpp"
