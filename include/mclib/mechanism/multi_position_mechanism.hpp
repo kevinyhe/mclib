@@ -111,6 +111,16 @@ public:
     return indexOf(StateMechanism<StateT>::getState());
   }
 
+  /// Setpoint stored at @p index, or the default setpoint if @p index is out
+  /// of range. Indexed lookup, so it is exact even for a table that lists the
+  /// same state twice, which setpointFor() cannot be.
+  double setpointAt(std::size_t index) const {
+    if (index >= m_positions.size()) {
+      return m_default_setpoint;
+    }
+    return m_positions[index].second;
+  }
+
   /// Setpoint mapped to @p state, or the default setpoint when it is absent.
   double setpointFor(const StateT& state) const {
     const std::size_t index = indexOf(state);

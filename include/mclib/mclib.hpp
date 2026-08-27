@@ -32,6 +32,7 @@
 #include "mclib/mechanism/multi_position_mechanism.hpp"
 #include "mclib/mechanism/pneumatic_subsystem.hpp"
 #include "mclib/mechanism/position_mechanism.hpp"
+#include "mclib/mechanism/preset_position_mechanism.hpp"
 #include "mclib/mechanism/pto_mechanism.hpp"
 #include "mclib/mechanism/toggle_group_mechanism.hpp"
 #include "mclib/mechanism/toggle_mechanism.hpp"
