@@ -21,6 +21,7 @@
 #include "mclib/device/rotation.hpp"
 #include "mclib/device/types.hpp"
 #include "mclib/mechanism/arm.hpp"
+#include "mclib/mechanism/auto_trigger_mechanism.hpp"
 #include "mclib/mechanism/conveyor_mechanism.hpp"
 #include "mclib/mechanism/homing_mechanism.hpp"
 #include "mclib/mechanism/intake.hpp"

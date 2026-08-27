@@ -909,3 +909,121 @@ for the per-solenoid values the device layer reports. Those values are logical
 too, not pin levels; they are for spotting one solenoid out of sync with the
 rest of the group. Writes through `group()` do not update the cached state and
 are overwritten by the next `periodic()`.
+
+## AutoTriggerMechanism: auto-fire on a sensor edge
+
+`AutoTriggerMechanism` watches a `std::function<bool()>` and calls a
+`std::function<void()>` when it goes from false to true. That is the whole
+type. It knows nothing about what the sensor is or what the action does, which
+is why it covers auto-clamping on a goal, auto-indexing on a detected object,
+auto-retracting on a limit switch, and auto-stopping on a proximity reading with
+one implementation.
+
+Composed with a `ToggleMechanism`, it replaces a hand-written game-specific
+clamp subsystem:
+
+```cpp
+#include "mclib/mclib.hpp"
+
+using namespace mclib;
+
+// The thing being actuated: a solenoid, nothing game-specific about it.
+mechanism::ToggleMechanism grabber(std::make_shared<device::Pneumatic>('H'));
+
+device::Distance sensor(7);
+
+// The sensor gate. Note what it returns for "nothing there": false, not
+// "unknown". With no re-arm condition the latch clears only on a false
+// reading, so a gate that swallows the absent case latches forever.
+//
+// confidence >= 10, not 50: PROS pins distance confidence at 10 for anything
+// under 200 mm, so a higher floor discards every reading a close-range
+// mechanism would ever see. 0 mm is a real reading, for a target inside the
+// sensor's ~20 mm minimum range, so it is not an error. The error value is
+// PROS_ERR, which is INT32_MAX, not a negative number: an `mm < 0` guard never
+// fires and lets INT32_MAX through as a very large distance, which reads as
+// true for any "far enough away" threshold.
+auto goal_in_range = []() {
+  const std::int32_t mm = sensor.getDistanceMm();
+  const std::int32_t confidence = sensor.getConfidence();
+  if (mm == PROS_ERR || confidence == PROS_ERR || confidence < 10) {
+    return false;  // bad read: treat as "nothing there" so the latch clears
+  }
+  return mm <= 60;
+};
+
+mechanism::AutoTriggerConfig auto_grab_config{
+    .debounce_ms = 60.0,        // the reading must hold for 60 ms
+    .enabled_on_construct = true,
+    .fire_once = false,         // keep watching after each grab
+};
+
+mechanism::AutoTriggerMechanism auto_grab(
+    goal_in_range, []() { grabber.extend(); }, auto_grab_config);
+
+void initialize() {
+  grabber.setName("grabber");
+  grabber.setDefaultCommand(grabber.idleCommand());
+  grabber.registerSelf();
+
+  auto_grab.setName("auto_grab");
+  auto_grab.setDefaultCommand(auto_grab.idleCommand());
+  auto_grab.registerSelf();
+
+  // Re-arm when the grabber is open again. Without this the latch clears as
+  // soon as the sensor stops seeing the target, which is fine for most
+  // mechanisms but wrong here: the target is being carried, so it stays in
+  // range the whole time.
+  auto_grab.setRearmCondition([]() { return !grabber.isExtended(); });
+}
+```
+
+`disarmUntilReset()` is the manual override. It suppresses the fire that has
+not happened yet: the driver opens the grabber ahead of a target they do not
+want picked up, and the watcher stays out of the way until the target has
+passed and a fresh edge arrives.
+
+```cpp
+// Driver pre-emptively opens the grabber. Without disarmUntilReset() the
+// watcher closes it again as soon as the target comes into range.
+void skipThisOne() {
+  grabber.retract();
+  auto_grab.disarmUntilReset();
+}
+```
+
+Releasing a target that is already held does not need it: the fire that closed
+the grabber left the edge consumed, and the edge only comes back once the sensor
+reads false, which it does not while the target is still in the clamp.
+
+Rules the type follows:
+
+- **Edge, not level.** The action fires on the false to true transition of the
+  debounced condition, never on every tick the condition holds.
+- **The latch survives a manual override.** After a fire (or a
+  `disarmUntilReset()`), no further fire happens until the latch clears *and* a
+  fresh false to true edge arrives. Clearing the latch while the condition is
+  still true does not fire.
+- **The latch clears on a false reading** when no re-arm condition was supplied,
+  and only on the re-arm condition when one was.
+- **`debounce_ms` needs an unbroken run.** One false reading restarts the
+  window, so a flickering sensor never accumulates enough time.
+
+Autonomous routines use `makeWaitForTriggerCommand(timeout_ms)`, which arms the
+watcher, finishes the moment the action fires (or on timeout), and restores the
+armed state it found unless something changed it while the command ran:
+
+```cpp
+// Drive forward until the sensor sees the target and the grabber closes.
+auto grab_it = auto_grab.makeWaitForTriggerCommand(2000.0);
+```
+
+`makeArmCommand()` and `makeDisarmCommand()` are one-shot and finish
+immediately. `setArmed()` / `isArmed()` are this mechanism's own switch and are
+separate from `Subsystem::setEnabled()`, which gates `periodic()` for the whole
+scheduler. `hasFired()`, `fireCount()`, `isLatched()` and `isConditionMet()`
+report state; `reset()` clears everything but the armed flag.
+
+`AutoTriggerMechanism` is neither copyable nor movable: the condition and action
+callbacks routinely capture `this`, and moving the object would leave them
+pointing at the old address.
