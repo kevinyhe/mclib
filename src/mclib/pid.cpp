@@ -8,7 +8,8 @@
 #include <limits>
 
 PID::PID(double new_kp, double new_ki, double new_kd)
-    : target(0), arrived(false), arrive(true), small_error_tolerance(1),
+    : target(0), arrived(false), arrive(true), hold_output(false),
+      small_error_tolerance(1),
       big_error_tolerance(3), small_error_duration(100), big_error_duration(500),
       small_check_time(0), big_check_time(0), first_time(true), kp(new_kp),
       ki(new_ki), kd(new_kd), integral_range(0), integral_max(500),
@@ -48,6 +49,8 @@ void PID::setSmallBigErrorDuration(double new_small_error_duration, double new_b
 }
 
 void PID::setArrive(bool new_arrive) { arrive = new_arrive; }
+
+void PID::setHoldOutput(bool new_hold_output) { hold_output = new_hold_output; }
 
 void PID::reset()
 {
@@ -146,7 +149,10 @@ double PID::update(double input)
         big_check_time = pros::millis();
     }
 
-    if (arrived)
+    // Arrival still latches either way. hold_output only decides whether the
+    // loop keeps driving afterwards; it defaults to false so callers that wait
+    // for the output to fall to zero to end a motion keep working.
+    if (arrived && !hold_output)
     {
         output = 0;
         return output;

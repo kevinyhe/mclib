@@ -909,3 +909,84 @@ for the per-solenoid values the device layer reports. Those values are logical
 too, not pin levels; they are for spotting one solenoid out of sync with the
 rest of the group. Writes through `group()` do not update the cached state and
 are overwritten by the next `periodic()`.
+
+## Library fixes: mechanism copy/move, and PID holding output
+
+Two defects that several mechanisms were each working around locally are now
+fixed at the source. The local workarounds are still in place and still
+correct; removing them is a separate follow-up, so mechanism behaviour is
+unchanged by this alone.
+
+### `StateMechanism` is explicitly non-copyable and non-movable
+
+`StateMechanism<StateT>` now deletes its copy constructor, copy assignment,
+move constructor and move assignment.
+
+Subclasses routinely store a `std::function` that captured `this` -
+`MappedMechanism::ApplyState`, `MotorStateMechanism`'s voltage map, the
+callbacks in the position, velocity, conveyor and PTO mechanisms. Copying or
+moving such an object copies the callable but not what it points at, so the new
+object's `periodic()` would drive real motors through a pointer to the old,
+possibly destroyed, object. A mechanism is also an identity: the
+`CommandScheduler` registers it by address and it owns its default command, so
+a second copy was never meaningful.
+
+Both operations were in fact already blocked by accident - `Subsystem` holds a
+`std::unique_ptr<Command>`, which implicitly deletes its copy constructor, and
+declares a virtual destructor, which suppresses the implicit move constructor.
+That is fragile (removing the `unique_ptr` member would silently re-enable
+copying) and the compiler error pointed at `Subsystem`'s members instead of at
+the rule. The explicit deletions pin the guarantee and make the diagnostic say
+what is wrong.
+
+Hold mechanisms in place: static or program-long storage, or
+`std::vector<std::unique_ptr<T>>`. `std::vector<PositionMechanism>` does not
+compile, which is the point.
+
+### `PID::setHoldOutput(bool)`
+
+`PID::update()` used to return a hard `0` on every tick once `arrived` latched,
+until `reset()` was called. A settled positional mechanism therefore had zero
+holding torque and sagged under gravity.
+
+`setHoldOutput(true)` keeps computing `P + I + D` after arrival. Arrival is
+still detected and `targetArrived()` still latches exactly as before, so a
+caller can use arrival as a "motion finished" signal while the loop holds the
+setpoint.
+
+What you get inside the settle band is a P (plus D) hold, not a zero-error
+hold: arrival requires `|error| <= small_error_tolerance`, and `update()` zeroes
+`sum_error` over that same band, so the integral is 0 on every held tick. A
+loaded arm settles wherever `kp * error` balances the load, up to
+`small_error_tolerance` of steady droop.
+
+The default is `false`, which is the original behaviour, so existing callers
+are unaffected. `ChassisController` and the legacy routines in
+`control/motion.cpp` end their motions on `targetArrived()`, which this change
+does not touch either way.
+
+`setHoldOutput` is on `PID` itself. `Arm` and `PositionMechanism` hold their
+`PID` privately with no accessor and no config flag, so today only code that
+owns a bare `PID` can turn it on. Plumbing it through those configs is the
+follow-up that also retires their local workarounds.
+
+Three useful configurations:
+
+| Configuration | Behaviour | Use for |
+| --- | --- | --- |
+| `setArrive(true)`, hold off (default) | Move, latch, then output 0 | Chassis motion that ends on arrival |
+| `setArrive(true)`, `setHoldOutput(true)` | Latch and report arrival, keep driving | Lift or arm that would otherwise sag |
+| `setArrive(false)` | Never latch, never zero | Velocity control, where arrival is meaningless |
+
+### The `small_error_tolerance` trap
+
+Worth knowing, and now documented in `pid.hpp`: `PID`'s default
+`small_error_tolerance` is `1`, and `update()` zeroes `sum_error` whenever
+`|error| <= small_error_tolerance`. For any loop that operates inside an error
+of 1 - velocity control in rpm, a position loop in revolutions - that silently
+disables `ki` entirely. Call `setSmallBigErrorTolerance(0, 0)` for those loops
+(and `setArrive(false)`, since the same tolerances drive arrival detection).
+
+`pid.hpp` now documents every method and the interaction between `arrive`,
+`arrived`, `hold_output`, the two error tolerances and the two settle
+durations.
