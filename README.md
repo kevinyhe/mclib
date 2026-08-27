@@ -238,26 +238,43 @@ void initialize() {
 The same pattern works for other mechanisms:
 
 ```cpp
-mclib::mechanism::Arm arm({-3, 4}, 8);
+mclib::device::MotorGroup arm_motors({-3, 4}, mclib::device::Gearset::Blue);
+mclib::device::Rotation arm_sensor(8);
 mclib::mechanism::PneumaticSubsystem wings({'E', 'F'});
 
-std::unique_ptr<Command> arm_low;
-std::unique_ptr<Command> arm_stop;
-std::unique_ptr<Command> wings_out;
-std::unique_ptr<Command> wings_in;
-std::unique_ptr<Command> wings_idle;
+mclib::mechanism::PositionMechanism arm(
+    [] { return arm_sensor.getPositionDeg(); },
+    [](double volts) { arm_motors.setVoltage(volts); },
+    mclib::mechanism::PositionMechanismConfig{
+        .kp = 0.09, .max_voltage = 10.0, .small_error = 1.5});
 
 void initialize() {
-  arm_low = arm.makeMoveToCommand(45.0, 2000.0);
-  arm_stop = arm.makeStopCommand();
-  wings_out = wings.makeExtendCommand();
-  wings_in = wings.makeRetractCommand();
-  wings_idle = wings.idleCommand();
+  arm.setName("arm");
+  arm.setDefaultCommand(arm.makeStopCommand());
+  arm.registerSelf();
 
-  CommandScheduler::registerSubsystem(&arm, arm_stop.get());
-  CommandScheduler::registerSubsystem(&wings, wings_idle.get());
+  wings.setName("wings");
+  wings.setDefaultCommand(wings.idleCommand());
+  wings.registerSelf();
+}
+
+std::unique_ptr<Command> makeLowCommand() {
+  return arm.makeMoveToCommand(45.0, 2000.0);
 }
 ```
+
+The lambdas take no capture because everything is at file scope. Inside a
+function you can capture with `[&]`, but the captured devices must outlive the
+mechanism: it stores the lambdas and calls them every `periodic()` tick, so
+capturing function-local devices by reference leaves it calling into destroyed
+objects. Make them members, statics, or file-scope objects.
+
+The tuning above is example tuning. `kp`, `max_voltage` and the error/duration
+tolerances are per-robot; start from the `PositionMechanismConfig` defaults.
+
+`makeStopCommand()` is the right default here: it holds the present position
+instead of coasting, and it runs until interrupted, so it takes over again the
+moment a terminating command such as `makeMoveToCommand` releases the arm.
 
 For custom mechanisms, subclass `StateMechanism<State>` or use
 `MotorStateMechanism<State>` when an enum maps to one or more motor voltages.
@@ -300,7 +317,7 @@ Other modules are split into matching header/source pairs:
 - `pid.hpp` / `pid.cpp`: PID controller
 - `utils.hpp` / `utils.cpp`: angle and geometry utilities
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
-- `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
+- `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, motor, and pneumatic subsystem examples
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
 
 ## Subsystem lifecycle
@@ -319,7 +336,7 @@ The subsystem itself is the owner. Hand it the default command with
 
 ```cpp
 Intake intake{...};
-Arm arm{...};
+PositionMechanism arm{...};
 
 void initialize() {
   intake.setName("intake");
@@ -435,6 +452,36 @@ the next `moveTo()`. `stop()` brakes rather than coasts: it latches the present
 position as the target and holds it, which keeps a loaded arm from falling.
 Call `setManualVoltage(0.0)` if you want it to go limp instead. A mechanism
 starts idle at 0 V until one of those is called.
+
+### Migrating from `Arm`
+
+`mechanism::Arm` is gone. It was a `PositionMechanism` with a `device::MotorGroup`
+and a `device::Rotation` hardcoded inside it. Build the two devices yourself and
+pass them in as lambdas:
+
+| Before (`Arm`) | After (`PositionMechanism`) |
+| --- | --- |
+| `ArmConfig::motor_ports`, `gearset` | `device::MotorGroup motors(ports, gearset)`, wrapped in the voltage sink |
+| `ArmConfig::rotation_port`, `rotation_reversed` | `device::Rotation sensor(port, reversed)`, wrapped in the position source |
+| `ArmConfig::small_error_deg` / `big_error_deg` | `PositionMechanismConfig::small_error` / `big_error` |
+| `kp`, `ki`, `kd`, `max_voltage`, `small_duration_ms`, `big_duration_ms`, `derivative_tolerance` | same names on `PositionMechanismConfig` |
+| `Arm arm({-3, 4}, 8);` | build the `MotorGroup` and `Rotation` yourself and pass them as lambdas |
+| `moveTo`, `setManualVoltage`, `positionDeg`, `targetDeg`, `atTarget` | same names, same meaning |
+| `makeMoveToCommand`, `makeManualCommand`, `makeStopCommand` | same names, same meaning |
+| `stop()` cut the motors to 0 V | `stop()` holds the present position; use `setManualVoltage(0.0)` to coast |
+
+Two behaviour changes to know about:
+
+- `stop()` now brakes instead of coasting, as described above.
+- `Arm` inherited the `PID` arrival latch, so once it settled it output a hard
+  0 V and a loaded arm sagged. `PositionMechanism` re-arms the loop when the
+  position drifts back outside `small_error`, and `atTarget()` stays true across
+  that re-arm, so a finished move does not restart.
+
+`PositionMechanism` is not tied to a rotation sensor. The position source is any
+`std::function<double()>`, so a motor encoder or a potentiometer works the same
+way.
+
 ## Conveyor Mechanism
 
 `mechanism/conveyor_mechanism.hpp` adds a sensor-gated conveyor with jam
