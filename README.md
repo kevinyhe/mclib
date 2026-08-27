@@ -433,6 +433,39 @@ the next `moveTo()`. `stop()` brakes rather than coasts: it latches the present
 position as the target and holds it, which keeps a loaded arm from falling.
 Call `setManualVoltage(0.0)` if you want it to go limp instead. A mechanism
 starts idle at 0 V until one of those is called.
+## Conveyor Mechanism
+
+`mechanism/conveyor_mechanism.hpp` adds a sensor-gated conveyor with jam
+recovery.
+
+```cpp
+mclib::mechanism::ConveyorConfig config;
+config.motor_ports = {11, -12};
+config.forward_voltage = 12.0;
+config.index_voltage = 8.0;
+config.jam_current_amps = 2.0;
+config.jam_velocity_rpm = 10.0;
+config.jam_dwell_ms = 250.0;
+config.unjam_voltage = -8.0;
+config.unjam_ms = 250.0;
+config.jam_clear_ms = 1000.0;
+config.max_unjam_retries = 3;
+
+mclib::device::Distance sensor(13);
+mclib::mechanism::ConveyorMechanism conveyor(
+    config, [&sensor] { return sensor.getDistanceMm() < 60.0; });
+
+auto conveyor_stop = conveyor.makeStopCommand();
+CommandScheduler::registerSubsystem(&conveyor, conveyor_stop.get());
+
+conveyor.setConveyorState(mclib::mechanism::ConveyorState::Forward);
+conveyor.stop();
+bool ready = conveyor.hasObject();
+bool stuck = conveyor.isJammed();
+```
+
+`applyState` runs from `periodic()`, so the conveyor must be registered with
+`CommandScheduler` or its motors never move.
 
 Commands:
 
@@ -743,3 +776,25 @@ Commands: `makeEngageCommand()`, `makeDisengageCommand()` and `makeToggleCommand
 are one-shot and finish immediately. `makeShiftCommand(engaged)` requires the
 mechanism for the whole settle window and finishes only once the shift has settled,
 so nothing can drive into a half-thrown gearbox.
+conveyor.makeForwardCommand();
+conveyor.makeReverseCommand();
+conveyor.makeStopCommand();
+conveyor.makeIndexCommand(1500.0);  // finishes when the gate latches, or on timeout
+conveyor.makeStateCommand(mclib::mechanism::ConveyorState::Reverse);
+```
+
+`makeIndexCommand` is the only factory here that finishes on its own. The rest
+run until interrupted.
+
+Jam handling: current above `jam_current_amps` while `|velocity|` is below
+`jam_velocity_rpm` for `jam_dwell_ms` triggers an unjam at `unjam_voltage` for
+`unjam_ms`, then the previous state resumes. After `max_unjam_retries`
+consecutive attempts the motors stop and `isJammed()` latches true until the
+state changes or `clearJam()` is called; the retry count refills after
+`jam_clear_ms` of unstalled running. Without a sensor gate, `IndexToSensor`
+holds at zero volts, `hasObject()` is always false, and `makeIndexCommand`
+finishes immediately.
+
+Sign-correct opposed motors in `motor_ports` (a negative port reverses that
+motor). Jam detection reads the group average, so uncorrected ports cancel to
+a near-zero velocity and look permanently stalled.

@@ -22,6 +22,7 @@
 #include "mclib/device/types.hpp"
 #include "mclib/mechanism/arm.hpp"
 #include "mclib/mechanism/homing_mechanism.hpp"
+#include "mclib/mechanism/conveyor_mechanism.hpp"
 #include "mclib/mechanism/intake.hpp"
 #include "mclib/mechanism/mechanism.hpp"
 #include "mclib/mechanism/motor_state_mechanism.hpp"
