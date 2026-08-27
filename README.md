@@ -386,6 +386,129 @@ the requirement.
 Two instances also give each stage its own voltages, its own sensor gate, and
 its own jam detection, which one shared `MotorGroup` average could never do.
 
+## Units (`units/units.hpp`)
+
+Every dimensioned value in mclib is a `Quantity`: one `double` wrapped in a type
+that carries five integer exponents - length, time, angle, voltage, current.
+Multiplying adds the exponents, dividing subtracts them, so `QLength / QTime`
+*is* `QVelocity` and `QLength + QTime` does not compile.
+
+```cpp
+QLength distance = 24_in;
+QTime   timeout  = 1500_ms;
+QAngle  heading  = 90_deg;
+
+QVelocity speed = distance / timeout;   // QVelocity, checked at compile time
+QLength   back  = speed * timeout;      // 24 in again
+// QLength wrong = distance + timeout;  // error: no operator+
+```
+
+A `Quantity` is the same size as the `double` it replaces, all its operations
+are `constexpr` and `inline`, and none of it survives to the ELF - the section
+sizes of `bin/cold.package.elf` are unchanged by the migration.
+
+### Aliases
+
+`QNumber`, `QLength`, `QArea`, `QTime`, `QAngle`, `QVoltage`, `QCurrent`,
+`QVelocity`, `QAcceleration`, `QJerk`, `QAngularVelocity`,
+`QAngularAcceleration`, `QCurvature` (1/length), `QFrequency` (1/time).
+
+Anything else you need is a valid type already: `QVoltage / QCurrent` is a
+resistance, `square(QLength{}) ` is an area.
+
+### Literals
+
+`_m` `_cm` `_mm` `_in` `_ft` `_tile` - length (a `_tile` is 24 in)
+`_s` `_ms` `_min` - time
+`_rad` `_deg` `_rot` - angle
+`_V` `_mV` `_A` `_mA` - voltage and current
+`_mps` `_inps` `_mps2` `_radps` `_degps` `_rpm` - rates
+
+Named constants exist for all of them too: `metre`, `inch`, `tile`,
+`millisecond`, `second`, `minute`, `degree`, `radian`, `rotation`, `volt`,
+`millivolt`, `ampere`, `milliampere`, `rpm`, `percent`. Use them when the number
+is not a literal: `250 * millisecond`, `pros::millis() * millisecond`.
+
+### Getting a raw double back out
+
+Both directions of the escape hatch are explicit, because both are where unit
+bugs come from.
+
+```cpp
+double ms = timeout.ms();       // named accessor - says what the number means
+double in = distance.in();
+double dg = heading.deg();
+double mv = battery.mV();
+
+QLength from_raw{0.6096};       // explicit ctor, value in SI base units
+```
+
+Accessors: `.m() .cm() .mm() .in() .ft()`, `.s() .ms()`, `.rad() .deg()`,
+`.volts() .mV()`, `.amps() .mA()`, `.mps() .inps()`, `.radps() .degps() .rpm()`.
+Each is constrained to its own dimension, so `timeout.in()` is a compile error
+rather than a wrong number. Free-function spellings - `inches(x)`,
+`milliseconds(t)`, `degrees(a)` - exist for call sites where they read better.
+`.raw()` gives the stored value in SI base units and is the escape hatch of last
+resort.
+
+### Angles
+
+`QAngle` stores **radians**. The public motion API of this library speaks
+degrees and `Pose2D::theta` speaks radians; making the conversion a method call
+(`.deg()` / `.rad()`) is the point. Angle is a real dimension, so
+`radius * angle` does not type-check on its own - use the sanctioned crossings:
+
+```cpp
+QLength arc     = arcLength(radius, angle);      // radius * angle
+QAngle  swept   = arcAngle(arc, radius);         // the inverse
+QVelocity rim   = rimVelocity(radius, omega);    // radius * angular velocity
+```
+
+`wrap(angle)` folds an angle into (-180 deg, +180 deg].
+
+### Math helpers
+
+`abs`, `min`, `max` and `clamp` return the same dimension they were given.
+`sign` returns a plain double (-1, 0 or +1) and `square` doubles the exponents.
+`sin/cos/tan` take a `QAngle` and return a plain double; `asin/acos/atan` go the
+other way; `atan2(QLength, QLength)` returns a `QAngle` and
+`hypot(QLength, QLength)` a `QLength`.
+
+### Namespaces and back-compat
+
+Everything lives in `mclib::units`. For back-compat the type aliases, the
+`millisecond` / `second` constants and all literal operators are also pulled
+into the global namespace, so the pre-existing idiom keeps working unchanged:
+
+```cpp
+QTime now = pros::millis() * millisecond;
+if (now - start >= 250 * millisecond) { /* ... */ }
+```
+
+There is no opt-out macro: mclib's own headers use those unqualified names, so
+making them conditional would only mean the library stops compiling. The
+`Quantity` template itself is *not* exported globally - spell it
+`mclib::units::Quantity` - because a downstream global `class Quantity` would
+otherwise become ambiguous.
+
+One deliberate hole in the type safety: `QNumber` (all exponents zero) converts
+implicitly to and from `double`, because gains and gear ratios have to
+interoperate with plain arithmetic. Every other dimension requires the explicit
+constructor.
+
+### Tests
+
+`tests/units_test.cpp` is a standalone host program:
+
+```sh
+g++ -std=gnu++20 -Iinclude -o /tmp/units_test tests/units_test.cpp && /tmp/units_test
+```
+
+It covers dimension composition, literal values, round-tripping and the old
+`QTime` millisecond semantics. The checks that dimensionally-wrong code does
+*not* compile are written as concepts whose negation is asserted - if
+`QLength + QTime` ever starts compiling, that file stops building.
+
 ## Core Math API
 
 ```cpp

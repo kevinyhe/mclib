@@ -203,8 +203,8 @@ private:
   std::shared_ptr<device::MotorGroup> m_motors;
   std::shared_ptr<device::IPneumatic> m_pneumatic;
   double m_commanded_volts = 0.0;
-  QTime m_last_shift_time = 0.0;
-  QTime m_last_write_time = 0.0;
+  QTime m_last_shift_time = 0 * millisecond;
+  QTime m_last_write_time = 0 * millisecond;
 };
 
 }  // namespace mechanism
