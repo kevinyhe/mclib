@@ -77,6 +77,8 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/control/motion_math.cpp \
 	$(SRCDIR)/mclib/control/robot_state.cpp \
 	$(SRCDIR)/mclib/control/odometry.cpp \
+	$(SRCDIR)/mclib/control/profile.cpp \
+	$(SRCDIR)/mclib/control/feedforward.cpp \
 	$(SRCDIR)/mclib/pid.cpp \
 	$(TESTDIR)/support/host_time.cpp
 
