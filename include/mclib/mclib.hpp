@@ -23,7 +23,6 @@
 #include "mclib/mechanism/conveyor_mechanism.hpp"
 #include "mclib/mechanism/discrete_actuator_mechanism.hpp"
 #include "mclib/mechanism/homing_mechanism.hpp"
-#include "mclib/mechanism/intake.hpp"
 #include "mclib/mechanism/mechanism.hpp"
 #include "mclib/mechanism/mechanism_manager.hpp"
 #include "mclib/mechanism/motor_state_mechanism.hpp"
