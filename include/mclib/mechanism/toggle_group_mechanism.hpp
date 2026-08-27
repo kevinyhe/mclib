@@ -58,6 +58,12 @@ struct ToggleGroupMechanismConfig {
  * Out of range indices are ignored by the mutators and read back as false, so a
  * bad index cannot corrupt the state or crash the scheduler.
  *
+ * The channel count is fixed at construction by the number of actuators. The
+ * inherited setState() and the generic makeState*Command() factories are hidden
+ * because they accept a std::vector<bool> of any length: caching a short one
+ * would make the trailing channels unreachable and latch their actuators at
+ * whatever they last held. Use setAll() or the factories below instead.
+ *
  * The state is a std::vector<bool> of logical values, one per channel. Each
  * channel's actuator receives that value, negated if that channel is marked
  * inverted. Actuators are std::function<void(bool)>, so the same type covers
@@ -70,9 +76,10 @@ struct ToggleGroupMechanismConfig {
  * inherited setState() directly does not write anything until the next
  * periodic().
  *
- * All command factories terminate after one tick, which releases the
- * requirement and lets CommandScheduler::run() immediately reschedule the
- * default command. The default command MUST therefore be idleCommand(). A
+ * Every command factory terminates on its own: the one-shot factories after a
+ * single tick, the ...ForCommand(QTime) variants once their duration is up.
+ * Finishing releases the requirement and lets CommandScheduler::run()
+ * reschedule the default command, so the default MUST be idleCommand(). A
  * "retract everything" default would undo every set on the very next tick.
  *
  * Copy and move are deleted. The command factories capture `this` and the
@@ -131,7 +138,7 @@ public:
   bool anySet() const;
   /// @brief How many channels are extended.
   std::size_t setCount() const;
-  /// @brief The number of channels.
+  /// @brief The number of channels. Fixed at construction.
   std::size_t count() const;
   /// @brief Whether a channel drives its actuator with the inverse of the
   /// logical state. False if the index is invalid.
@@ -211,6 +218,20 @@ protected:
   void applyState(const std::vector<bool>& states) override;
 
 private:
+  using Base = StateMechanism<std::vector<bool>>;
+
+  /// Hidden: these accept a std::vector<bool> of any length, and a wrong width
+  /// would silently drop channels. setChannelStates() is the only way in, and
+  /// it always writes exactly count() entries.
+  using Base::makeStateCommand;
+  using Base::makeStateForCommand;
+  using Base::makeStateOnceCommand;
+  using Base::makeStateUntilCommand;
+  using Base::setState;
+
+  /// @brief Cache a full width state, padding or truncating to count().
+  void setChannelStates(std::vector<bool> states);
+
   template <typename ChannelT>
   static std::size_t toIndex(ChannelT channel) {
     return static_cast<std::size_t>(

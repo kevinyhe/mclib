@@ -27,22 +27,29 @@ ToggleGroupMechanism::ToggleGroupMechanism(
     : ToggleGroupMechanism(makeActuators(std::move(pneumatics)),
                            std::move(config)) {}
 
+void ToggleGroupMechanism::setChannelStates(std::vector<bool> states) {
+  states.resize(count(), false);
+  Base::setState(std::move(states));
+}
+
 void ToggleGroupMechanism::set(std::size_t index, bool extended) {
   if (index >= count()) {
     return;
   }
 
   std::vector<bool> states = getState();
+  states.resize(count(), false);
   states[index] = extended;
-  setState(std::move(states));
+  setChannelStates(std::move(states));
   apply();
 }
 
 bool ToggleGroupMechanism::get(std::size_t index) const {
-  if (index >= count()) {
+  const std::vector<bool>& states = getState();
+  if (index >= count() || index >= states.size()) {
     return false;
   }
-  return getState()[index];
+  return states[index];
 }
 
 void ToggleGroupMechanism::toggle(std::size_t index) {
@@ -53,16 +60,17 @@ void ToggleGroupMechanism::toggle(std::size_t index) {
 }
 
 void ToggleGroupMechanism::setAll(bool extended) {
-  setState(std::vector<bool>(count(), extended));
+  setChannelStates(std::vector<bool>(count(), extended));
   apply();
 }
 
 void ToggleGroupMechanism::toggleAll() {
   std::vector<bool> states = getState();
+  states.resize(count(), false);
   for (std::size_t i = 0; i < states.size(); ++i) {
     states[i] = !states[i];
   }
-  setState(std::move(states));
+  setChannelStates(std::move(states));
   apply();
 }
 
@@ -71,28 +79,39 @@ void ToggleGroupMechanism::apply() {
 }
 
 bool ToggleGroupMechanism::allSet() const {
-  const std::vector<bool>& states = getState();
-  return std::all_of(states.begin(), states.end(),
-                     [](bool state) { return state; });
+  for (std::size_t i = 0; i < count(); ++i) {
+    if (!get(i)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool ToggleGroupMechanism::anySet() const {
-  const std::vector<bool>& states = getState();
-  return std::any_of(states.begin(), states.end(),
-                     [](bool state) { return state; });
+  for (std::size_t i = 0; i < count(); ++i) {
+    if (get(i)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::size_t ToggleGroupMechanism::setCount() const {
-  const std::vector<bool>& states = getState();
-  return static_cast<std::size_t>(std::count(states.begin(), states.end(), true));
+  std::size_t total = 0;
+  for (std::size_t i = 0; i < count(); ++i) {
+    if (get(i)) {
+      ++total;
+    }
+  }
+  return total;
 }
 
 std::size_t ToggleGroupMechanism::count() const {
-  return getState().size();
+  return m_actuators.size();
 }
 
 bool ToggleGroupMechanism::isInverted(std::size_t index) const {
-  if (index >= m_inverted.size()) {
+  if (index >= count() || index >= m_inverted.size()) {
     return false;
   }
   return m_inverted[index];
@@ -138,7 +157,18 @@ std::unique_ptr<Command> ToggleGroupMechanism::makeSetForCommand(
 
 std::unique_ptr<Command> ToggleGroupMechanism::makeSetAllForCommand(
     bool extended, QTime duration) {
-  return makeStateForCommand(std::vector<bool>(count(), extended), duration);
+  auto start_time = std::make_shared<QTime>(0.0);
+  return std::make_unique<FunctionalCommand>(
+      [this, extended, start_time]() {
+        setAll(extended);
+        *start_time = pros::millis() * millisecond;
+      },
+      [this, extended]() { setAll(extended); },
+      [](bool) {},
+      [start_time, duration]() {
+        return pros::millis() * millisecond - *start_time >= duration;
+      },
+      std::initializer_list<Subsystem*>{this});
 }
 
 void ToggleGroupMechanism::applyState(const std::vector<bool>& states) {
