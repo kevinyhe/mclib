@@ -540,6 +540,78 @@ It covers dimension composition, literal values, round-tripping and the old
 *not* compile are written as concepts whose negation is asserted - if
 `QLength + QTime` ever starts compiling, that file stops building.
 
+## Coordinate Frame
+
+mclib has one canonical frame, the **compass / field frame**:
+
+- `theta = 0` points along **+Y**.
+- `theta` increases **clockwise**, so **+90 deg points along +X**.
+- The unit vector for a heading is `(sin(theta), cos(theta))` -- x uses sin, y
+  uses cos.
+- A bearing from A to B is `atan2(b.x - a.x, b.y - a.y)` -- x first, y second.
+
+Both of those are the transpose of the usual textbook formulas. This is
+deliberate: it matches how VEX field diagrams are drawn, and it is what
+`control/odometry.cpp`, `control/motion.cpp`, `Chassis::updateOdometry()`, and
+`snapshot/raycast.cpp` already do.
+
+Units: angles are **radians** everywhere inside `math.hpp` (`Pose2D::theta`,
+`wrapAngle`), and **degrees** at the public motion API (`Chassis`,
+`control/motion.cpp`, `correct_angle`). Convert at that boundary with
+`degToRad` / `radToDeg` from `utils.hpp`. Translations are inches.
+
+The robot frame is chosen to coincide with the field frame at `theta = 0`:
+**+Y is forward, +X is the robot's right.**
+
+### Converting between frames
+
+Use these instead of writing `sin`/`cos` by hand:
+
+```cpp
+Pose2D compose(const Pose2D& base, const Pose2D& local);
+
+Vec2 headingVector(double rad);                  // (sin, cos)
+double headingToward(const Vec2& from, const Vec2& to);  // compass bearing
+
+Vec2 fieldToRobot(const Vec2& field_vec, double heading_rad);
+Vec2 robotToField(const Vec2& robot_vec, double heading_rad);
+Vec2 fieldPointToRobot(const Vec2& field_point, const Pose2D& robot_pose);
+Vec2 robotPointToField(const Vec2& robot_point, const Pose2D& robot_pose);
+
+double arcRadius(const Pose2D& from, const Vec2& target);
+```
+
+`fieldToRobot` / `robotToField` take a displacement and only rotate it. The
+`...Point...` variants translate first, so they answer "where is this field
+point relative to the robot".
+
+### `rotationMatrix` and `rotate` are not the field convention
+
+`rotationMatrix(rad)` is the standard textbook rotation: counter-clockwise,
+zero along +X, `[[cos, -sin], [sin, cos]]`. Keep using it for generic linear
+algebra. Do **not** use it to move a pose or a waypoint between frames.
+
+Feeding it a compass heading turns the wrong way: `rotate({0, 1}, rad)` gives
+`(-sin, cos)`, while a robot at that heading actually points at `(sin, cos)`.
+Because the two frames are transposes, `rotationMatrix(rad)` happens to equal
+the field-to-robot matrix, so `rotate()` with a compass heading silently does
+`fieldToRobot()` -- the inverse of what "rotate my local offset into the
+field" means. Call `fieldToRobot` / `robotToField` and the bug cannot happen.
+
+### `Pose2D::operator+` is not a compose
+
+`operator+` adds `x`, `y`, and `theta` component-wise and wraps `theta`. It
+does **not** rotate the incoming translation by the existing heading, so it is
+"add a field-frame offset", not "move in my own frame". `compose(base, local)`
+is the real SE(2) operation: `local` is interpreted in `base`'s frame, with
+`local.x` to the right and `local.y` forward.
+
+```cpp
+Pose2D p{0, 0, degToRad(90)};            // facing +X
+p + Pose2D{0, 10, 0}      // -> (0, 10) : offset added in field coordinates
+compose(p, Pose2D{0, 10, 0})  // -> (10, 0) : 10 inches forward
+```
+
 ## Core Math API
 
 ```cpp
@@ -549,22 +621,61 @@ using Mat2 = Eigen::Matrix<double, 2, 2>;
 using Mat3 = Eigen::Matrix<double, 3, 3>;
 
 double clamp(double val, double min, double max);
-double wrapAngle(double rad);
+double wrapAngle(double rad);  // radians, wraps into [-pi, pi] (closed both ends)
 
 struct Pose2D {
-  double x;
-  double y;
-  double theta;
+  double x;      // inches, field frame
+  double y;      // inches, field frame
+  double theta;  // radians, 0 = +Y, clockwise-positive
 
-  Pose2D operator+(const Pose2D& other) const;
+  Pose2D operator+(const Pose2D& other) const;  // component-wise, not a compose
   double distanceTo(const Pose2D& other) const;
   Vec2 translation() const;
   Vec3 vector() const;
 };
 
+Pose2D compose(const Pose2D& base, const Pose2D& local);
+
+Vec2 headingVector(double rad);
+double headingToward(const Vec2& from, const Vec2& to);
+Vec2 fieldToRobot(const Vec2& field_vec, double heading_rad);
+Vec2 robotToField(const Vec2& robot_vec, double heading_rad);
+Vec2 fieldPointToRobot(const Vec2& field_point, const Pose2D& robot_pose);
+Vec2 robotPointToField(const Vec2& robot_point, const Pose2D& robot_pose);
+double arcRadius(const Pose2D& from, const Vec2& target);
+
+// Standard frame (CCW, 0 = +X). NOT the field convention -- see above.
 Mat2 rotationMatrix(double rad);
 Vec2 rotate(const Vec2& vec, double rad);
 ```
+
+`utils.hpp` lives in the **global namespace** and holds the degree/radian
+bridge plus `getRadius`:
+
+```cpp
+double degToRad(double deg);
+double radToDeg(double rad);
+
+// x/y/x1/y1 in inches (field frame), angle in DEGREES (compass frame).
+// Legacy and frame-buggy -- see below. Returns +infinity when the
+// denominator degenerates.
+double getRadius(double x, double y, double x1, double y1, double angle);
+```
+
+`getRadius` is a legacy helper with a frame bug: its denominator uses
+`delta_y` where the target's **lateral** offset in the robot frame belongs, so
+a target 10 in dead ahead of a robot at heading 0 -- a straight line, infinite
+radius -- comes back as 5. `mclib::arcRadius(from, target)` computes it
+correctly. `getRadius` is left alone because `boomerang`'s tuning was fitted
+around its behavior; rewiring the caller is Phase 3 work.
+
+The one change made here is the degenerate case: it used to return a magic
+`999`, which silently became a finite speed limit downstream, and now returns
+infinity. Its one caller, `control/motion.cpp:1074`, feeds it to
+`sqrt(chase_power * getRadius(...) * 9.8)` -- an expression that mixes a
+voltage-ish tuning constant, a radius in inches, and g in m/s^2, takes the
+square root of a value that can be negative, and now yields NaN when
+`chase_power` is 0. That is a known problem and out of scope here.
 
 Other modules are split into matching header/source pairs:
 
