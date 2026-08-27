@@ -72,7 +72,8 @@ HOST_LDFLAGS?=-pthread
 # library - currently just systemMillis(). It is not globbed into TEST_SRCS
 # because `make test` only globs tests/*.cpp, so nothing in there is mistaken
 # for a test.
-HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
+HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
+	$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
 	$(SRCDIR)/mclib/control/scaling.cpp \
 	$(SRCDIR)/mclib/control/motion_math.cpp \
