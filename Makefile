@@ -50,6 +50,50 @@ TEMPLATE_FILES=$(INCDIR)/mclib/*.hpp \
 .DEFAULT_GOAL=quick
 
 ################################################################################
+############################# Host-side unit tests #############################
+# `make test` compiles every tests/*.cpp into its own host binary with the
+# system g++ and runs it. It never touches the ARM toolchain or PROS headers.
+# tests/ lives outside src/, so the firmware build never sees it.
+TESTDIR:=$(ROOT)/tests
+TESTBINDIR:=$(BINDIR)/tests
+HOST_CXX?=g++
+HOST_CXXFLAGS?=-std=$(CXX_STANDARD) -I$(INCDIR) -I$(TESTDIR) -Wall -Wextra -g -O1
+
+# Library sources that compile without PROS headers, linked into every test.
+# Expected to grow as more of src/ is made PROS-free.
+HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
+	$(SRCDIR)/mclib/utils.cpp \
+	$(SRCDIR)/mclib/control/scaling.cpp \
+	$(SRCDIR)/mclib/control/state.cpp
+
+# One test per file: any tests/*.cpp with its own int main() returning 0 on
+# success. No registration, no framework.
+TEST_SRCS:=$(wildcard $(TESTDIR)/*.cpp)
+
+.PHONY: test
+test:
+	@mkdir -p $(TESTBINDIR)
+	@if [ -z "$(strip $(TEST_SRCS))" ]; then echo "No tests found in $(TESTDIR)"; exit 1; fi
+	@failed=""; passed=0; \
+	for src in $(TEST_SRCS); do \
+	  name=`basename $$src .cpp`; \
+	  bin=$(TESTBINDIR)/$$name; \
+	  echo "== $$name"; \
+	  if ! $(HOST_CXX) $(HOST_CXXFLAGS) -o $$bin $$src $(HOST_TEST_SRC); then \
+	    echo "FAIL $$name (compile error)"; \
+	    failed="$$failed $$name"; \
+	    continue; \
+	  fi; \
+	  if $$bin; then passed=`expr $$passed + 1`; else failed="$$failed $$name"; fi; \
+	done; \
+	echo; \
+	if [ -n "$$failed" ]; then \
+	  echo "FAILED TESTS:$$failed"; \
+	  exit 1; \
+	fi; \
+	echo "All $$passed test(s) passed."
+
+################################################################################
 ################################################################################
 ########## Nothing below this line should be edited by typical users ###########
 -include ./common.mk
