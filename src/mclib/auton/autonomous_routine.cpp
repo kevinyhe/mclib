@@ -44,17 +44,13 @@ private:
 Routine::MotionStep::MotionStep(Routine& routine, std::size_t index)
     : m_routine(&routine), m_index(index) {}
 
-Routine::MotionStep& Routine::MotionStep::withMaxSpeed(double max_speed) {
-  return withMaxVoltage(max_speed);
-}
-
-Routine::MotionStep& Routine::MotionStep::withMaxVoltage(double max_voltage) {
-  m_routine->m_steps[m_index].options.max_speed = max_voltage;
+Routine::MotionStep& Routine::MotionStep::withMaxVoltage(QVoltage max_voltage) {
+  m_routine->m_steps[m_index].options.max_voltage = max_voltage;
   return rebuild();
 }
 
-Routine::MotionStep& Routine::MotionStep::withMinSpeed(double min_speed) {
-  m_routine->m_steps[m_index].options.min_speed = min_speed;
+Routine::MotionStep& Routine::MotionStep::withMinVoltage(QVoltage min_voltage) {
+  m_routine->m_steps[m_index].options.min_voltage = min_voltage;
   return rebuild();
 }
 
@@ -104,19 +100,19 @@ Routine::MotionStep& Routine::MotionStep::withoutOverturn() {
   return withOverturn(false);
 }
 
-Routine::MotionStep& Routine::MotionStep::withDrivePower(double drive_power) {
+Routine::MotionStep& Routine::MotionStep::withDrivePower(QVoltage drive_power) {
   m_routine->m_steps[m_index].options.drive_power = drive_power;
   return rebuild();
 }
 
 Routine::MotionStep& Routine::MotionStep::withCurrentThreshold(
-    double current_threshold) {
+    QCurrent current_threshold) {
   m_routine->m_steps[m_index].options.current_threshold = current_threshold;
   return rebuild();
 }
 
 Routine::MotionStep& Routine::MotionStep::withVelocityThreshold(
-    double velocity_threshold) {
+    QAngularVelocity velocity_threshold) {
   m_routine->m_steps[m_index].options.velocity_threshold = velocity_threshold;
   return rebuild();
 }
@@ -149,116 +145,96 @@ Routine& Routine::MotionStep::waitUntil(std::function<bool()> condition) {
   return m_routine->waitUntil(std::move(condition));
 }
 
-Routine::MotionStep Routine::MotionStep::driveDistance(double distance_in,
-                                                       double timeout_ms) {
-  return m_routine->driveDistance(distance_in, timeout_ms);
+Routine::MotionStep Routine::MotionStep::driveDistance(QLength distance,
+                                                       QTime timeout) {
+  return m_routine->driveDistance(distance, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::turnToHeading(double heading_deg,
-                                                       double timeout_ms) {
-  return m_routine->turnToHeading(heading_deg, timeout_ms);
+Routine::MotionStep Routine::MotionStep::turnToHeading(QAngle heading,
+                                                       QTime timeout) {
+  return m_routine->turnToHeading(heading, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::turnToAngle(double turn_angle,
-                                                     double timeout_ms) {
-  return m_routine->turnToAngle(turn_angle, timeout_ms);
+Routine::MotionStep Routine::MotionStep::turnToAngle(QAngle turn_angle,
+                                                     QTime timeout) {
+  return m_routine->turnToAngle(turn_angle, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::driveTo(double distance_in,
-                                                 double timeout_ms) {
-  return m_routine->driveTo(distance_in, timeout_ms);
+Routine::MotionStep Routine::MotionStep::driveTo(QLength distance,
+                                                 QTime timeout) {
+  return m_routine->driveTo(distance, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::driveTo(Point point,
-                                                 double timeout_ms) {
-  return m_routine->driveTo(point, timeout_ms);
-}
-
-Routine::MotionStep Routine::MotionStep::driveTo(double x,
-                                                 double y,
-                                                 double timeout_ms) {
-  return m_routine->driveTo(x, y, timeout_ms);
-}
-
-Routine::MotionStep Routine::MotionStep::curveCircle(
-    double result_angle_deg,
-    double center_radius,
-    double timeout_ms) {
-  return m_routine->curveCircle(result_angle_deg, center_radius, timeout_ms);
+Routine::MotionStep Routine::MotionStep::curveCircle(QAngle result_angle,
+                                                     QLength center_radius,
+                                                     QTime timeout) {
+  return m_routine->curveCircle(result_angle, center_radius, timeout);
 }
 
 Routine::MotionStep Routine::MotionStep::curveCircleReverse(
-    double result_angle_deg,
-    double center_radius,
-    double timeout_ms) {
-  return m_routine->curveCircleReverse(result_angle_deg,
-                                       center_radius,
-                                       timeout_ms);
+    QAngle result_angle,
+    QLength center_radius,
+    QTime timeout) {
+  return m_routine->curveCircleReverse(result_angle, center_radius, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::swing(double swing_angle,
+Routine::MotionStep Routine::MotionStep::swing(QAngle swing_angle,
                                                double drive_direction,
-                                               double timeout_ms) {
-  return m_routine->swing(swing_angle, drive_direction, timeout_ms);
+                                               QTime timeout) {
+  return m_routine->swing(swing_angle, drive_direction, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::wallReset(double reset_x,
-                                                   double reset_y,
-                                                   double reset_heading,
-                                                   double timeout_ms) {
-  return m_routine->wallReset(reset_x, reset_y, reset_heading, timeout_ms);
+Routine::MotionStep Routine::MotionStep::wallReset(QLength reset_x,
+                                                   QLength reset_y,
+                                                   QAngle reset_heading,
+                                                   QTime timeout) {
+  return m_routine->wallReset(reset_x, reset_y, reset_heading, timeout);
 }
 
 Routine::MotionStep Routine::MotionStep::turnToPoint(Point point,
-                                                     double timeout_ms) {
-  return m_routine->turnToPoint(point, timeout_ms);
+                                                     QTime timeout) {
+  return m_routine->turnToPoint(point, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::turnToPoint(double x,
-                                                     double y,
-                                                     double timeout_ms) {
-  return m_routine->turnToPoint(x, y, timeout_ms);
+Routine::MotionStep Routine::MotionStep::turnToPoint(QLength x,
+                                                     QLength y,
+                                                     QTime timeout) {
+  return m_routine->turnToPoint(x, y, timeout);
+}
+
+Routine::MotionStep Routine::MotionStep::moveToPoint(Point point,
+                                                     QTime timeout) {
+  return m_routine->moveToPoint(point, timeout);
 }
 
 Routine::MotionStep Routine::MotionStep::moveToPoint(Point point,
                                                      int dir,
-                                                     double timeout_ms) {
-  return m_routine->moveToPoint(point, dir, timeout_ms);
+                                                     QTime timeout) {
+  return m_routine->moveToPoint(point, dir, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::moveToPoint(double x,
-                                                     double y,
+Routine::MotionStep Routine::MotionStep::moveToPoint(QLength x,
+                                                     QLength y,
                                                      int dir,
-                                                     double timeout_ms) {
-  return m_routine->moveToPoint(x, y, dir, timeout_ms);
+                                                     QTime timeout) {
+  return m_routine->moveToPoint(x, y, dir, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::boomerang(
-    Point point,
-    int dir,
-    double final_heading_deg,
-    double lead,
-    double timeout_ms) {
-  return m_routine->boomerang(point,
-                              dir,
-                              final_heading_deg,
-                              lead,
-                              timeout_ms);
+Routine::MotionStep Routine::MotionStep::boomerang(Point point,
+                                                   int dir,
+                                                   QAngle final_heading,
+                                                   double lead,
+                                                   QTime timeout) {
+  return m_routine->boomerang(point, dir, final_heading, lead, timeout);
 }
 
-Routine::MotionStep Routine::MotionStep::boomerang(
-    double x,
-    double y,
-    int dir,
-    double final_heading_deg,
-    double lead,
-    double timeout_ms) {
-  return m_routine->boomerang(x,
-                              y,
-                              dir,
-                              final_heading_deg,
-                              lead,
-                              timeout_ms);
+Routine::MotionStep Routine::MotionStep::boomerang(QLength x,
+                                                   QLength y,
+                                                   int dir,
+                                                   QAngle final_heading,
+                                                   double lead,
+                                                   QTime timeout) {
+  return m_routine->boomerang(x, y, dir, final_heading, lead, timeout);
 }
 
 Routine::MotionStep& Routine::MotionStep::rebuild() {
@@ -307,349 +283,311 @@ Routine& Routine::waitUntil(std::function<bool()> condition) {
 }
 
 Routine::MotionStep Routine::driveDistance(ChassisController& chassis,
-                                           double distance_in,
-                                           double timeout_ms) {
+                                           QLength distance,
+                                           QTime timeout) {
   return addMotion(
-      [&chassis, distance_in, timeout_ms](const MotionOptions& options) {
-        return chassis.makeDriveDistanceCommand(distance_in,
-                                                timeout_ms,
+      [&chassis, distance, timeout](const MotionOptions& options) {
+        return chassis.makeDriveDistanceCommand(distance,
+                                                timeout,
                                                 options.stop_at_end,
-                                                options.max_speed);
+                                                options.max_voltage);
       });
 }
 
-Routine::MotionStep Routine::driveDistance(double distance_in,
-                                           double timeout_ms) {
-  return driveDistance(requireChassis(), distance_in, timeout_ms);
+Routine::MotionStep Routine::driveDistance(QLength distance, QTime timeout) {
+  return driveDistance(requireChassis(), distance, timeout);
 }
 
 Routine::MotionStep Routine::turnToHeading(ChassisController& chassis,
-                                           double heading_deg,
-                                           double timeout_ms) {
+                                           QAngle heading,
+                                           QTime timeout) {
   return addMotion(
-      [&chassis, heading_deg, timeout_ms](const MotionOptions& options) {
-        return chassis.makeTurnToHeadingCommand(heading_deg,
-                                                timeout_ms,
+      [&chassis, heading, timeout](const MotionOptions& options) {
+        return chassis.makeTurnToHeadingCommand(heading,
+                                                timeout,
                                                 options.stop_at_end,
-                                                options.max_speed);
+                                                options.max_voltage);
       });
 }
 
-Routine::MotionStep Routine::turnToHeading(double heading_deg,
-                                           double timeout_ms) {
-  return turnToHeading(requireChassis(), heading_deg, timeout_ms);
+Routine::MotionStep Routine::turnToHeading(QAngle heading, QTime timeout) {
+  return turnToHeading(requireChassis(), heading, timeout);
 }
 
 Routine::MotionStep Routine::turnToAngle(ChassisController& chassis,
-                                         double turn_angle,
-                                         double timeout_ms) {
+                                         QAngle turn_angle,
+                                         QTime timeout) {
   return addMotion(
-      [&chassis, turn_angle, timeout_ms](const MotionOptions& options) {
+      [&chassis, turn_angle, timeout](const MotionOptions& options) {
         return chassis.makeTurnToAngleCommand(turn_angle,
-                                              timeout_ms,
+                                              timeout,
                                               options.exit,
-                                              options.max_speed,
-                                              options.min_speed);
+                                              options.max_voltage,
+                                              options.min_voltage);
       });
 }
 
-Routine::MotionStep Routine::turnToAngle(double turn_angle,
-                                         double timeout_ms) {
-  return turnToAngle(requireChassis(), turn_angle, timeout_ms);
+Routine::MotionStep Routine::turnToAngle(QAngle turn_angle, QTime timeout) {
+  return turnToAngle(requireChassis(), turn_angle, timeout);
 }
 
 Routine::MotionStep Routine::driveTo(ChassisController& chassis,
-                                     double distance_in,
-                                     double timeout_ms) {
+                                     QLength distance,
+                                     QTime timeout) {
   return addMotion(
-      [&chassis, distance_in, timeout_ms](const MotionOptions& options) {
-        return chassis.makeDriveToCommand(distance_in,
-                                          timeout_ms,
+      [&chassis, distance, timeout](const MotionOptions& options) {
+        return chassis.makeDriveToCommand(distance,
+                                          timeout,
                                           options.exit,
-                                          options.max_speed,
-                                          options.min_speed);
+                                          options.max_voltage,
+                                          options.min_voltage);
       });
 }
 
-Routine::MotionStep Routine::driveTo(double distance_in,
-                                     double timeout_ms) {
-  return driveTo(requireChassis(), distance_in, timeout_ms);
-}
-
-Routine::MotionStep Routine::driveTo(ChassisController& chassis,
-                                     Point point,
-                                     double timeout_ms) {
-  return addMotion(
-      [&chassis, point, timeout_ms](const MotionOptions& options) {
-        return chassis.makeMoveToPointCommand(point.x,
-                                              point.y,
-                                              options.direction,
-                                              timeout_ms,
-                                              options.exit,
-                                              options.max_speed,
-                                              options.overturn,
-                                              options.min_speed);
-      });
-}
-
-Routine::MotionStep Routine::driveTo(Point point, double timeout_ms) {
-  return driveTo(requireChassis(), point, timeout_ms);
-}
-
-Routine::MotionStep Routine::driveTo(ChassisController& chassis,
-                                     double x,
-                                     double y,
-                                     double timeout_ms) {
-  return driveTo(chassis, Point{x, y}, timeout_ms);
-}
-
-Routine::MotionStep Routine::driveTo(double x,
-                                     double y,
-                                     double timeout_ms) {
-  return driveTo(requireChassis(), Point{x, y}, timeout_ms);
+Routine::MotionStep Routine::driveTo(QLength distance, QTime timeout) {
+  return driveTo(requireChassis(), distance, timeout);
 }
 
 Routine::MotionStep Routine::curveCircle(ChassisController& chassis,
-                                         double result_angle_deg,
-                                         double center_radius,
-                                         double timeout_ms) {
+                                         QAngle result_angle,
+                                         QLength center_radius,
+                                         QTime timeout) {
   return addMotion(
-      [&chassis, result_angle_deg, center_radius, timeout_ms](
+      [&chassis, result_angle, center_radius, timeout](
           const MotionOptions& options) {
-        return chassis.makeCurveCircleCommand(result_angle_deg,
+        return chassis.makeCurveCircleCommand(result_angle,
                                               center_radius,
-                                              timeout_ms,
+                                              timeout,
                                               options.exit,
-                                              options.max_speed,
-                                              options.min_speed,
+                                              options.max_voltage,
+                                              options.min_voltage,
                                               options.reverse);
       });
 }
 
-Routine::MotionStep Routine::curveCircle(double result_angle_deg,
-                                         double center_radius,
-                                         double timeout_ms) {
-  return curveCircle(requireChassis(),
-                     result_angle_deg,
-                     center_radius,
-                     timeout_ms);
+Routine::MotionStep Routine::curveCircle(QAngle result_angle,
+                                         QLength center_radius,
+                                         QTime timeout) {
+  return curveCircle(requireChassis(), result_angle, center_radius, timeout);
 }
 
 Routine::MotionStep Routine::curveCircleReverse(ChassisController& chassis,
-                                                double result_angle_deg,
-                                                double center_radius,
-                                                double timeout_ms) {
+                                                QAngle result_angle,
+                                                QLength center_radius,
+                                                QTime timeout) {
   MotionOptions options{};
   options.reverse = true;
   return addMotion(
-      [&chassis, result_angle_deg, center_radius, timeout_ms](
+      [&chassis, result_angle, center_radius, timeout](
           const MotionOptions& step_options) {
-        return chassis.makeCurveCircleReverseCommand(result_angle_deg,
+        return chassis.makeCurveCircleReverseCommand(result_angle,
                                                      center_radius,
-                                                     timeout_ms,
+                                                     timeout,
                                                      step_options.exit,
-                                                     step_options.max_speed,
-                                                     step_options.min_speed);
+                                                     step_options.max_voltage,
+                                                     step_options.min_voltage);
       },
       options);
 }
 
-Routine::MotionStep Routine::curveCircleReverse(double result_angle_deg,
-                                                double center_radius,
-                                                double timeout_ms) {
+Routine::MotionStep Routine::curveCircleReverse(QAngle result_angle,
+                                                QLength center_radius,
+                                                QTime timeout) {
   return curveCircleReverse(requireChassis(),
-                            result_angle_deg,
+                            result_angle,
                             center_radius,
-                            timeout_ms);
+                            timeout);
 }
 
 Routine::MotionStep Routine::swing(ChassisController& chassis,
-                                   double swing_angle,
+                                   QAngle swing_angle,
                                    double drive_direction,
-                                   double timeout_ms) {
+                                   QTime timeout) {
   return addMotion(
-      [&chassis, swing_angle, drive_direction, timeout_ms](
+      [&chassis, swing_angle, drive_direction, timeout](
           const MotionOptions& options) {
         return chassis.makeSwingCommand(swing_angle,
                                         drive_direction,
-                                        timeout_ms,
+                                        timeout,
                                         options.exit,
-                                        options.max_speed,
-                                        options.min_speed);
+                                        options.max_voltage,
+                                        options.min_voltage);
       });
 }
 
-Routine::MotionStep Routine::swing(double swing_angle,
+Routine::MotionStep Routine::swing(QAngle swing_angle,
                                    double drive_direction,
-                                   double timeout_ms) {
-  return swing(requireChassis(), swing_angle, drive_direction, timeout_ms);
+                                   QTime timeout) {
+  return swing(requireChassis(), swing_angle, drive_direction, timeout);
 }
 
 Routine::MotionStep Routine::wallReset(ChassisController& chassis,
-                                       double reset_x,
-                                       double reset_y,
-                                       double reset_heading,
-                                       double timeout_ms) {
+                                       QLength reset_x,
+                                       QLength reset_y,
+                                       QAngle reset_heading,
+                                       QTime timeout) {
   return addMotion(
-      [&chassis, reset_x, reset_y, reset_heading, timeout_ms](
+      [&chassis, reset_x, reset_y, reset_heading, timeout](
           const MotionOptions& options) {
         return chassis.makeWallResetCommand(reset_x,
                                             reset_y,
                                             reset_heading,
                                             options.drive_power,
-                                            timeout_ms,
+                                            timeout,
                                             options.current_threshold,
                                             options.velocity_threshold);
       });
 }
 
-Routine::MotionStep Routine::wallReset(double reset_x,
-                                       double reset_y,
-                                       double reset_heading,
-                                       double timeout_ms) {
-  return wallReset(requireChassis(),
-                   reset_x,
-                   reset_y,
-                   reset_heading,
-                   timeout_ms);
+Routine::MotionStep Routine::wallReset(QLength reset_x,
+                                       QLength reset_y,
+                                       QAngle reset_heading,
+                                       QTime timeout) {
+  return wallReset(requireChassis(), reset_x, reset_y, reset_heading, timeout);
 }
 
 Routine::MotionStep Routine::turnToPoint(ChassisController& chassis,
                                          Point point,
-                                         double timeout_ms) {
+                                         QTime timeout) {
   return addMotion(
-      [&chassis, point, timeout_ms](const MotionOptions& options) {
+      [&chassis, point, timeout](const MotionOptions& options) {
         return chassis.makeTurnToPointCommand(point.x,
                                               point.y,
                                               options.direction,
-                                              timeout_ms,
-                                              options.min_speed);
+                                              timeout,
+                                              options.min_voltage);
       });
 }
 
-Routine::MotionStep Routine::turnToPoint(Point point, double timeout_ms) {
-  return turnToPoint(requireChassis(), point, timeout_ms);
+Routine::MotionStep Routine::turnToPoint(Point point, QTime timeout) {
+  return turnToPoint(requireChassis(), point, timeout);
 }
 
 Routine::MotionStep Routine::turnToPoint(ChassisController& chassis,
-                                         double x,
-                                         double y,
-                                         double timeout_ms) {
-  return turnToPoint(chassis, Point{x, y}, timeout_ms);
+                                         QLength x,
+                                         QLength y,
+                                         QTime timeout) {
+  return turnToPoint(chassis, Point{x, y}, timeout);
 }
 
-Routine::MotionStep Routine::turnToPoint(double x,
-                                         double y,
-                                         double timeout_ms) {
-  return turnToPoint(requireChassis(), Point{x, y}, timeout_ms);
+Routine::MotionStep Routine::turnToPoint(QLength x, QLength y, QTime timeout) {
+  return turnToPoint(requireChassis(), Point{x, y}, timeout);
+}
+
+Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
+                                         Point point,
+                                         QTime timeout) {
+  return addMotion(
+      [&chassis, point, timeout](const MotionOptions& options) {
+        return chassis.makeMoveToPointCommand(point.x,
+                                              point.y,
+                                              options.direction,
+                                              timeout,
+                                              options.exit,
+                                              options.max_voltage,
+                                              options.overturn,
+                                              options.min_voltage);
+      });
+}
+
+Routine::MotionStep Routine::moveToPoint(Point point, QTime timeout) {
+  return moveToPoint(requireChassis(), point, timeout);
 }
 
 Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
                                          Point point,
                                          int dir,
-                                         double timeout_ms) {
+                                         QTime timeout) {
   MotionOptions options{};
   options.direction = dir >= 0 ? 1 : -1;
   return addMotion(
-      [&chassis, point, timeout_ms](const MotionOptions& step_options) {
+      [&chassis, point, timeout](const MotionOptions& step_options) {
         return chassis.makeMoveToPointCommand(point.x,
                                               point.y,
                                               step_options.direction,
-                                              timeout_ms,
+                                              timeout,
                                               step_options.exit,
-                                              step_options.max_speed,
+                                              step_options.max_voltage,
                                               step_options.overturn,
-                                              step_options.min_speed);
+                                              step_options.min_voltage);
       },
       options);
 }
 
-Routine::MotionStep Routine::moveToPoint(Point point,
-                                         int dir,
-                                         double timeout_ms) {
-  return moveToPoint(requireChassis(), point, dir, timeout_ms);
+Routine::MotionStep Routine::moveToPoint(Point point, int dir, QTime timeout) {
+  return moveToPoint(requireChassis(), point, dir, timeout);
 }
 
 Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
-                                         double x,
-                                         double y,
+                                         QLength x,
+                                         QLength y,
                                          int dir,
-                                         double timeout_ms) {
-  return moveToPoint(chassis, Point{x, y}, dir, timeout_ms);
+                                         QTime timeout) {
+  return moveToPoint(chassis, Point{x, y}, dir, timeout);
 }
 
-Routine::MotionStep Routine::moveToPoint(double x,
-                                         double y,
+Routine::MotionStep Routine::moveToPoint(QLength x,
+                                         QLength y,
                                          int dir,
-                                         double timeout_ms) {
-  return moveToPoint(requireChassis(), Point{x, y}, dir, timeout_ms);
+                                         QTime timeout) {
+  return moveToPoint(requireChassis(), Point{x, y}, dir, timeout);
 }
 
 Routine::MotionStep Routine::boomerang(ChassisController& chassis,
                                        Point point,
                                        int dir,
-                                       double final_heading_deg,
+                                       QAngle final_heading,
                                        double lead,
-                                       double timeout_ms) {
+                                       QTime timeout) {
   MotionOptions options{};
   options.direction = dir >= 0 ? 1 : -1;
   return addMotion(
-      [&chassis, point, final_heading_deg, lead, timeout_ms](
+      [&chassis, point, final_heading, lead, timeout](
           const MotionOptions& step_options) {
         return chassis.makeBoomerangCommand(point.x,
                                             point.y,
                                             step_options.direction,
-                                            final_heading_deg,
+                                            final_heading,
                                             lead,
-                                            timeout_ms,
+                                            timeout,
                                             step_options.exit,
-                                            step_options.max_speed,
+                                            step_options.max_voltage,
                                             step_options.overturn,
-                                            step_options.min_speed);
+                                            step_options.min_voltage);
       },
       options);
 }
 
 Routine::MotionStep Routine::boomerang(Point point,
                                        int dir,
-                                       double final_heading_deg,
+                                       QAngle final_heading,
                                        double lead,
-                                       double timeout_ms) {
-  return boomerang(requireChassis(),
-                   point,
-                   dir,
-                   final_heading_deg,
-                   lead,
-                   timeout_ms);
+                                       QTime timeout) {
+  return boomerang(requireChassis(), point, dir, final_heading, lead, timeout);
 }
 
 Routine::MotionStep Routine::boomerang(ChassisController& chassis,
-                                       double x,
-                                       double y,
+                                       QLength x,
+                                       QLength y,
                                        int dir,
-                                       double final_heading_deg,
+                                       QAngle final_heading,
                                        double lead,
-                                       double timeout_ms) {
-  return boomerang(chassis,
-                   Point{x, y},
-                   dir,
-                   final_heading_deg,
-                   lead,
-                   timeout_ms);
+                                       QTime timeout) {
+  return boomerang(chassis, Point{x, y}, dir, final_heading, lead, timeout);
 }
 
-Routine::MotionStep Routine::boomerang(double x,
-                                       double y,
+Routine::MotionStep Routine::boomerang(QLength x,
+                                       QLength y,
                                        int dir,
-                                       double final_heading_deg,
+                                       QAngle final_heading,
                                        double lead,
-                                       double timeout_ms) {
+                                       QTime timeout) {
   return boomerang(requireChassis(),
                    Point{x, y},
                    dir,
-                   final_heading_deg,
+                   final_heading,
                    lead,
-                   timeout_ms);
+                   timeout);
 }
 
 void Routine::clear() {

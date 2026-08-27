@@ -38,9 +38,9 @@ void Chassis::tank(double left_percent, double right_percent) {
   m_right.setPercent(right_percent);
 }
 
-void Chassis::tankVoltage(double left_volts, double right_volts) {
-  m_left.setVoltage(left_volts);
-  m_right.setVoltage(right_volts);
+void Chassis::tankVoltage(QVoltage left, QVoltage right) {
+  m_left.setVoltage(left.volts());
+  m_right.setVoltage(right.volts());
 }
 
 void Chassis::arcade(double forward_percent, double turn_percent) {
@@ -79,6 +79,22 @@ double Chassis::rightPositionDeg() {
 
 double Chassis::averagePositionDeg() {
   return (leftPositionDeg() + rightPositionDeg()) * 0.5;
+}
+
+QLength Chassis::leftDistance() {
+  return degreesToDistance(leftPositionDeg());
+}
+
+QLength Chassis::rightDistance() {
+  return degreesToDistance(rightPositionDeg());
+}
+
+QLength Chassis::averageDistance() {
+  return (leftDistance() + rightDistance()) * 0.5;
+}
+
+QAngle Chassis::heading() {
+  return headingDeg() * units::degree;
 }
 
 double Chassis::leftDistanceIn() {
@@ -142,8 +158,12 @@ int32_t Chassis::percentToMotorPower(double percent) {
 }
 
 double Chassis::degreesToInches(double deg) const {
-  return (deg / 360.0) * m_dimensions.wheel_diameter_in * kPi *
+  return (deg / 360.0) * m_dimensions.wheel_diameter.in() * kPi *
          m_dimensions.drive_ratio;
+}
+
+QLength Chassis::degreesToDistance(double deg) const {
+  return degreesToInches(deg) * units::inch;
 }
 
 }  // namespace mclib

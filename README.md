@@ -292,17 +292,17 @@ void initialize() {
   conveyor.registerSelf();
 
   red_safe
-      .driveTo(24.0, 2000.0)
-          .withMaxSpeed(10.0)
-          .withMinSpeed(2.0)
+      .driveTo(24_in, 2_s)
+          .withMaxVoltage(10_V)
+          .withMinVoltage(2_V)
       .trigger(conveyor.makeForwardCommand())
       .wait(300 * millisecond)
-      .turnToAngle(90.0, 1500.0)
-          .withMaxSpeed(8.0)
+      .turnToAngle(90_deg, 1500_ms)
+          .withMaxVoltage(8_V)
       .trigger(conveyor.makeStopCommand())
-      .driveTo(48.0, 24.0, 2500.0)
+      .moveToPoint(mclib::auton::Point{48_in, 24_in}, 2500_ms)
           .withDirection(1)
-          .withMaxSpeed(9.0)
+          .withMaxVoltage(9_V)
           .withoutOverturn();
 }
 
@@ -314,9 +314,16 @@ void autonomous() {
 Use `then(command)` or `add(command)` when the routine should wait for a
 command to finish before moving on. Use `trigger(command)` when the command
 should be scheduled and the routine should immediately continue to the next
-step. Motion steps support fluent options such as `withMaxSpeed`,
-`withMinSpeed`, `withDirection`, `reversed`, `withoutStop`, and
+step. Motion steps support fluent options such as `withMaxVoltage`,
+`withMinVoltage`, `withDirection`, `reversed`, `withoutStop`, and
 `withoutOverturn`.
+
+Every motion parameter carries its unit in its type: `24_in`, `90_deg`,
+`2_s`, `10_V`. `driveTo` always means a relative distance -- it used to be
+overloaded so that `driveTo(24, 1000)` drove 24 inches while
+`driveTo(24, 36, 1000)` drove to the field point `(24, 36)`, two different
+motions told apart only by argument count. Say `moveToPoint(Point{...}, t)`
+for a field point.
 
 Mechanisms are built from generic stateful subsystem templates. `StateMechanism<T>`
 owns the command-facing state machine, while concrete mechanisms decide how that

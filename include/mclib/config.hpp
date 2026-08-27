@@ -160,3 +160,44 @@ extern double max_slew_decel_rev;
  * expression; the value is an empirical fudge factor, not a physical quantity.
  */
 extern double chase_power;
+
+// ---------------------------------------------------------------------------
+// Typed views of the tuning globals.
+//
+// The globals above stay `double` and stay mutable: they are what a driver
+// edits between matches, and `motion.cpp` reads them inside a 10 ms loop whose
+// numbers this robot was tuned on. This gives the four slew rates one place
+// that says what they are, which `motion.cpp` now goes through.
+//
+// The other tuning globals are not mirrored here. A typed copy of a constant
+// that already has a spelling elsewhere is a second thing to keep in sync, and
+// this file has been bitten by that before.
+// ---------------------------------------------------------------------------
+
+namespace mclib {
+namespace config {
+
+/**
+ * @brief The four `max_slew_*` globals, gathered.
+ *
+ * Each is **volts per nominal 10 ms tick**. That is a rate with no name in the
+ * unit system - the tick is the loop period, not a measured time - so it stays
+ * a double, and the doc comment carries the unit instead.
+ */
+struct SlewRates {
+  double accel_fwd;
+  double decel_fwd;
+  double accel_rev;
+  double decel_rev;
+};
+
+/// @brief The four `max_slew_*` globals as they stand right now.
+inline SlewRates slewRates() {
+  return SlewRates{max_slew_accel_fwd,
+                   max_slew_decel_fwd,
+                   max_slew_accel_rev,
+                   max_slew_decel_rev};
+}
+
+}  // namespace config
+}  // namespace mclib

@@ -74,6 +74,7 @@ HOST_LDFLAGS?=-pthread
 HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
 	$(SRCDIR)/mclib/control/scaling.cpp \
+	$(SRCDIR)/mclib/control/motion_math.cpp \
 	$(SRCDIR)/mclib/control/robot_state.cpp \
 	$(SRCDIR)/mclib/control/odometry.cpp \
 	$(SRCDIR)/mclib/pid.cpp \

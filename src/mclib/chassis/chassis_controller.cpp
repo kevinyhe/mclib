@@ -184,16 +184,20 @@ ChassisControllerConfig ChassisController::getConfig() const {
   return m_config;
 }
 
-void ChassisController::driveDistance(double distance_in,
-                                      double timeout_ms,
+void ChassisController::driveDistance(QLength distance,
+                                      QTime timeout,
                                       bool stop_at_end,
-                                      double max_voltage) {
+                                      QVoltage max_voltage) {
+  const double distance_in = distance.in();
+  const double max_voltage_volts = max_voltage.volts();
+
   m_mode = Mode::DriveDistance;
   m_goal = distance_in;
   m_start_distance_in = m_chassis.averageDistanceIn();
   m_start_time_ms = mclib::time::millis();
-  m_timeout_ms = timeout_ms;
-  m_goal_max_voltage = max_voltage > 0.0 ? max_voltage : m_config.max_voltage;
+  m_timeout_ms = timeout.ms();
+  m_goal_max_voltage = max_voltage_volts > 0.0 ? max_voltage_volts
+                                               : m_config.max_voltage.volts();
   m_stop_at_end = stop_at_end;
   m_settled = false;
 
@@ -203,15 +207,19 @@ void ChassisController::driveDistance(double distance_in,
   m_heading_pid.setTarget(m_chassis.headingDeg());
 }
 
-void ChassisController::turnToHeading(double heading_deg,
-                                      double timeout_ms,
+void ChassisController::turnToHeading(QAngle heading,
+                                      QTime timeout,
                                       bool stop_at_end,
-                                      double max_voltage) {
+                                      QVoltage max_voltage) {
+  const double heading_deg = heading.deg();
+  const double max_voltage_volts = max_voltage.volts();
+
   m_mode = Mode::TurnToHeading;
   m_goal = heading_deg;
   m_start_time_ms = mclib::time::millis();
-  m_timeout_ms = timeout_ms;
-  m_goal_max_voltage = max_voltage > 0.0 ? max_voltage : m_config.max_voltage;
+  m_timeout_ms = timeout.ms();
+  m_goal_max_voltage = max_voltage_volts > 0.0 ? max_voltage_volts
+                                               : m_config.max_voltage.volts();
   m_stop_at_end = stop_at_end;
   m_settled = false;
 
@@ -253,13 +261,13 @@ void ChassisController::periodic() {
 }
 
 std::unique_ptr<Command> ChassisController::makeDriveDistanceCommand(
-    double distance_in,
-    double timeout_ms,
+    QLength distance,
+    QTime timeout,
     bool stop_at_end,
-    double max_voltage) {
+    QVoltage max_voltage) {
   return std::make_unique<FunctionalCommand>(
-      [this, distance_in, timeout_ms, stop_at_end, max_voltage]() {
-        driveDistance(distance_in, timeout_ms, stop_at_end, max_voltage);
+      [this, distance, timeout, stop_at_end, max_voltage]() {
+        driveDistance(distance, timeout, stop_at_end, max_voltage);
       },
       []() {},
       [this](bool interrupted) {
@@ -272,13 +280,13 @@ std::unique_ptr<Command> ChassisController::makeDriveDistanceCommand(
 }
 
 std::unique_ptr<Command> ChassisController::makeTurnToHeadingCommand(
-    double heading_deg,
-    double timeout_ms,
+    QAngle heading,
+    QTime timeout,
     bool stop_at_end,
-    double max_voltage) {
+    QVoltage max_voltage) {
   return std::make_unique<FunctionalCommand>(
-      [this, heading_deg, timeout_ms, stop_at_end, max_voltage]() {
-        turnToHeading(heading_deg, timeout_ms, stop_at_end, max_voltage);
+      [this, heading, timeout, stop_at_end, max_voltage]() {
+        turnToHeading(heading, timeout, stop_at_end, max_voltage);
       },
       []() {},
       [this](bool interrupted) {
@@ -291,39 +299,39 @@ std::unique_ptr<Command> ChassisController::makeTurnToHeadingCommand(
 }
 
 std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(
-    double turn_angle,
-    double time_limit_msec,
+    QAngle turn_angle,
+    QTime time_limit,
     bool exit,
-    double max_output,
-    double min_speed) {
+    QVoltage max_output,
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
-    turnToAngle(turn_angle, time_limit_msec, exit, max_output, min_speed);
+    turnToAngle(turn_angle, time_limit, exit, max_output, min_speed);
   });
 }
 
 std::unique_ptr<Command> ChassisController::makeDriveToCommand(
-    double distance_in,
-    double time_limit_msec,
+    QLength distance,
+    QTime time_limit,
     bool exit,
-    double max_output,
-    double min_speed) {
+    QVoltage max_output,
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
-    driveTo(distance_in, time_limit_msec, exit, max_output, min_speed);
+    driveTo(distance, time_limit, exit, max_output, min_speed);
   });
 }
 
 std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(
-    double result_angle_deg,
-    double center_radius,
-    double time_limit_msec,
+    QAngle result_angle,
+    QLength center_radius,
+    QTime time_limit,
     bool exit,
-    double max_output,
-    double min_speed,
+    QVoltage max_output,
+    QVoltage min_speed,
     bool reverse) {
   return makeAsyncControlCommand([=]() {
-    curveCircle(result_angle_deg,
+    curveCircle(result_angle,
                 center_radius,
-                time_limit_msec,
+                time_limit,
                 exit,
                 max_output,
                 min_speed,
@@ -332,16 +340,16 @@ std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(
 }
 
 std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(
-    double result_angle_deg,
-    double center_radius,
-    double time_limit_msec,
+    QAngle result_angle,
+    QLength center_radius,
+    QTime time_limit,
     bool exit,
-    double max_output,
-    double min_speed) {
+    QVoltage max_output,
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
-    curveCircleReverse(result_angle_deg,
+    curveCircleReverse(result_angle,
                        center_radius,
-                       time_limit_msec,
+                       time_limit,
                        exit,
                        max_output,
                        min_speed);
@@ -349,16 +357,16 @@ std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(
 }
 
 std::unique_ptr<Command> ChassisController::makeSwingCommand(
-    double swing_angle,
+    QAngle swing_angle,
     double drive_direction,
-    double time_limit_msec,
+    QTime time_limit,
     bool exit,
-    double max_output,
-    double min_speed) {
+    QVoltage max_output,
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
     swing(swing_angle,
           drive_direction,
-          time_limit_msec,
+          time_limit,
           exit,
           max_output,
           min_speed);
@@ -374,49 +382,49 @@ std::unique_ptr<Command> ChassisController::makeCorrectHeadingCommand() {
 }
 
 std::unique_ptr<Command> ChassisController::makeWallResetCommand(
-    double reset_x,
-    double reset_y,
-    double reset_heading,
-    double drive_power,
-    double time_limit_msec,
-    double current_threshold,
-    double velocity_threshold) {
+    QLength reset_x,
+    QLength reset_y,
+    QAngle reset_heading,
+    QVoltage drive_power,
+    QTime time_limit,
+    QCurrent current_threshold,
+    QAngularVelocity velocity_threshold) {
   return makeAsyncControlCommand([=]() {
     wallReset(reset_x,
               reset_y,
               reset_heading,
               drive_power,
-              time_limit_msec,
+              time_limit,
               current_threshold,
               velocity_threshold);
   });
 }
 
 std::unique_ptr<Command> ChassisController::makeTurnToPointCommand(
-    double x,
-    double y,
+    QLength x,
+    QLength y,
     int direction,
-    double time_limit_msec,
-    double min_speed) {
+    QTime time_limit,
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
-    turnToPoint(x, y, direction, time_limit_msec, min_speed);
+    turnToPoint(x, y, direction, time_limit, min_speed);
   });
 }
 
 std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(
-    double x,
-    double y,
+    QLength x,
+    QLength y,
     int dir,
-    double time_limit_msec,
+    QTime time_limit,
     bool exit,
-    double max_output,
+    QVoltage max_output,
     bool overturn,
-    double min_speed) {
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
     moveToPoint(x,
                 y,
                 dir,
-                time_limit_msec,
+                time_limit,
                 exit,
                 max_output,
                 overturn,
@@ -425,23 +433,23 @@ std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(
 }
 
 std::unique_ptr<Command> ChassisController::makeBoomerangCommand(
-    double x,
-    double y,
+    QLength x,
+    QLength y,
     int dir,
-    double a,
+    QAngle final_heading,
     double dlead,
-    double time_limit_msec,
+    QTime time_limit,
     bool exit,
-    double max_output,
+    QVoltage max_output,
     bool overturn,
-    double min_speed) {
+    QVoltage min_speed) {
   return makeAsyncControlCommand([=]() {
     boomerang(x,
               y,
               dir,
-              a,
+              final_heading,
               dlead,
-              time_limit_msec,
+              time_limit,
               exit,
               max_output,
               overturn,
@@ -468,7 +476,7 @@ double ChassisController::clampVoltage(double volts, double max_voltage) {
 
 void ChassisController::applyExit(PID& pid, const PIDExit& exit) {
   pid.setSmallBigErrorTolerance(exit.small_error, exit.big_error);
-  pid.setSmallBigErrorDuration(exit.small_duration_ms, exit.big_duration_ms);
+  pid.setSmallBigErrorDuration(exit.small_duration.ms(), exit.big_duration.ms());
   pid.setDerivativeTolerance(exit.derivative);
 }
 
@@ -476,9 +484,10 @@ void ChassisController::runDriveDistance() {
   const double travelled = m_chassis.averageDistanceIn() - m_start_distance_in;
   double output = m_distance_pid.update(travelled);
 
-  if (m_config.min_voltage > 0.0 && std::fabs(output) < m_config.min_voltage &&
+  const double min_voltage = m_config.min_voltage.volts();
+  if (min_voltage > 0.0 && std::fabs(output) < min_voltage &&
       !m_distance_pid.targetArrived()) {
-    output = output >= 0.0 ? m_config.min_voltage : -m_config.min_voltage;
+    output = output >= 0.0 ? min_voltage : -min_voltage;
   }
 
   double correction = 0.0;
@@ -488,7 +497,7 @@ void ChassisController::runDriveDistance() {
 
   const double left = clampVoltage(output + correction, m_goal_max_voltage);
   const double right = clampVoltage(output - correction, m_goal_max_voltage);
-  m_chassis.tankVoltage(left, right);
+  m_chassis.tankVoltage(left * units::volt, right * units::volt);
 
   if (m_distance_pid.targetArrived() || timedOut()) {
     finishGoal();
@@ -498,7 +507,7 @@ void ChassisController::runDriveDistance() {
 void ChassisController::runTurnToHeading() {
   const double output = clampVoltage(m_turn_pid.update(m_chassis.headingDeg()),
                                      m_goal_max_voltage);
-  m_chassis.tankVoltage(output, -output);
+  m_chassis.tankVoltage(output * units::volt, -output * units::volt);
 
   if (m_turn_pid.targetArrived() || timedOut()) {
     finishGoal();

@@ -4,35 +4,68 @@
 #include "api.h"
 #include "mclib/config.hpp"
 #include "mclib/control/chassis_io.hpp"
+#include "mclib/control/motion_math.hpp"
 #include "mclib/control/scaling.hpp"
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/math.hpp"
 #include "mclib/pid.hpp"
+#include "mclib/units/units.hpp"
 #include "mclib/utils.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-namespace {
-double applySlewLimit(double desired,
-                      double previous,
-                      double accel_limit,
-                      double decel_limit,
-                      double loop_dt_ms) {
-  constexpr double nominal_loop_ms = 10.0;
-  const double dt_scale = loop_dt_ms <= 0 ? 1.0 : loop_dt_ms / nominal_loop_ms;
-  const double max_increase = accel_limit * dt_scale;
-  const double max_decrease = decel_limit * dt_scale;
-  const double delta = desired - previous;
 
-  if (delta > max_increase) {
-    return previous + max_increase;
-  }
-  if (delta < -max_decrease) {
-    return previous - max_decrease;
-  }
-  return desired;
+/**
+ * @file motion.cpp
+ * @brief Implementation of the typed motion API in motion.hpp.
+ *
+ * Each routine unwraps its typed parameters into `double` locals on its first
+ * few lines and then runs the arithmetic it always ran, on the same doubles,
+ * in the same order. That is deliberate: these loops are what this robot's
+ * autonomous was tuned against, and converting a value into SI base units and
+ * back out again is not a bit-exact round trip. Typing the API without typing
+ * the inner loop is what makes the conversion provably behaviour-preserving.
+ *
+ * The pure parts of that arithmetic - slew planning, rate limiting, output
+ * mixing - live in `control/motion_math.hpp`, which has no PROS dependency and
+ * is exercised on the host by `tests/motion_math_test.cpp`.
+ */
+namespace {
+using mclib::control::applyMinSpeedFloor;
+using mclib::control::applyOverturnAndMix;
+using mclib::control::applySlewClamp;
+using mclib::control::applySlewLimit;
+using mclib::control::clampSymmetric;
+using mclib::control::exitDecel;
+using mclib::control::minSpeedOutput;
+using mclib::control::planSlew;
+using mclib::control::SlewConfig;
+using mclib::control::SlewPlan;
+
+/// @brief The tuned slew rates and chaining flags, as they stand in config.cpp.
+SlewConfig slewConfig() {
+  const mclib::config::SlewRates rates = mclib::config::slewRates();
+  SlewConfig config{};
+  config.accel_fwd = rates.accel_fwd;
+  config.decel_fwd = rates.decel_fwd;
+  config.accel_rev = rates.accel_rev;
+  config.decel_rev = rates.decel_rev;
+  config.dir_change_start = dir_change_start;
+  config.dir_change_end = dir_change_end;
+  return config;
+}
+
+/**
+ * @brief Send a left/right voltage pair, in volts, to the drive.
+ *
+ * The one place the inner loop's bare doubles meet the typed actuator
+ * boundary. `driveChassis()` takes QVoltage; everything above it here is
+ * volts-as-double by design (see the file comment).
+ */
+void driveVolts(double left, double right) {
+  driveChassis(left * mclib::units::volt, right * mclib::units::volt);
 }
 
 void holdLeftSide() {
@@ -88,8 +121,15 @@ double settledHeadingDeg(double commanded_deg) {
   return cancelled() ? getInertialHeading() : commanded_deg;
 }
 }  // namespace
-void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double max_output, double min_speed)
+void turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
+  // Unwrap once, here. Everything below is the arithmetic this routine always
+  // ran, on the same doubles; see the file comment.
+  double turn_angle = turn_angle_target.deg();
+  const double time_limit_msec = time_limit.ms();
+  const double max_output = max_voltage.volts();
+  const double min_speed = min_voltage.volts();
+
   // Brake mode helps dissipate momentum near the setpoint and reduces hunting.
   stopChassis(mclib::device::BrakeMode::Brake);
   state().setTurning(true);
@@ -106,17 +146,7 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
 
   const double start_time = pros::millis();
   double output = 0;
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-
-  // clamp keeps pid output within symmetric voltage rails so differential drive math stays bounded
-  auto clampOutput = [&](double value)
-  {
-    if (value > max_output)
-      return max_output;
-    if (value < -max_output)
-      return -max_output;
-    return value;
-  };
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
 
   if (!exit && getInertialHeading() < turn_angle)
   {
@@ -125,10 +155,11 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
     {
       output = pid.update(getInertialHeading());
       // keep a minimum turning speed so the robot doesn't stall mid-chain
-      if (min_speed_output > 0 && fabs(output) < min_speed_output)
-        output = (output >= 0 ? min_speed_output : -min_speed_output);
-      output = clampOutput(output);
-      driveChassis(output, -output);
+      output = applyMinSpeedFloor(output, min_speed_output);
+      // clamp keeps pid output within symmetric voltage rails so differential
+      // drive math stays bounded
+      output = clampSymmetric(output, max_output);
+      driveVolts(output, -output);
       pros::delay(10);
     }
   }
@@ -137,10 +168,9 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
     while (getInertialHeading() > turn_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       output = pid.update(getInertialHeading());
-      if (min_speed_output > 0 && fabs(output) < min_speed_output)
-        output = (output >= 0 ? min_speed_output : -min_speed_output);
-      output = clampOutput(output);
-      driveChassis(output, -output);
+      output = applyMinSpeedFloor(output, min_speed_output);
+      output = clampSymmetric(output, max_output);
+      driveVolts(output, -output);
       pros::delay(10);
     }
   }
@@ -148,8 +178,8 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   {
     while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
-      output = clampOutput(pid.update(getInertialHeading()));
-      driveChassis(output, -output);
+      output = clampSymmetric(pid.update(getInertialHeading()), max_output);
+      driveVolts(output, -output);
       pros::delay(10);
     }
   }
@@ -162,39 +192,25 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   state().setTurning(false);
 }
 
-void driveTo(double distance_in, double time_limit_msec, bool exit, double max_output, double min_speed)
+void driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
+  double distance_in = distance.in();
+  const double time_limit_msec = time_limit.ms();
+  const double max_output = max_voltage.volts();
+  const double min_speed = min_voltage.volts();
+
   // Store initial encoder values
   double start_left = getLeftRotationDegree(), start_right = getRightRotationDegree();
   stopChassis(mclib::device::BrakeMode::Coast);
   state().setTurning(true);
   double threshold = 0.5;
   int drive_direction = distance_in > 0 ? 1 : -1;
-  double max_slew_fwd = drive_direction > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
-  double max_slew_rev = drive_direction > 0 ? max_slew_decel_fwd : max_slew_accel_rev;
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-  bool apply_min_speed_floor = (min_speed >= 0 && min_speed_output > 0);
-  if (!exit)
-  {
-    // Adjust slew rates and min speed for chaining
-    if (!dir_change_start && dir_change_end)
-    {
-      max_slew_fwd = drive_direction > 0 ? 24 : max_slew_decel_rev;
-      max_slew_rev = drive_direction > 0 ? max_slew_decel_fwd : 24;
-    }
-    if (dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = drive_direction > 0 ? max_slew_accel_fwd : 24;
-      max_slew_rev = drive_direction > 0 ? 24 : max_slew_accel_rev;
-      apply_min_speed_floor = true;
-    }
-    if (!dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = 24;
-      max_slew_rev = 24;
-      apply_min_speed_floor = true;
-    }
-  }
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
+  const SlewPlan slew =
+      planSlew(slewConfig(), drive_direction, exit, min_speed >= 0, min_speed_output);
+  const double max_slew_fwd = slew.max_slew_fwd;
+  const double max_slew_rev = slew.max_slew_rev;
+  const bool apply_min_speed_floor = slew.apply_min_speed_floor;
 
   // flip target so pid always works with a positive distance scalar regardless of command direction
   distance_in = distance_in * drive_direction;
@@ -254,32 +270,23 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
 
     // Max Acceleration/Deceleration Check
     // slew limits act as a discrete first order filter on voltage demand to reduce jerk
-    if (prev_left_output - left_output > max_slew_rev)
-    {
-      left_output = prev_left_output - max_slew_rev;
-    }
-    if (prev_right_output - right_output > max_slew_rev)
-    {
-      right_output = prev_right_output - max_slew_rev;
-    }
-    if (left_output - prev_left_output > max_slew_fwd)
-    {
-      left_output = prev_left_output + max_slew_fwd;
-    }
-    if (right_output - prev_right_output > max_slew_fwd)
-    {
-      right_output = prev_right_output + max_slew_fwd;
-    }
+    applySlewClamp(left_output,
+                   right_output,
+                   prev_left_output,
+                   prev_right_output,
+                   max_slew_fwd,
+                   max_slew_rev,
+                   true);
     prev_left_output = left_output;
     prev_right_output = right_output;
-    driveChassis(left_output, right_output);
+    driveVolts(left_output, right_output);
     pros::delay(10);
   }
   if (exit)
   {
     // Use a faster decel rate for the exit ramp so we actually reach 0 V
     // within the timeout (stops from max_output in ~300 ms).
-    const double exit_decel = fmax(fmax(max_slew_fwd, max_slew_rev), max_output / 30.0);
+    const double exit_decel = exitDecel(max_slew_fwd, max_slew_rev, max_output);
     const double ramp_start = pros::millis();
     const double ramp_timeout = 500; // ms safety cap
     while ((fabs(prev_left_output) > 0.15 || fabs(prev_right_output) > 0.15) &&
@@ -287,7 +294,7 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
     {
       prev_left_output = applySlewLimit(0, prev_left_output, exit_decel, exit_decel, 10);
       prev_right_output = applySlewLimit(0, prev_right_output, exit_decel, exit_decel, 10);
-      driveChassis(prev_left_output, prev_right_output);
+      driveVolts(prev_left_output, prev_right_output);
       pros::delay(10);
     }
     prev_left_output = 0;
@@ -300,8 +307,15 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
   state().setTurning(false);
 }
 
-void curveCircle(double result_angle_deg, double center_radius, double time_limit_msec, bool exit, double max_output, double min_speed, bool reverse)
+void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, bool reverse)
 {
+  double result_angle_deg = result_angle_target.deg();
+  // Signed: the sign picks the curve direction, the magnitude is the radius.
+  const double center_radius_in = center_radius.in();
+  const double time_limit_msec = time_limit.ms();
+  const double max_output = max_voltage.volts();
+  const double min_speed = min_voltage.volts();
+
   // Store initial encoder values for both sides
   double start_right = getRightRotationDegree(), start_left = getLeftRotationDegree();
   double in_arc, out_arc;
@@ -316,8 +330,8 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
 
   // Calculate arc lengths for inner and outer wheels
   // inner and outer tread travel differ by wheel base offset so compute each arc explicitly
-  in_arc = fabs((fabs(center_radius) - (distance_between_wheels / 2)) * result_angle);
-  out_arc = fabs((fabs(center_radius) + (distance_between_wheels / 2)) * result_angle);
+  in_arc = fabs((fabs(center_radius_in) - (distance_between_wheels / 2)) * result_angle);
+  out_arc = fabs((fabs(center_radius_in) + (distance_between_wheels / 2)) * result_angle);
   ratio = in_arc / out_arc;
 
   stopChassis(mclib::device::BrakeMode::Coast);
@@ -325,7 +339,7 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   double threshold = 0.5;
 
   // Determine curve and drive direction
-  int curve_direction = center_radius > 0 ? 1 : -1;
+  int curve_direction = center_radius_in > 0 ? 1 : -1;
   int drive_direction = 0;
   if ((curve_direction == 1 && (result_angle_deg - entry_angle_deg) > 0) || (curve_direction == -1 && (result_angle_deg - entry_angle_deg) < 0))
   {
@@ -341,31 +355,13 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
     drive_direction = -1;
   }
 
-  // Slew rate and minimum speed logic for chaining
-  double max_slew_fwd = drive_direction > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
-  double max_slew_rev = drive_direction > 0 ? max_slew_decel_fwd : max_slew_accel_rev;
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-  bool apply_min_speed_floor = (min_speed >= 0 && min_speed_output > 0);
-  if (!exit)
-  {
-    if (!dir_change_start && dir_change_end)
-    {
-      max_slew_fwd = drive_direction > 0 ? 24 : max_slew_decel_rev;
-      max_slew_rev = drive_direction > 0 ? max_slew_decel_fwd : 24;
-    }
-    if (dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = drive_direction > 0 ? max_slew_accel_fwd : 24;
-      max_slew_rev = drive_direction > 0 ? 24 : max_slew_accel_rev;
-      apply_min_speed_floor = true;
-    }
-    if (!dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = 24;
-      max_slew_rev = 24;
-      apply_min_speed_floor = true;
-    }
-  }
+  // Slew rate and minimum speed logic for chaining. curveCircle never applies
+  // the rate limit itself - it only reads apply_min_speed_floor out of the
+  // plan - but the gating depends on the whole block, so it is computed whole.
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
+  const SlewPlan slew =
+      planSlew(slewConfig(), drive_direction, exit, min_speed >= 0, min_speed_output);
+  const bool apply_min_speed_floor = slew.apply_min_speed_floor;
 
   // Initialize PID controllers for arc distance and heading correction
   PID pid_out = PID(distance_kp, distance_ki, distance_kd);
@@ -418,7 +414,7 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
       // Enforce maximum output
       scaleToMax(left_output, right_output, max_output);
 
-      driveChassis(left_output, right_output);
+      driveVolts(left_output, right_output);
       pros::delay(10);
     }
   }
@@ -445,7 +441,7 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
 
       scaleToMax(left_output, right_output, max_output);
 
-      driveChassis(left_output, right_output);
+      driveVolts(left_output, right_output);
       pros::delay(10);
     }
   }
@@ -472,7 +468,7 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
 
       scaleToMax(left_output, right_output, max_output);
 
-      driveChassis(left_output, right_output);
+      driveVolts(left_output, right_output);
       pros::delay(10);
     }
   }
@@ -499,7 +495,7 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
 
       scaleToMax(left_output, right_output, max_output);
 
-      driveChassis(left_output, right_output);
+      driveVolts(left_output, right_output);
       pros::delay(10);
     }
   }
@@ -513,13 +509,18 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   state().setTurning(false);
 }
 
-void curveCircleReverse(double result_angle_deg, double center_radius, double time_limit_msec, bool exit, double max_output, double min_speed)
+void curveCircleReverse(QAngle result_angle, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
-  curveCircle(result_angle_deg, center_radius, time_limit_msec, exit, max_output, min_speed, true);
+  curveCircle(result_angle, center_radius, time_limit, exit, max_voltage, min_voltage, true);
 }
 
-void swing(double swing_angle, double drive_direction, double time_limit_msec, bool exit, double max_output, double min_speed)
+void swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
+  double swing_angle = swing_angle_target.deg();
+  const double time_limit_msec = time_limit.ms();
+  const double max_output = max_voltage.volts();
+  const double min_speed = min_voltage.volts();
+
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before starting swing
   state().setTurning(true);                      // Set turning state
   double threshold = 1;
@@ -537,7 +538,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   // Start the PID loop
   double start_time = pros::millis();
   double output;
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
   const double entry_angle_deg = state().correctAngleDeg();
   double current_heading = entry_angle_deg;
   int choice = 1;
@@ -570,12 +571,8 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
       output = pid.update(current_heading);
 
       // Clamp output
-      if (min_speed_output > 0 && fabs(output) < min_speed_output)
-        output = (output >= 0 ? min_speed_output : -min_speed_output);
-      if (output > max_output)
-        output = max_output;
-      else if (output < -max_output)
-        output = -max_output;
+      output = applyMinSpeedFloor(output, min_speed_output);
+      output = clampSymmetric(output, max_output);
 
       holdLeftSide(); // Hold left, swing right
       right_chassis.setVoltage(output * drive_direction);
@@ -591,12 +588,8 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
       output = pid.update(current_heading);
 
       // Clamp output
-      if (min_speed_output > 0 && fabs(output) < min_speed_output)
-        output = (output >= 0 ? min_speed_output : -min_speed_output);
-      if (output > max_output)
-        output = max_output;
-      else if (output < -max_output)
-        output = -max_output;
+      output = applyMinSpeedFloor(output, min_speed_output);
+      output = clampSymmetric(output, max_output);
 
       left_chassis.setVoltage(output * drive_direction);
       holdRightSide(); // Hold right, swing left
@@ -612,12 +605,8 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
       output = pid.update(current_heading);
 
       // Clamp output
-      if (min_speed_output > 0 && fabs(output) < min_speed_output)
-        output = (output >= 0 ? min_speed_output : -min_speed_output);
-      if (output > max_output)
-        output = max_output;
-      else if (output < -max_output)
-        output = -max_output;
+      output = applyMinSpeedFloor(output, min_speed_output);
+      output = clampSymmetric(output, max_output);
 
       left_chassis.setVoltage(output * drive_direction);
       holdRightSide();
@@ -633,12 +622,8 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
       output = pid.update(current_heading);
 
       // Clamp output
-      if (min_speed_output > 0 && fabs(output) < min_speed_output)
-        output = (output >= 0 ? min_speed_output : -min_speed_output);
-      if (output > max_output)
-        output = max_output;
-      else if (output < -max_output)
-        output = -max_output;
+      output = applyMinSpeedFloor(output, min_speed_output);
+      output = clampSymmetric(output, max_output);
 
       holdLeftSide();
       right_chassis.setVoltage(output * drive_direction);
@@ -653,10 +638,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
     output = pid.update(current_heading);
 
     // Clamp output
-    if (output > max_output)
-      output = max_output;
-    else if (output < -max_output)
-      output = -max_output;
+    output = clampSymmetric(output, max_output);
 
     // Apply output to correct side based on swing direction
     switch (choice)
@@ -709,22 +691,34 @@ void correctHeading()
     if (!state().isTurning())
     {
       output = pid.update(getInertialHeading());
-      driveChassis(output, -output); // Apply correction to chassis
+      driveVolts(output, -output); // Apply correction to chassis
     }
     pros::delay(10);
   }
 }
 
-void wallReset(double reset_x, double reset_y, double reset_heading,
-               double drive_power, double time_limit_msec,
-               double current_threshold, double velocity_threshold)
+void wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
+               QVoltage drive_power, QTime time_limit,
+               QCurrent current_threshold, QAngularVelocity velocity_threshold)
 {
+  const double reset_x_in = reset_x.in();
+  const double reset_y_in = reset_y.in();
+  // NaN when the caller passed keep_current_heading. Kept as a double so the
+  // isnan() test below is the same test it always was.
+  const double reset_heading_deg = reset_heading.deg();
+  const double drive_power_volts = drive_power.volts();
+  const double time_limit_msec = time_limit.ms();
+  // The V5 motor reports current in mA and speed in RPM; both thresholds are
+  // compared against those raw readings.
+  const double current_threshold_ma = current_threshold.mA();
+  const double velocity_threshold_rpm = velocity_threshold.rpm();
+
   uint32_t start_time = pros::millis();
   int stall_count = 0;
   constexpr int stall_cycles_needed = 5; // 50 ms of sustained stall
 
   // Drive into the wall
-  driveChassis(drive_power, drive_power);
+  driveVolts(drive_power_volts, drive_power_volts);
 
   // Give the robot a moment to start moving before checking stall
   pros::delay(200);
@@ -766,7 +760,7 @@ void wallReset(double reset_x, double reset_y, double reset_heading,
     double avg_vel = (vel_count > 0) ? total_vel / vel_count : 0;
 
     // Stall detection: high current, low velocity
-    if (avg_current > current_threshold && avg_vel < velocity_threshold)
+    if (avg_current > current_threshold_ma && avg_vel < velocity_threshold_rpm)
     {
       stall_count++;
     }
@@ -788,10 +782,10 @@ void wallReset(double reset_x, double reset_y, double reset_heading,
 
   // Reset heading first if a valid value was provided, so the pose below is
   // built from the IMU value we are actually going to keep.
-  if (!std::isnan(reset_heading))
+  if (!std::isnan(reset_heading_deg))
   {
-    inertial_sensor.setRotationDeg(reset_heading);
-    state().setCorrectAngleDeg(reset_heading);
+    inertial_sensor.setRotationDeg(reset_heading_deg);
+    state().setCorrectAngleDeg(reset_heading_deg);
   }
   else
   {
@@ -803,11 +797,16 @@ void wallReset(double reset_x, double reset_y, double reset_heading,
   // instead of integrating a delta across the teleport. A non-finite heading
   // leaves the odometry's heading alone.
   mclib::control::resetOdometry(
-      mclib::Pose2D{reset_x, reset_y, degToRad(getInertialHeading())});
+      mclib::Pose2D{reset_x_in, reset_y_in, degToRad(getInertialHeading())});
 }
 
-void turnToPoint(double x, double y, int direction, double time_limit_msec, double min_speed)
+void turnToPoint(QLength x, QLength y, int direction, QTime time_limit, QVoltage min_voltage)
 {
+  const double x_in = x.in();
+  const double y_in = y.in();
+  const double time_limit_msec = time_limit.ms();
+  const double min_speed = min_voltage.volts();
+
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before turning
   state().setTurning(true);                      // Set turning state
   double threshold = 1, add = 0;
@@ -818,7 +817,7 @@ void turnToPoint(double x, double y, int direction, double time_limit_msec, doub
   // One locked read: x and y always come from the same odometry tick.
   mclib::Pose2D pose = state().pose();
   // Calculate target angle using atan2 and normalize
-  double turn_angle = normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y))) + add;
+  double turn_angle = normalizeTarget(radToDeg(atan2(x_in - pose.x, y_in - pose.y))) + add;
   PID pid = PID(turn_kp, turn_ki, turn_kd);
 
   pid.setTarget(turn_angle); // Set PID target
@@ -830,17 +829,14 @@ void turnToPoint(double x, double y, int direction, double time_limit_msec, doub
   pid.setDerivativeTolerance(threshold * 4.5);
 
   double start_time = pros::millis();
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
   while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
   {
     pose = state().pose();
-    pid.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y))) + add);
+    pid.setTarget(normalizeTarget(radToDeg(atan2(x_in - pose.x, y_in - pose.y))) + add);
     double output = pid.update(getInertialHeading());
-    if (min_speed_output > 0 && fabs(output) < min_speed_output)
-    {
-      output = (output >= 0 ? min_speed_output : -min_speed_output);
-    }
-    driveChassis(output, -output);
+    output = applyMinSpeedFloor(output, min_speed_output);
+    driveVolts(output, -output);
     pros::delay(10);
   }
   stopChassis(mclib::device::BrakeMode::Hold); // Stop at end
@@ -848,52 +844,39 @@ void turnToPoint(double x, double y, int direction, double time_limit_msec, doub
   state().setTurning(false);                    // Reset turning state
 }
 
-void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit, double max_output, bool overturn, double min_speed)
+void moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
 {
+  const double x_in = x.in();
+  const double y_in = y.in();
+  const double time_limit_msec = time_limit.ms();
+  const double max_output = max_voltage.volts();
+  const double min_speed = min_voltage.volts();
+
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before moving
   state().setTurning(true);                      // Set turning state
   double threshold = 0.5;
   int add = dir > 0 ? 0 : 180;
-  double max_slew_fwd = dir > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
-  double max_slew_rev = dir > 0 ? max_slew_decel_fwd : max_slew_accel_rev;
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-  bool apply_min_speed_floor = (min_speed >= 0 && min_speed_output > 0);
-  if (!exit)
-  {
-    // Adjust slew rates and min speed for chaining
-    if (!dir_change_start && dir_change_end)
-    {
-      max_slew_fwd = dir > 0 ? 24 : max_slew_decel_rev;
-      max_slew_rev = dir > 0 ? max_slew_decel_fwd : 24;
-    }
-    if (dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = dir > 0 ? max_slew_accel_fwd : 24;
-      max_slew_rev = dir > 0 ? 24 : max_slew_accel_rev;
-      apply_min_speed_floor = true;
-    }
-    if (!dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = 24;
-      max_slew_rev = 24;
-      apply_min_speed_floor = true;
-    }
-  }
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
+  const SlewPlan slew =
+      planSlew(slewConfig(), dir, exit, min_speed >= 0, min_speed_output);
+  const double max_slew_fwd = slew.max_slew_fwd;
+  const double max_slew_rev = slew.max_slew_rev;
+  const bool apply_min_speed_floor = slew.apply_min_speed_floor;
 
   PID pid_distance = PID(distance_kp, distance_ki, distance_kd);
   PID pid_heading = PID(heading_correction_kp, heading_correction_ki, heading_correction_kd);
 
-  // One locked read: x and y always come from the same odometry tick.
+  // One locked read: x_in and y_in always come from the same odometry tick.
   mclib::Pose2D pose = state().pose();
   // Set PID targets for distance and heading
-  pid_distance.setTarget(hypot(x - pose.x, y - pose.y));
+  pid_distance.setTarget(hypot(x_in - pose.x, y_in - pose.y));
   pid_distance.setIntegralMax(0);
   pid_distance.setIntegralRange(3);
   pid_distance.setSmallBigErrorTolerance(threshold, threshold * 3);
   pid_distance.setSmallBigErrorDuration(50, 250);
   pid_distance.setDerivativeTolerance(5);
 
-  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y)) + add));
+  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add));
   pid_heading.setIntegralMax(0);
   pid_heading.setIntegralRange(1);
 
@@ -904,11 +887,31 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
 
   // Reset the chassis
   double start_time = pros::millis();
-  double left_output = 0, right_output = 0, correction_output = 0, prev_left_output = 0, prev_right_output = 0;
+  double left_output = 0, right_output = 0, correction_output = 0;
+  // Local mirror of the shared slew baseline; see driveTo().
+  //
+  // This used to be a pair of locals initialised to zero, so moveToPoint()
+  // slew-limited from 0 V on every call while driveTo() and boomerang()
+  // carried the baseline across motions - three routines, two contracts, and
+  // the odd one out was the one that shadowed names that had been globals.
+  // All three read and publish the shared baseline now.
+  //
+  // The consequence, stated plainly because it is a behaviour change and not a
+  // type change: chained straight after a motion that left the drive at full
+  // voltage in the OTHER direction, the accel limit now has to walk the output
+  // across zero at max_slew_fwd per tick before this motion moves the right
+  // way - about 180 ms at the tuned 1 V/tick. boomerang() has always behaved
+  // this way; moveToPoint() now does too. Reversing direction between motions
+  // is what dir_change_start / dir_change_end describe, and planSlew() only
+  // consults them on a chained (`exit == false`) motion, so a reversal into an
+  // `exit == true` moveToPoint() gets the slow crossing. Give the reversing
+  // motion `.withoutExit()`, or let it stop first.
+  double prev_left_output = state().prevLeftOutput();
+  double prev_right_output = state().prevRightOutput();
   double exittolerance = 1;
   bool perpendicular_line = false, prev_perpendicular_line = true;
 
-  double current_angle = 0, overturn_value = 0;
+  double current_angle = 0;
   bool ch = true;
 
   // Main PID loop for moving to point
@@ -916,14 +919,14 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
   {
     // Continuously update targets as robot moves
     pose = state().pose();
-    pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y)) + add));
-    pid_distance.setTarget(hypot(x - pose.x, y - pose.y));
+    pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add));
+    pid_distance.setTarget(hypot(x_in - pose.x, y_in - pose.y));
     current_angle = getInertialHeading();
     // Calculate drive output based on heading and distance
-    left_output = pid_distance.update(0) * cos(degToRad(atan2(x - pose.x, y - pose.y) * 180 / M_PI + add - current_angle)) * dir;
+    left_output = pid_distance.update(0) * cos(degToRad(atan2(x_in - pose.x, y_in - pose.y) * 180 / M_PI + add - current_angle)) * dir;
     right_output = left_output;
     // Check if robot has crossed the perpendicular line to the target
-    perpendicular_line = ((pose.y - y) * -cos(degToRad(normalizeTarget(current_angle + add))) <= (pose.x - x) * sin(degToRad(normalizeTarget(current_angle + add))) + exittolerance);
+    perpendicular_line = ((pose.y - y_in) * -cos(degToRad(normalizeTarget(current_angle + add))) <= (pose.x - x_in) * sin(degToRad(normalizeTarget(current_angle + add))) + exittolerance);
     if (perpendicular_line && !prev_perpendicular_line)
     {
       break;
@@ -931,7 +934,7 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     prev_perpendicular_line = perpendicular_line;
 
     // Only apply heading correction if far from target
-    if (hypot(x - pose.x, y - pose.y) > 8 && ch == true)
+    if (hypot(x_in - pose.x, y_in - pose.y) > 8 && ch == true)
     {
       correction_output = pid_heading.update(current_angle);
       // Cap correction so it can't overwhelm the forward drive and cause a pivot
@@ -954,21 +957,7 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     }
 
     // Overturn logic for sharp turns
-    overturn_value = fabs(left_output) + fabs(correction_output) - max_output;
-    if (overturn_value > 0 && overturn)
-    {
-      if (left_output > 0)
-      {
-        left_output -= overturn_value;
-      }
-      else
-      {
-        left_output += overturn_value;
-      }
-    }
-    right_output = left_output;
-    left_output = left_output + correction_output;
-    right_output = right_output - correction_output;
+    applyOverturnAndMix(left_output, right_output, correction_output, max_output, overturn);
 
     // Max Output Check
     scaleToMax(left_output, right_output, max_output);
@@ -976,34 +965,22 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     // Max Acceleration/Deceleration Check
     // When exit=true, skip decel slew so PID can brake before the target.
     // Only limit acceleration to prevent wheel slip on startup.
-    if (!exit)
-    {
-      if (prev_left_output - left_output > max_slew_rev)
-      {
-        left_output = prev_left_output - max_slew_rev;
-      }
-      if (prev_right_output - right_output > max_slew_rev)
-      {
-        right_output = prev_right_output - max_slew_rev;
-      }
-    }
-    if (left_output - prev_left_output > max_slew_fwd)
-    {
-      left_output = prev_left_output + max_slew_fwd;
-    }
-    if (right_output - prev_right_output > max_slew_fwd)
-    {
-      right_output = prev_right_output + max_slew_fwd;
-    }
+    applySlewClamp(left_output,
+                   right_output,
+                   prev_left_output,
+                   prev_right_output,
+                   max_slew_fwd,
+                   max_slew_rev,
+                   !exit);
     prev_left_output = left_output;
     prev_right_output = right_output;
-    driveChassis(left_output, right_output); // Apply output to chassis
+    driveVolts(left_output, right_output); // Apply output to chassis
     pros::delay(10);
   }
   if (exit == true)
   {
     // Use a faster decel rate for the exit ramp so we actually reach 0 V
-    const double exit_decel = fmax(fmax(max_slew_fwd, max_slew_rev), max_output / 30.0);
+    const double exit_decel = exitDecel(max_slew_fwd, max_slew_rev, max_output);
     const double ramp_start = pros::millis();
     const double ramp_timeout = 500; // ms safety cap
     while ((fabs(prev_left_output) > 0.15 || fabs(prev_right_output) > 0.15) &&
@@ -1011,67 +988,57 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     {
       prev_left_output = applySlewLimit(0, prev_left_output, exit_decel, exit_decel, 10);
       prev_right_output = applySlewLimit(0, prev_right_output, exit_decel, exit_decel, 10);
-      driveChassis(prev_left_output, prev_right_output);
+      driveVolts(prev_left_output, prev_right_output);
       pros::delay(10);
     }
     prev_left_output = 0;
     prev_right_output = 0;
     stopChassis(mclib::device::BrakeMode::Hold); // Stop at end if required
-    // Zero the shared slew baseline so the next driveTo starts cleanly
-    state().setPrevOutputs(0.0, 0.0);
   }
+  // Publish the slew baseline so the next motion picks up where this one left
+  // off (zero, on the exit path above). Same contract as driveTo/boomerang.
+  state().setPrevOutputs(prev_left_output, prev_right_output);
   state().setCorrectAngleDeg(getInertialHeading()); // Update shared heading
   state().setTurning(false);                   // Reset turning state
 }
 
-void boomerang(double x, double y, int dir, double a, double dlead, double time_limit_msec, bool exit, double max_output, bool overturn, double min_speed)
+void boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
 {
+  const double x_in = x.in();
+  const double y_in = y.in();
+  // The final heading, degrees. `dlead` is genuinely dimensionless.
+  const double a = final_heading.deg();
+  const double time_limit_msec = time_limit.ms();
+  const double max_output = max_voltage.volts();
+  const double min_speed = min_voltage.volts();
+
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before moving
   state().setTurning(true);                      // Set turning state
   double threshold = 0.5;
   int add = dir > 0 ? 0 : 180;
-  double max_slew_fwd = dir > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
-  double max_slew_rev = dir > 0 ? max_slew_decel_fwd : max_slew_accel_rev;
-  const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-  bool apply_min_speed_floor = (min_speed >= 0 && min_speed_output > 0);
-  if (!exit)
-  {
-    // Adjust slew rates and min speed for chaining
-    if (!dir_change_start && dir_change_end)
-    {
-      max_slew_fwd = dir > 0 ? 24 : max_slew_decel_rev;
-      max_slew_rev = dir > 0 ? max_slew_decel_fwd : 24;
-    }
-    if (dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = dir > 0 ? max_slew_accel_fwd : 24;
-      max_slew_rev = dir > 0 ? 24 : max_slew_accel_rev;
-      apply_min_speed_floor = true;
-    }
-    if (!dir_change_start && !dir_change_end)
-    {
-      max_slew_fwd = 24;
-      max_slew_rev = 24;
-      apply_min_speed_floor = true;
-    }
-  }
+  const double min_speed_output = minSpeedOutput(min_speed, min_output);
+  const SlewPlan slew =
+      planSlew(slewConfig(), dir, exit, min_speed >= 0, min_speed_output);
+  const double max_slew_fwd = slew.max_slew_fwd;
+  const double max_slew_rev = slew.max_slew_rev;
+  const bool apply_min_speed_floor = slew.apply_min_speed_floor;
 
   PID pid_distance = PID(distance_kp, distance_ki, distance_kd);
   PID pid_heading = PID(heading_correction_kp, heading_correction_ki, heading_correction_kd);
 
-  // One locked read: x and y always come from the same odometry tick.
+  // One locked read: x_in and y_in always come from the same odometry tick.
   mclib::Pose2D pose = state().pose();
   // Compute initial carrot so the PID starts with a real nonzero target
-  double init_hyp = hypot(pose.x - x, pose.y - y);
-  double init_carrot_x = x - init_hyp * sin(degToRad(a + add)) * dlead;
-  double init_carrot_y = y - init_hyp * cos(degToRad(a + add)) * dlead;
+  double init_hyp = hypot(pose.x - x_in, pose.y - y_in);
+  double init_carrot_x = x_in - init_hyp * sin(degToRad(a + add)) * dlead;
+  double init_carrot_y = y_in - init_hyp * cos(degToRad(a + add)) * dlead;
   pid_distance.setTarget(hypot(init_carrot_x - pose.x, init_carrot_y - pose.y) * dir);
   pid_distance.setIntegralMax(3);
   pid_distance.setSmallBigErrorTolerance(threshold, threshold * 3);
   pid_distance.setSmallBigErrorDuration(50, 250);
   pid_distance.setDerivativeTolerance(5);
 
-  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y))));
+  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x_in - pose.x, y_in - pose.y))));
   pid_heading.setIntegralMax(0);
   pid_heading.setIntegralRange(1);
   pid_heading.setSmallBigErrorTolerance(0, 0);
@@ -1080,7 +1047,7 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
   pid_heading.setArrive(false);
 
   double start_time = pros::millis();
-  double left_output = 0, right_output = 0, correction_output = 0, slip_speed = 0, overturn_value = 0;
+  double left_output = 0, right_output = 0, correction_output = 0, slip_speed = 0;
   // Local mirror of the shared slew baseline; see driveTo().
   double prev_left_output = state().prevLeftOutput();
   double prev_right_output = state().prevRightOutput();
@@ -1092,17 +1059,17 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
   while (pros::millis() - start_time <= time_limit_msec && !cancelled())
   {
     pose = state().pose();
-    hypotenuse = hypot(pose.x - x, pose.y - y); // Distance to target
+    hypotenuse = hypot(pose.x - x_in, pose.y - y_in); // Distance to target
     // Calculate carrot point for path leading
-    carrot_x = x - hypotenuse * sin(degToRad(a + add)) * dlead;
-    carrot_y = y - hypotenuse * cos(degToRad(a + add)) * dlead;
+    carrot_x = x_in - hypotenuse * sin(degToRad(a + add)) * dlead;
+    carrot_y = y_in - hypotenuse * cos(degToRad(a + add)) * dlead;
     pid_distance.setTarget(hypot(carrot_x - pose.x, carrot_y - pose.y) * dir);
     current_angle = getInertialHeading();
     // Calculate drive output based on carrot point
     left_output = pid_distance.update(0) * cos(degToRad(atan2(carrot_x - pose.x, carrot_y - pose.y) * 180 / M_PI + add - current_angle));
     right_output = left_output;
     // Check if robot has crossed the perpendicular line to the target
-    perpendicular_line = ((pose.y - y) * -cos(degToRad(normalizeTarget(a))) <= (pose.x - x) * sin(degToRad(normalizeTarget(a))) + exit_tolerance);
+    perpendicular_line = ((pose.y - y_in) * -cos(degToRad(normalizeTarget(a))) <= (pose.x - x_in) * sin(degToRad(normalizeTarget(a))) + exit_tolerance);
     if (perpendicular_line && !prev_perpendicular_line)
     {
       break;
@@ -1121,22 +1088,29 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
       pid_heading.setTarget(normalizeTarget(radToDeg(atan2(carrot_x - pose.x, carrot_y - pose.y)) + add));
       correction_output = pid_heading.update(current_angle);
     }
-    else if (hypot(x - pose.x, y - pose.y) > 6)
+    else if (hypot(x_in - pose.x, y_in - pose.y) > 6)
     {
-      pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y)) + add));
+      pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add));
       correction_output = pid_heading.update(current_angle);
     }
     else
     {
       pid_heading.setTarget(normalizeTarget(a));
       correction_output = pid_heading.update(current_angle);
-      if (exit && hypot(x - pose.x, y - pose.y) < 5 && pros::millis() - start_time > 200)
+      if (exit && hypot(x_in - pose.x, y_in - pose.y) < 5 && pros::millis() - start_time > 200)
       {
         break;
       }
     }
 
-    // Limit slip speed for smoother curves
+    // Limit slip speed for smoother curves.
+    //
+    // Raw doubles on purpose, and inexpressible in units: chase_power is a
+    // unitless fudge factor, getRadius() returns inches, 9.8 is g in m/s^2,
+    // and the result is compared against volts. Four unit systems in one
+    // expression. The arithmetic is preserved bit for bit because the
+    // boomerang tuning was fitted to it; see the notes on chase_power in
+    // config.hpp and on getRadius() in utils.hpp.
     slip_speed = sqrt(chase_power * getRadius(pose.x, pose.y, carrot_x, carrot_y, current_angle) * 9.8);
     if (left_output > slip_speed)
     {
@@ -1148,51 +1122,28 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
     }
 
     // Overturn logic for sharp turns
-    overturn_value = fabs(left_output) + fabs(correction_output) - max_output;
-    if (overturn_value > 0 && overturn)
-    {
-      if (left_output > 0)
-      {
-        left_output -= overturn_value;
-      }
-      else
-      {
-        left_output += overturn_value;
-      }
-    }
-    right_output = left_output;
-    left_output = left_output + correction_output;
-    right_output = right_output - correction_output;
+    applyOverturnAndMix(left_output, right_output, correction_output, max_output, overturn);
 
     // Max Output Check
     scaleToMax(left_output, right_output, max_output);
 
     // Max Acceleration/Deceleration Check
-    if (prev_left_output - left_output > max_slew_rev)
-    {
-      left_output = prev_left_output - max_slew_rev;
-    }
-    if (prev_right_output - right_output > max_slew_rev)
-    {
-      right_output = prev_right_output - max_slew_rev;
-    }
-    if (left_output - prev_left_output > max_slew_fwd)
-    {
-      left_output = prev_left_output + max_slew_fwd;
-    }
-    if (right_output - prev_right_output > max_slew_fwd)
-    {
-      right_output = prev_right_output + max_slew_fwd;
-    }
+    applySlewClamp(left_output,
+                   right_output,
+                   prev_left_output,
+                   prev_right_output,
+                   max_slew_fwd,
+                   max_slew_rev,
+                   true);
     prev_left_output = left_output;
     prev_right_output = right_output;
-    driveChassis(left_output, right_output); // Apply output to chassis
+    driveVolts(left_output, right_output); // Apply output to chassis
     pros::delay(10);
   }
   if (exit)
   {
     // Use a faster decel rate for the exit ramp so we actually reach 0 V
-    const double exit_decel = fmax(fmax(max_slew_fwd, max_slew_rev), max_output / 30.0);
+    const double exit_decel = exitDecel(max_slew_fwd, max_slew_rev, max_output);
     const double ramp_start = pros::millis();
     const double ramp_timeout = 500; // ms safety cap
     while ((fabs(prev_left_output) > 0.15 || fabs(prev_right_output) > 0.15) &&
@@ -1200,7 +1151,7 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
     {
       prev_left_output = applySlewLimit(0, prev_left_output, exit_decel, exit_decel, 10);
       prev_right_output = applySlewLimit(0, prev_right_output, exit_decel, exit_decel, 10);
-      driveChassis(prev_left_output, prev_right_output);
+      driveVolts(prev_left_output, prev_right_output);
       pros::delay(10);
     }
     prev_left_output = 0;

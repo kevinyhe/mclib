@@ -4,10 +4,10 @@
 #include "mclib/config.hpp"
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
-void driveChassis(double left_power, double right_power)
+void driveChassis(QVoltage left_power, QVoltage right_power)
 {
-  left_chassis.setVoltage(left_power);
-  right_chassis.setVoltage(right_power);
+  left_chassis.setVoltage(left_power.volts());
+  right_chassis.setVoltage(right_power.volts());
 }
 
 void stopChassis(mclib::device::BrakeMode mode)
