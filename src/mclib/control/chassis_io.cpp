@@ -2,6 +2,8 @@
 #include "mclib/control/chassis_io.hpp"
 
 #include "mclib/config.hpp"
+#include "mclib/control/odometry.hpp"
+#include "mclib/control/robot_state.hpp"
 void driveChassis(double left_power, double right_power)
 {
   left_chassis.setVoltage(left_power);
@@ -21,6 +23,9 @@ void resetChassis()
   // Set both chassis motor encoders to zero
   left_chassis.tarePosition();
   right_chassis.tarePosition();
+  // The odometry samples these same encoders. Re-seed its baseline or the next
+  // tick reads the tare as a delta the size of everything driven so far.
+  mclib::control::resetOdometry(mclib::control::robotState().pose());
 }
 
 double getLeftRotationDegree()

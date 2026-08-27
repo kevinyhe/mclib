@@ -47,9 +47,26 @@ public:
   double averageDistanceIn();
   double headingDeg();
 
+  /**
+   * @brief Teleport the odometry to a known pose.
+   *
+   * Goes straight to `mclib::control::resetOdometry()`. Chassis does not keep
+   * a pose of its own -- it used to, and having two poses tracking the same
+   * robot from the same sensors is how they drifted apart.
+   */
   void setPose(const Pose2D& pose);
+
+  /**
+   * @brief The pose, from the one odometry, read consistently.
+   *
+   * @warning Nothing here updates it. The pose comes from the odometry task,
+   * which someone has to start once with
+   * `mclib::control::startOdometry()`; without that this sits at the origin
+   * and never moves. `ChassisController::periodic()` used to run a second,
+   * flat-approximation odometry of its own, and that is what it no longer
+   * does.
+   */
   Pose2D getPose() const;
-  Pose2D updateOdometry();
 
   ChassisDimensions getDimensions() const;
   device::MotorGroup& leftMotors();
@@ -66,10 +83,6 @@ private:
   device::MotorGroup m_right;
   std::shared_ptr<device::Inertial> m_imu;
   ChassisDimensions m_dimensions;
-  Pose2D m_pose;
-  double m_prev_left_in = 0.0;
-  double m_prev_right_in = 0.0;
-  double m_prev_heading_rad = 0.0;
 };
 
 }  // namespace mclib

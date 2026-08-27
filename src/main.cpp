@@ -2,8 +2,10 @@
 #include "main.h"
 
 void initialize() {
-  const mclib::Pose2D origin{};
-  (void)origin;
+  // One odometry, on its own task, from here until the program ends. Nothing
+  // else in mclib writes the pose.
+  mclib::control::startOdometry();
+  mclib::control::resetOdometry(mclib::Pose2D{});
 }
 
 void disabled() {}

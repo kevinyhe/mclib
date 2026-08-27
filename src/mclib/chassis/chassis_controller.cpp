@@ -3,13 +3,14 @@
 
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion.hpp"
-#include "mclib/control/state.hpp"
+#include "mclib/control/robot_state.hpp"
 #include "mclib/time.hpp"
 #include "pros/rtos.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -22,18 +23,38 @@ struct AsyncControlState {
   std::atomic_bool done{false};
 };
 
+/**
+ * @brief How long end()/~AsyncControlCommand() wait for a cancelled routine.
+ *
+ * Every loop in motion.cpp checks control::cancelRequested() next to its
+ * timeout and delays 10 ms, so the real figure is one loop period. This is the
+ * ceiling before we give up waiting, not the expected cost.
+ */
+constexpr std::uint32_t kCancelJoinTimeoutMs = 500;
+
+/**
+ * @brief Runs a blocking motion routine on its own task.
+ *
+ * The old version stopped that task with pros::Task::remove(), a hard kill
+ * with no cooperation point: the victim could be halfway through updating the
+ * shared scalars, and the caller then patched up two of the six by hand. It
+ * also raced -- done.load() could turn true between the check and the
+ * remove().
+ *
+ * Cancellation is cooperative now. We set a flag, the routine's loop notices
+ * it at the next 10 ms boundary, unwinds normally, and we wait for it.
+ * remove() survives only as a last resort for a routine that has wedged.
+ */
 class AsyncControlCommand : public Command {
 public:
   AsyncControlCommand(std::function<void()> action, Subsystem* requirement)
       : m_action(std::move(action)), m_requirements{requirement} {}
 
   void initialize() override {
-    if (m_task != nullptr) {
-      m_task->remove();
-      m_task.reset();
-    }
+    stopRunningTask();
 
     m_state->done.store(false);
+    control::clearCancel();
     const auto state = m_state;
     const auto action = m_action;
     m_task = std::make_unique<pros::Task>(
@@ -49,10 +70,8 @@ public:
   }
 
   void end(bool interrupted) override {
-    if (interrupted && m_task != nullptr && !m_state->done.load()) {
-      m_task->remove();
-      stopChassis(device::BrakeMode::Hold);
-      is_turning = false;
+    if (interrupted) {
+      stopRunningTask();
     }
     m_task.reset();
   }
@@ -61,13 +80,60 @@ public:
     return m_requirements;
   }
 
+  /**
+   * @brief Cancels a still-running routine and de-energises the drive.
+   *
+   * The old destructor called remove() and nothing else, so a command
+   * destroyed mid-motion left the motors driving.
+   * Routine::MotionStep::rebuild() destroys and recreates commands on every
+   * .withXxx() call, so this is a path a user reaches by writing an ordinary
+   * auton.
+   */
   ~AsyncControlCommand() override {
-    if (m_task != nullptr && !m_state->done.load()) {
-      m_task->remove();
-    }
+    stopRunningTask();
   }
 
 private:
+  /**
+   * @brief Ask the routine to stop, wait for it, then put the drive to rest.
+   *
+   * Does nothing when there is no task, or when the routine already finished
+   * on its own -- in that case it has stopped the chassis itself.
+   */
+  void stopRunningTask() {
+    if (m_task == nullptr || m_state->done.load()) {
+      return;
+    }
+
+    control::requestCancel();
+
+    const std::uint32_t deadline = pros::millis() + kCancelJoinTimeoutMs;
+    while (!m_state->done.load() && pros::millis() < deadline) {
+      pros::delay(2);
+    }
+
+    if (m_state->done.load()) {
+      // The routine unwound on its own. Nothing holds a lock, so the full
+      // repair is safe.
+      stopChassis(device::BrakeMode::Hold);
+      control::robotState().clearMotionOutputs();
+    } else {
+      // The routine ignored the flag for half a second. Every loop in
+      // motion.cpp checks it at a 10 ms boundary, so this should be
+      // unreachable; the hard kill is what is left when it is not.
+      //
+      // Nothing after remove() may take an mclib lock. FreeRTOS does not
+      // release a mutex held by a deleted task, so a repair that touched
+      // RobotState or the odometry could block the scheduler for good if the
+      // victim happened to die inside one. stopChassis() only writes motors.
+      m_task->remove();
+      stopChassis(device::BrakeMode::Hold);
+    }
+
+    control::clearCancel();
+    m_task.reset();
+  }
+
   std::function<void()> m_action;
   std::shared_ptr<AsyncControlState> m_state =
       std::make_shared<AsyncControlState>();
@@ -164,8 +230,9 @@ ChassisController::Mode ChassisController::getMode() const {
 }
 
 void ChassisController::periodic() {
-  m_chassis.updateOdometry();
-
+  // No odometry here any more. There is one odometry, it runs on its own task
+  // (control/odometry_task.hpp), and it no longer depends on the scheduler
+  // getting round to this subsystem.
   switch (m_mode) {
     case Mode::DriveDistance:
       runDriveDistance();

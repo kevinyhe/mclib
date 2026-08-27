@@ -57,14 +57,19 @@ TEMPLATE_FILES=$(INCDIR)/mclib/*.hpp \
 TESTDIR:=$(ROOT)/tests
 TESTBINDIR:=$(BINDIR)/tests
 HOST_CXX?=g++
-HOST_CXXFLAGS?=-std=$(CXX_STANDARD) -I$(INCDIR) -I$(TESTDIR) -Wall -Wextra -g -O1
+# MCLIB_HOST_BUILD picks std::mutex over pros::Mutex in mclib/sync.hpp. The
+# PROS headers are on the include path even here, so the switch has to be an
+# explicit macro rather than an availability check.
+HOST_CXXFLAGS?=-std=$(CXX_STANDARD) -I$(INCDIR) -I$(TESTDIR) -DMCLIB_HOST_BUILD -Wall -Wextra -g -O1
+HOST_LDFLAGS?=-pthread
 
 # Library sources that compile without PROS headers, linked into every test.
 # Expected to grow as more of src/ is made PROS-free.
 HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
 	$(SRCDIR)/mclib/control/scaling.cpp \
-	$(SRCDIR)/mclib/control/state.cpp
+	$(SRCDIR)/mclib/control/robot_state.cpp \
+	$(SRCDIR)/mclib/control/odometry.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on
 # success. No registration, no framework.
@@ -79,7 +84,7 @@ test:
 	  name=`basename $$src .cpp`; \
 	  bin=$(TESTBINDIR)/$$name; \
 	  echo "== $$name"; \
-	  if ! $(HOST_CXX) $(HOST_CXXFLAGS) -o $$bin $$src $(HOST_TEST_SRC); then \
+	  if ! $(HOST_CXX) $(HOST_CXXFLAGS) -o $$bin $$src $(HOST_TEST_SRC) $(HOST_LDFLAGS); then \
 	    echo "FAIL $$name (compile error)"; \
 	    failed="$$failed $$name"; \
 	    continue; \
