@@ -177,24 +177,31 @@ owned sequence. Motion steps run in order, and mechanism commands can be
 triggered between motions.
 
 ```cpp
+mclib::mechanism::ConveyorMechanism conveyor({
+    .motor_ports = {-20, -21},
+    .gearset = mclib::device::Gearset::Blue,
+});
+
 mclib::auton::Routine red_safe(drive);
 
 void initialize() {
-  default_drive = drive.makeArcadeDriveCommand(controller);
-  intake_idle = intake.makeDisableCommand();
+  drive.setName("drive");
+  drive.setDefaultCommand(drive.makeArcadeDriveCommand(controller));
+  drive.registerSelf();
 
-  CommandScheduler::registerSubsystem(&drive, default_drive.get());
-  CommandScheduler::registerSubsystem(&intake, intake_idle.get());
+  conveyor.setName("conveyor");
+  conveyor.setDefaultCommand(conveyor.makeStopCommand());
+  conveyor.registerSelf();
 
   red_safe
       .driveTo(24.0, 2000.0)
           .withMaxSpeed(10.0)
           .withMinSpeed(2.0)
-      .trigger(intake.makeIndexCommand())
+      .trigger(conveyor.makeForwardCommand())
       .wait(300 * millisecond)
       .turnToAngle(90.0, 1500.0)
           .withMaxSpeed(8.0)
-      .trigger(intake.makeDisableCommand())
+      .trigger(conveyor.makeStopCommand())
       .driveTo(48.0, 24.0, 2500.0)
           .withDirection(1)
           .withMaxSpeed(9.0)
@@ -218,22 +225,34 @@ owns the command-facing state machine, while concrete mechanisms decide how that
 state is applied to device wrappers.
 
 ```cpp
-mclib::mechanism::Intake intake({
-    .bottom_port = -20,
-    .top_port = -21,
-    .gearset = mclib::device::Gearset::Blue,
-});
+// #include "mclib/device/line.hpp". Line is in the global namespace.
+Line line_sensor('A');
 
-std::unique_ptr<Command> intake_idle;
-std::unique_ptr<Command> intake_score;
+mclib::mechanism::ConveyorMechanism conveyor(
+    {
+        .motor_ports = {-20, -21},
+        .gearset = mclib::device::Gearset::Blue,
+        .forward_voltage = 12.0,
+        .reverse_voltage = -12.0,
+        .index_voltage = 8.0,
+        // MotorGroup reports current in milliamps; ConveyorConfig wants amps,
+        // and ConveyorMechanism does the conversion internally.
+        .jam_current_amps = 2.0,
+    },
+    [] { return line_sensor.get(); });
 
 void initialize() {
-  intake_idle = intake.makeDisableCommand();
-  intake_score = intake.makeScoreCommand();
-
-  CommandScheduler::registerSubsystem(&intake, intake_idle.get());
+  conveyor.setName("conveyor");
+  conveyor.setDefaultCommand(conveyor.makeStopCommand());
+  conveyor.registerSelf();
 }
 ```
+
+`ConveyorMechanism` watches average current draw and average velocity while it
+runs. A sustained stall triggers a bounded number of reversing unjam attempts;
+when those run out it stops the motors and latches `isJammed()`.
+`makeIndexCommand(timeout_ms)` runs at `index_voltage` until the sensor gate
+reads true, then stops, so it can be sequenced with `then()` in a routine.
 
 The same pattern works for other mechanisms:
 
@@ -264,6 +283,91 @@ For custom mechanisms, subclass `StateMechanism<State>` or use
 Timed and condition-based commands come from the same generic helpers:
 `makeStateForCommand(state, 500 * millisecond)` and
 `makeStateUntilCommand(state, [] { return done; })`.
+
+### Migrating from `Intake`
+
+`Intake`, `IntakeState`, and `IntakeConfig` were removed. `ConveyorMechanism`
+does the same job without being named after one robot's mechanism.
+
+| `Intake` | `ConveyorMechanism` |
+| --- | --- |
+| `IntakeConfig::bottom_port`, `top_port` | `ConveyorConfig::motor_ports` |
+| `IntakeConfig::gearset` | `ConveyorConfig::gearset` |
+| `index_voltage` (default 12.0) | `index_voltage` (default 8.0, so set it explicitly if you relied on the old value) |
+| `score_voltage` | `forward_voltage` |
+| `reverse_voltage` | `reverse_voltage` |
+| `IntakeState::Disabled` | `ConveyorState::Stopped` |
+| `IntakeState::Index` | `ConveyorState::IndexToSensor` |
+| `IntakeState::Score` | `ConveyorState::Forward` |
+| `IntakeState::Reverse` | `ConveyorState::Reverse` |
+| `disable()` / `makeDisableCommand()` | `stop()` / `makeStopCommand()` |
+| `makeScoreCommand()` | `makeForwardCommand()` |
+| `makeReverseCommand()` | `makeReverseCommand()` |
+| `makeIndexCommand()` | `makeIndexCommand(timeout_ms)` |
+| `setState()` / `getState()` | `setState()` / `getState()`, or the typed `setConveyorState()` / `getConveyorState()` |
+
+Two behaviour differences worth knowing before you swap:
+
+**Indexing needs a sensor.** `IntakeState::Index` just ran the motor and never
+stopped on its own. `ConveyorState::IndexToSensor` runs at `index_voltage` while
+the sensor gate reads false and holds at zero volts while it reads true, and
+`makeIndexCommand` finishes once the gate latches. With no gate injected,
+`IndexToSensor` behaves like `Stopped` and `makeIndexCommand` finishes
+immediately. If you want the old unconditional behaviour, use
+`ConveyorState::Forward`.
+
+**Per-motor voltages are gone.** `Intake` drove its two motors at different
+voltages per state: `Index` ran the bottom motor only, while `Score` and
+`Reverse` ran both. `ConveyorMechanism` drives all of its motors as one
+`device::MotorGroup` at a single voltage, so it cannot express that split. Model
+a two-stage path as two `ConveyorMechanism` instances, one per stage:
+
+```cpp
+mclib::mechanism::ConveyorMechanism bottom(
+    {.motor_ports = {-20}}, [] { return line_sensor.get(); });
+mclib::mechanism::ConveyorMechanism top({.motor_ports = {-21}});
+
+// ParallelCommandGroup stores raw Command*, so the two stage commands have to
+// outlive the group that points at them.
+std::unique_ptr<Command> bottom_index;
+std::unique_ptr<Command> bottom_forward;
+std::unique_ptr<Command> top_forward;
+std::unique_ptr<Command> score;
+
+void initialize() {
+  bottom.setName("conveyor_bottom");
+  bottom.setDefaultCommand(bottom.makeStopCommand());
+  bottom.registerSelf();
+
+  top.setName("conveyor_top");
+  top.setDefaultCommand(top.makeStopCommand());
+  top.registerSelf();
+
+  // Old IntakeState::Index. Bottom stage only, gated on the sensor. The top
+  // stage keeps its stop default while this runs.
+  bottom_index =
+      bottom.makeStateCommand(mclib::mechanism::ConveyorState::IndexToSensor);
+
+  // Old IntakeState::Score. Both stages at once.
+  bottom_forward = bottom.makeForwardCommand();
+  top_forward = top.makeForwardCommand();
+  score = std::make_unique<ParallelCommandGroup>(
+      std::initializer_list<Command*>{bottom_forward.get(), top_forward.get()});
+}
+
+void opcontrol() {
+  bottom_index->schedule();  // index
+  score->schedule();         // score
+}
+```
+
+Drive the stages with scheduled commands, not with bare `setConveyorState`
+calls. Both stop defaults re-assert `Stopped` every tick, so a direct state
+write is undone on the next `CommandScheduler::run()` unless a command holds
+the requirement.
+
+Two instances also give each stage its own voltages, its own sensor gate, and
+its own jam detection, which one shared `MotorGroup` average could never do.
 
 ## Core Math API
 
@@ -300,7 +404,7 @@ Other modules are split into matching header/source pairs:
 - `pid.hpp` / `pid.cpp`: PID controller
 - `utils.hpp` / `utils.cpp`: angle and geometry utilities
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
-- `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, arm, motor, and pneumatic subsystem examples
+- `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms (conveyor, position, velocity, toggle, multi-position, homing, PTO) plus motor and pneumatic subsystem wrappers
 - `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
 
 ## Subsystem lifecycle
@@ -311,20 +415,20 @@ Command factories return `std::unique_ptr<Command>`, but the scheduler stores ra
 ```cpp
 // BROKEN. The unique_ptr dies at the end of the statement, so the scheduler is
 // left holding a dangling pointer.
-intake.makeIndexCommand()->schedule();
+conveyor.makeForwardCommand()->schedule();
 ```
 
 The subsystem itself is the owner. Hand it the default command with
 `setDefaultCommand` and register with `registerSelf`:
 
 ```cpp
-Intake intake{...};
+ConveyorMechanism conveyor{{-20, -21}};
 Arm arm{...};
 
 void initialize() {
-  intake.setName("intake");
-  intake.setDefaultCommand(intake.makeDisableCommand());
-  intake.registerSelf();
+  conveyor.setName("conveyor");
+  conveyor.setDefaultCommand(conveyor.makeStopCommand());
+  conveyor.registerSelf();
 
   arm.setName("arm");
   arm.setDefaultCommand(arm.makeStopCommand());
@@ -340,11 +444,11 @@ default command must live somewhere other than the subsystem. You keep ownership
 so the command has to outlive the registration:
 
 ```cpp
-std::unique_ptr<Command> intake_idle;
+std::unique_ptr<Command> conveyor_idle;
 
 void initialize() {
-  intake_idle = intake.makeDisableCommand();
-  CommandScheduler::registerSubsystem(&intake, intake_idle.get());
+  conveyor_idle = conveyor.makeStopCommand();
+  CommandScheduler::registerSubsystem(&conveyor, conveyor_idle.get());
 }
 ```
 
@@ -355,7 +459,7 @@ somewhere that outlives the scheduling, then schedule the raw pointer:
 std::unique_ptr<Command> index;
 
 void opcontrol() {
-  index = intake.makeIndexCommand();
+  index = conveyor.makeIndexCommand(1500.0);
   index->schedule();
 }
 ```
@@ -387,9 +491,9 @@ re-enabled, which corrupts the pose.
 ### Scheduler API
 
 ```cpp
-CommandScheduler::registerSubsystem(&intake);                  // uses the stored default command
-CommandScheduler::registerSubsystem(&intake, intake_idle.get());  // caller owned default command
-CommandScheduler::unregisterSubsystem(&intake);                // cancels its command, stops periodic()
+CommandScheduler::registerSubsystem(&conveyor);                       // uses the stored default command
+CommandScheduler::registerSubsystem(&conveyor, conveyor_idle.get());  // caller owned default command
+CommandScheduler::unregisterSubsystem(&conveyor);                     // cancels its command, stops periodic()
 ```
 
 Registering a null subsystem, or one that is already registered, is a no-op
