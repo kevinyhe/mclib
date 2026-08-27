@@ -540,6 +540,15 @@ type covers solenoids, motor-driven two-position mechanisms, and test mocks.
 
 The logical state ("is extended") is kept separate from the raw value written to
 the actuator, so `isExtended()` always answers the question you asked.
+## MechanismManager
+
+`CommandScheduler::registerSubsystem` stores a raw `Command*`, but every
+mechanism factory hands back a `std::unique_ptr<Command>`. Something has to keep
+that command alive for as long as the scheduler can reach it. The examples above
+do it with a global `std::unique_ptr<Command>` per mechanism; drop the global and
+the scheduler is left holding a dangling pointer.
+
+`mclib::mechanism::MechanismManager` owns those commands instead:
 
 ```cpp
 #include "mclib/mclib.hpp"
@@ -733,6 +742,16 @@ void initialize() {
   // instant default would re-disengage the PTO on the tick after every engage.
   pto_idle = pto.idleCommand();
   CommandScheduler::registerSubsystem(&pto, pto_idle.get());
+ml::mechanism::MotorSubsystem flywheel{{1, -2}};
+ml::mechanism::PneumaticSubsystem wings{{'A'}};
+
+ml::mechanism::MechanismManager mechanisms;
+
+void initialize() {
+  mechanisms.add(&flywheel, flywheel.makeStopCommand(), "flywheel");
+  mechanisms.add(&wings, wings.makeRetractCommand(), "wings");
+
+  mechanisms.registerAll();
 }
 
 void opcontrol() {
@@ -798,3 +817,51 @@ finishes immediately.
 Sign-correct opposed motors in `motor_ports` (a negative port reverses that
 motor). Jam detection reads the group average, so uncorrected ports cancel to
 a near-zero velocity and look permanently stalled.
+The manager must outlive the scheduler's use of the commands, so give it static
+or program-long storage — a file-scope object like above is fine.
+
+`add()` returns `false` and stores nothing if the subsystem or command is null,
+if that subsystem is already held, or if the name is already taken. `name` is
+optional and defaults to `mechanism0`, `mechanism1`, and so on.
+
+`registerAll()` is safe to call twice; it skips entries it already registered and
+returns how many it registered this time. The scheduler's own duplicate check is
+an `assert`, which does nothing in a release build.
+
+The rest of the API:
+
+```cpp
+mechanisms.size();                       // how many entries are held
+mechanisms.contains("wings");
+mechanisms.getSubsystem("wings");        // Subsystem*, or nullptr
+mechanisms.getDefaultCommand("wings");   // Command*, manager keeps ownership
+mechanisms.getEntry("wings");            // const Entry*, or by index
+mechanisms.getNames();                   // insertion order
+mechanisms.isRegistered("wings");
+mechanisms.isEnabled("wings");
+mechanisms.setEnabled("wings", false);   // skip it on the next registerAll()
+mechanisms.setAllEnabled(true);
+printf("%s", mechanisms.describe().c_str());
+```
+
+`describe()` prints one line per entry — name, enabled, registered, and which
+command currently holds the scheduler's requirement on that subsystem:
+
+```
+flywheel enabled=yes registered=yes requirement=default
+wings enabled=yes registered=yes requirement=other
+```
+
+Disabling an entry only stops a later `registerAll()` from registering it. The
+scheduler has no API to drop a subsystem once registered, so disabling an
+already-registered entry changes the record and nothing else.
+
+A subsystem must be registered by exactly one path. If you already call
+`CommandScheduler::registerSubsystem` for a mechanism, do not also add it to a
+manager: the scheduler catches the duplicate with an `assert`, which is compiled
+out in release, and the second registration silently overwrites the first while
+the original default command keeps the requirement.
+
+`MechanismManager` is neither copyable nor movable. It owns the commands the
+scheduler holds raw pointers to, and the scheduler has no unregister call, so
+moving the manager would leave the scheduler pointing at freed commands.
