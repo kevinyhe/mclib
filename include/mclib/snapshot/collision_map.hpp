@@ -16,15 +16,13 @@ inline constexpr std::uint32_t MAP_LONG_GOAL_BRACES = 1u << 2;
 inline constexpr std::uint32_t MAP_CENTER_GOAL_POS45 = 1u << 3;
 inline constexpr std::uint32_t MAP_CENTER_GOAL_NEG45 = 1u << 4;
 inline constexpr std::uint32_t MAP_MATCHLOADERS = 1u << 5;
-inline constexpr std::uint32_t MAP_PARK_ZONES = 1u << 6;
 
 inline constexpr std::uint32_t MAP_LONG_GOALS_ALL =
     MAP_LONG_GOALS | MAP_LONG_GOAL_BRACES;
 inline constexpr std::uint32_t MAP_CENTER_GOALS =
     MAP_CENTER_GOAL_POS45 | MAP_CENTER_GOAL_NEG45;
 inline constexpr std::uint32_t MAP_ALL =
-    MAP_PERIMETER | MAP_LONG_GOALS_ALL | MAP_CENTER_GOALS |
-    MAP_MATCHLOADERS | MAP_PARK_ZONES;
+    MAP_PERIMETER | MAP_LONG_GOALS_ALL | MAP_CENTER_GOALS | MAP_MATCHLOADERS;
 
 inline constexpr std::array<FieldSegment, 12> TERMINAL_FIELD_SEGMENTS{{
     {{0.0f, 0.0f}, {FIELD_SIZE_IN, 0.0f}, MAP_PERIMETER},

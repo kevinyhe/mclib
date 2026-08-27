@@ -1,7 +1,11 @@
 // mclib
 #include "mclib/snapshot/snapshot_config.hpp"
 
+#include "mclib/control/robot_state.hpp"
+#include "mclib/utils.hpp"
+
 #include <algorithm>
+#include <cmath>
 
 namespace snapshot
 {
@@ -12,7 +16,6 @@ namespace snapshot
     // Replace with extern declarations if your code has ownership of these sensors elsewhere
     mclib::device::Distance distFront(1);
     mclib::device::Distance distRight(2);
-    mclib::device::Distance distLeft(3);
 
     SnapshotConfig g_cfg{};
     std::vector<DistanceSensorConfig> g_sensors;
@@ -24,10 +27,30 @@ namespace snapshot
 
     bool runtime_ready(const SnapshotPoseRuntime &runtime)
     {
+      if (runtime.apply_pose == nullptr)
+        return false;
+      if (runtime.get_pose != nullptr)
+        return true;
       return runtime.get_heading_deg != nullptr &&
              runtime.get_guess_x_in != nullptr &&
-             runtime.get_guess_y_in != nullptr &&
-             runtime.apply_pose != nullptr;
+             runtime.get_guess_y_in != nullptr;
+    }
+
+    // One read of the whole pose. get_pose() is the consistent path; the three
+    // scalar getters are three separate reads and can straddle two odometry
+    // ticks, so they are only the fallback for a runtime that has no better
+    // option.
+    void read_guess(const SnapshotPoseRuntime &runtime,
+                    float &x_in, float &y_in, float &heading_deg)
+    {
+      if (runtime.get_pose != nullptr)
+      {
+        runtime.get_pose(runtime.user_data, &x_in, &y_in, &heading_deg);
+        return;
+      }
+      heading_deg = runtime.get_heading_deg(runtime.user_data);
+      x_in = runtime.get_guess_x_in(runtime.user_data);
+      y_in = runtime.get_guess_y_in(runtime.user_data);
     }
 
     void apply_quadrant_bias(float &guess_x, float &guess_y, Quadrant q, float margin_in)
@@ -97,10 +120,11 @@ namespace snapshot
       {
         g_cfg = SnapshotConfig{};
         g_cfg.field_mask = MAP_PERIMETER;
-        g_cfg.candidates_per_sensor = 1;
         g_cfg.samples = 5;
         g_cfg.sample_delay_ms = 35;
+        g_cfg.min_sensors = 2;
         g_cfg.max_chi2_per_sensor = 9.0f;
+        g_cfg.max_correction_in = 12.0f;
         g_cfg.quadrant_margin_in = 2.0f;
       }
 
@@ -132,9 +156,25 @@ namespace snapshot
 
     }
 
+    /**
+     * @brief Applies a correction, but only if it is a small move from the
+     *        pose that is actually being overwritten.
+     *
+     * The solver measures `correction_in` from the seed it was given, and for
+     * a quadrant snapshot that seed has already been pulled toward the
+     * quadrant by apply_quadrant_bias(). Gating there would bound the move
+     * from the biased seed rather than from the odometry pose, so a 10 in
+     * clamp plus a 12 in solve would write a 22 in jump under a 12 in cap.
+     * This second gate closes that: it measures from the unbiased pose.
+     */
     struct RuntimeOdomAdapter
     {
       SnapshotPoseRuntime runtime;
+      float odom_x_in = 0.0f;
+      float odom_y_in = 0.0f;
+      float max_correction_in = 0.0f;
+      bool applied = false;
+      float correction_in = 0.0f;
 
       void set_position(float x_in,
                         float y_in,
@@ -142,12 +182,19 @@ namespace snapshot
                         float forward_tracker_in,
                         float sideways_tracker_in)
       {
+        const float dx = x_in - odom_x_in;
+        const float dy = y_in - odom_y_in;
+        correction_in = std::sqrt(dx * dx + dy * dy);
+        if (max_correction_in > 0.0f && correction_in > max_correction_in)
+          return;
+
         runtime.apply_pose(runtime.user_data,
                            x_in,
                            y_in,
                            heading_deg,
                            forward_tracker_in,
                            sideways_tracker_in);
+        applied = true;
       }
     };
 
@@ -157,6 +204,28 @@ namespace snapshot
   {
     if (!runtime_ready(runtime))
       return false;
+    g_runtime = runtime;
+    return true;
+  }
+
+  bool snapshot_config_use_robot_state()
+  {
+    SnapshotPoseRuntime runtime{};
+    runtime.user_data = nullptr;
+    runtime.get_pose = [](void *, float *x_in, float *y_in, float *heading_deg)
+    {
+      const mclib::Pose2D pose = mclib::control::robotState().pose();
+      *x_in = static_cast<float>(pose.x);
+      *y_in = static_cast<float>(pose.y);
+      *heading_deg = static_cast<float>(radToDeg(pose.theta));
+    };
+    // The snapshot never solves for heading, so it writes position only and
+    // leaves the IMU's theta in place - the same split as wallReset().
+    runtime.apply_pose = [](void *, float x_in, float y_in, float, float, float)
+    {
+      mclib::control::robotState().setPosition(static_cast<double>(x_in),
+                                               static_cast<double>(y_in));
+    };
     g_runtime = runtime;
     return true;
   }
@@ -210,10 +279,16 @@ namespace snapshot
 
     if (!runtime_ready(g_runtime))
     {
-      return SnapshotResult{};
+      SnapshotResult result{};
+      result.reject = SnapshotReject::NO_RUNTIME;
+      return result;
     }
 
-    const float heading_deg = g_runtime.get_heading_deg(g_runtime.user_data);
+    float odom_x = 0.0f;
+    float odom_y = 0.0f;
+    float heading_deg = 0.0f;
+    read_guess(g_runtime, odom_x, odom_y, heading_deg);
+
     const float fwd_in = g_runtime.get_forward_tracker_in != nullptr
                              ? g_runtime.get_forward_tracker_in(g_runtime.user_data)
                              : 0.0f;
@@ -221,19 +296,38 @@ namespace snapshot
                               ? g_runtime.get_sideways_tracker_in(g_runtime.user_data)
                               : 0.0f;
 
-    float guess_x = g_runtime.get_guess_x_in(g_runtime.user_data);
-    float guess_y = g_runtime.get_guess_y_in(g_runtime.user_data);
-    apply_quadrant_bias(guess_x, guess_y, q, g_cfg.quadrant_margin_in);
+    float seed_x = odom_x;
+    float seed_y = odom_y;
+    apply_quadrant_bias(seed_x, seed_y, q, g_cfg.quadrant_margin_in);
 
-    RuntimeOdomAdapter odom{g_runtime};
-    return snapshot_setpose(odom,
-                            g_sensors,
-                            g_cfg,
-                            heading_deg,
-                            fwd_in,
-                            side_in,
-                            guess_x,
-                            guess_y);
+    RuntimeOdomAdapter odom{};
+    odom.runtime = g_runtime;
+    odom.odom_x_in = odom_x;
+    odom.odom_y_in = odom_y;
+    odom.max_correction_in = g_cfg.max_correction_in;
+
+    SnapshotResult result = snapshot_setpose(odom,
+                                             g_sensors,
+                                             g_cfg,
+                                             heading_deg,
+                                             fwd_in,
+                                             side_in,
+                                             seed_x,
+                                             seed_y);
+
+    if (result.success)
+    {
+      // Report the move from the odometry pose, not from the biased seed.
+      result.correction_in = odom.correction_in;
+      if (!odom.applied)
+      {
+        result.success = false;
+        result.reject = SnapshotReject::CORRECTION_TOO_LARGE;
+        result.x_in = odom_x;
+        result.y_in = odom_y;
+      }
+    }
+    return result;
   }
 
 } // namespace snapshot

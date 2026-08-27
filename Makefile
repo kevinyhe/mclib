@@ -84,6 +84,8 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/path/path.cpp \
 	$(SRCDIR)/mclib/path/spline.cpp \
 	$(SRCDIR)/mclib/path/pure_pursuit.cpp \
+	$(SRCDIR)/mclib/snapshot/raycast.cpp \
+	$(SRCDIR)/mclib/snapshot/snapshot_pose.cpp \
 	$(TESTDIR)/support/host_time.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on

@@ -10,6 +10,22 @@
 namespace snapshot {
 
 bool snapshot_config_set_runtime(const SnapshotPoseRuntime& runtime);
+
+/**
+ * @brief Install a runtime backed by `mclib::control::robotState()`.
+ *
+ * `robotState()` is the single pose source since Phase 3 - the odometry task
+ * writes it, every motion routine reads it - so this is what a snapshot should
+ * normally correct. The vtable seam is kept so the solver still does not know
+ * that type exists.
+ *
+ * The tracker getters return 0: `RobotState` has no tracker offsets, and the
+ * pose it holds is already at the tracking centre.
+ *
+ * @return True. Provided for symmetry with `snapshot_config_set_runtime()`.
+ */
+bool snapshot_config_use_robot_state();
+
 void snapshot_config_set_sensors(const std::vector<DistanceSensorConfig>& sensors);
 bool snapshot_config_update_sensor(std::size_t index,
                                    const DistanceSensorConfig& sensor);
@@ -17,6 +33,14 @@ bool snapshot_config_set_sensor_mask(std::size_t index,
                                      std::uint32_t mask_override);
 void snapshot_config_set_config(const SnapshotConfig& cfg);
 void snapshot_config_reset_defaults();
+
+/**
+ * @brief Take a snapshot, biasing the guess into a known quadrant first.
+ *
+ * @return The solve and its verdict. `result.success` is false and
+ *         `result.reject` says why when the correction was refused; the pose
+ *         is untouched in that case.
+ */
 SnapshotResult snapshot_setpose_quadrant(Quadrant q);
 
 }  // namespace snapshot

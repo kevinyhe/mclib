@@ -793,7 +793,12 @@ Other modules are split into matching header/source pairs:
 - `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms, plus intake, motor, and pneumatic subsystem examples
 - `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms (conveyor, position, velocity, toggle, multi-position, homing, PTO) plus motor and pneumatic subsystem wrappers
-- `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose snapshot helpers
+- `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose correction. `raycast.cpp`
+  casts rays against the static field map in `collision_map.hpp`; `snapshot_pose.cpp`
+  runs the damped Gauss-Newton solve for `(x, y)` and the accept/reject gate;
+  `snapshot.hpp` is the only part that reads a real sensor. `sensor.hpp` holds the one
+  PROS-dependent type, so the geometry and the solve are host-testable
+  (`tests/snapshot_test.cpp`).
 
 ## Subsystem lifecycle
 
