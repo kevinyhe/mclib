@@ -59,12 +59,14 @@ void Chassis::setBrakeMode(device::BrakeMode mode) {
 }
 
 void Chassis::tare() {
+  // Snapshot first: the odometry task samples these same encoders on another
+  // task, so a tick landing between the tare and the reset would read the tare
+  // as a delta the size of everything driven so far. Reading the pose after
+  // the tare would then adopt that corrupted value permanently.
+  const Pose2D pose = control::robotState().pose();
   m_left.tarePosition();
   m_right.tarePosition();
-  // Those are the same encoders the odometry task samples. Zeroing them
-  // without re-seeding the odometry's baseline would make the next tick see a
-  // delta the size of everything driven so far and teleport the pose.
-  control::resetOdometry(control::robotState().pose());
+  control::resetOdometry(pose);
 }
 
 double Chassis::leftPositionDeg() {

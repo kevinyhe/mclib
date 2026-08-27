@@ -99,22 +99,29 @@ RobotState& robotState() {
 
 namespace {
 /**
- * @brief The cancel flag. A plain bool would be a data race: it is set from
- * the scheduler task and read from the motion task.
+ * @brief One cancel flag per CancelToken.
+ *
+ * Plain bools would be a data race: they are set from the scheduler task and
+ * read from the routine's own task. Constant-initialised, so there is no
+ * static-initialisation order to get wrong.
  */
-std::atomic_bool g_cancel_requested{false};
+std::atomic_bool g_cancel_requested[2] = {{false}, {false}};
+
+std::atomic_bool& cancelFlag(CancelToken token) {
+  return g_cancel_requested[static_cast<int>(token)];
+}
 }  // namespace
 
-bool cancelRequested() {
-  return g_cancel_requested.load(std::memory_order_acquire);
+bool cancelRequested(CancelToken token) {
+  return cancelFlag(token).load(std::memory_order_acquire);
 }
 
-void requestCancel() {
-  g_cancel_requested.store(true, std::memory_order_release);
+void requestCancel(CancelToken token) {
+  cancelFlag(token).store(true, std::memory_order_release);
 }
 
-void clearCancel() {
-  g_cancel_requested.store(false, std::memory_order_release);
+void clearCancel(CancelToken token) {
+  cancelFlag(token).store(false, std::memory_order_release);
 }
 
 }  // namespace control

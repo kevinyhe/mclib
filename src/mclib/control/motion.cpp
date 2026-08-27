@@ -51,14 +51,41 @@ mclib::control::RobotState& state() {
 }
 
 /**
- * @brief True once someone has asked the running routine to stop.
+ * @brief True once someone has asked the running motion routine to stop.
  *
  * Every loop below tests this next to its timeout. That is what lets
  * AsyncControlCommand cancel a motion by asking instead of by calling
  * pros::Task::remove() on a task that might be mid-store.
  */
 bool cancelled() {
-  return mclib::control::cancelRequested();
+  return mclib::control::cancelRequested(
+      mclib::control::CancelToken::Motion);
+}
+
+/**
+ * @brief The heading to hold after a routine that aimed at @p commanded_deg.
+ *
+ * A routine that ran to completion reached its target, so that is the heading
+ * to hold. A cancelled one was stopped short, and publishing the commanded
+ * angle would have correctHeading() actively drive toward a heading the robot
+ * never got to. Report where it actually is.
+ */
+double settledHeadingDeg(double commanded_deg);
+
+/**
+ * @brief True once someone has asked correctHeading() to stop.
+ *
+ * A separate token from cancelled(). correctHeading() runs *alongside* the
+ * motions - it gates on isTurning() so it can - so cancelling a motion must
+ * not take the heading hold down with it.
+ */
+bool headingCorrectionCancelled() {
+  return mclib::control::cancelRequested(
+      mclib::control::CancelToken::HeadingCorrection);
+}
+
+double settledHeadingDeg(double commanded_deg) {
+  return cancelled() ? getInertialHeading() : commanded_deg;
 }
 }  // namespace
 void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double max_output, double min_speed)
@@ -131,7 +158,7 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   {
     stopChassis(mclib::device::BrakeMode::Hold);
   }
-  state().setCorrectAngleDeg(turn_angle);
+  state().setCorrectAngleDeg(settledHeadingDeg(turn_angle));
   state().setTurning(false);
 }
 
@@ -482,7 +509,7 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
     stopChassis(mclib::device::BrakeMode::Hold);
   }
   // Update the global heading
-  state().setCorrectAngleDeg(result_angle_deg);
+  state().setCorrectAngleDeg(settledHeadingDeg(result_angle_deg));
   state().setTurning(false);
 }
 
@@ -657,7 +684,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   {
     stopChassis(mclib::device::BrakeMode::Hold); // Stop chassis at end if required
   }
-  state().setCorrectAngleDeg(swing_angle); // Update shared heading
+  state().setCorrectAngleDeg(settledHeadingDeg(swing_angle)); // Update shared heading
   state().setTurning(false);          // Reset turning state
 }
 
@@ -676,7 +703,7 @@ void correctHeading()
 
   // feed equal magnitude opposite sign voltages
   // this cancels drift while driving straight
-  while (heading_correction && !cancelled())
+  while (heading_correction && !headingCorrectionCancelled())
   {
     pid.setTarget(state().correctAngleDeg());
     if (!state().isTurning())
@@ -1183,6 +1210,6 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
   // Publish the slew baseline so the next motion picks up where this one left
   // off (zero, on the exit path above).
   state().setPrevOutputs(prev_left_output, prev_right_output);
-  state().setCorrectAngleDeg(a);  // Update shared heading
+  state().setCorrectAngleDeg(settledHeadingDeg(a));  // Update shared heading
   state().setTurning(false); // Reset turning state
 }

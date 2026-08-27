@@ -53,6 +53,14 @@ public:
    * Goes straight to `mclib::control::resetOdometry()`. Chassis does not keep
    * a pose of its own -- it used to, and having two poses tracking the same
    * robot from the same sensors is how they drifted apart.
+   *
+   * @warning Also writes `pose.theta` back to this Chassis's IMU, so the
+   * odometry's heading frame and the frame `motion.cpp` steers in stay
+   * identical. That only works when this Chassis holds the same IMU the
+   * odometry task reads -- the `inertial_sensor` from `config.cpp`. A Chassis
+   * built with `imu == nullptr`, or with an `Inertial` on another port, moves
+   * the odometry frame without moving the heading source, and the two drift
+   * apart by exactly that offset with no diagnostic.
    */
   void setPose(const Pose2D& pose);
 

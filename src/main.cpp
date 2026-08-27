@@ -2,6 +2,13 @@
 #include "main.h"
 
 void initialize() {
+  // Calibrate before anything reads the IMU. The odometry tracks heading as
+  // deltas from the pose it was reset to, while motion.cpp steers on raw
+  // getInertialHeading() degrees; starting the two in different frames leaves
+  // every moveToPoint aiming off by a constant.
+  inertial_sensor.reset(true);
+  inertial_sensor.setRotationDeg(0.0);
+
   // One odometry, on its own task, from here until the program ends. Nothing
   // else in mclib writes the pose.
   mclib::control::startOdometry();

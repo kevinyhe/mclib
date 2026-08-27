@@ -5,6 +5,7 @@
 #include "mclib/command/functionalCommand.h"
 #include "mclib/command/runCommand.h"
 #include "mclib/command/subsystem.h"
+#include "mclib/control/robot_state.hpp"
 #include "mclib/device/controller.hpp"
 #include "mclib/pid.hpp"
 
@@ -161,7 +162,9 @@ private:
   void runTurnToHeading();
   void finishGoal();
   bool timedOut() const;
-  std::unique_ptr<Command> makeAsyncControlCommand(std::function<void()> action);
+  std::unique_ptr<Command> makeAsyncControlCommand(
+      std::function<void()> action,
+      control::CancelToken token = control::CancelToken::Motion);
 
   Chassis& m_chassis;
   ChassisControllerConfig m_config;

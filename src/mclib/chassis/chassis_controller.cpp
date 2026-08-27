@@ -47,14 +47,18 @@ constexpr std::uint32_t kCancelJoinTimeoutMs = 500;
  */
 class AsyncControlCommand : public Command {
 public:
-  AsyncControlCommand(std::function<void()> action, Subsystem* requirement)
-      : m_action(std::move(action)), m_requirements{requirement} {}
+  AsyncControlCommand(std::function<void()> action,
+                      Subsystem* requirement,
+                      control::CancelToken token)
+      : m_action(std::move(action)),
+        m_token(token),
+        m_requirements{requirement} {}
 
   void initialize() override {
     stopRunningTask();
 
     m_state->done.store(false);
-    control::clearCancel();
+    control::clearCancel(m_token);
     const auto state = m_state;
     const auto action = m_action;
     m_task = std::make_unique<pros::Task>(
@@ -105,7 +109,7 @@ private:
       return;
     }
 
-    control::requestCancel();
+    control::requestCancel(m_token);
 
     const std::uint32_t deadline = pros::millis() + kCancelJoinTimeoutMs;
     while (!m_state->done.load() && pros::millis() < deadline) {
@@ -130,11 +134,13 @@ private:
       stopChassis(device::BrakeMode::Hold);
     }
 
-    control::clearCancel();
+    control::clearCancel(m_token);
     m_task.reset();
   }
 
   std::function<void()> m_action;
+  /// @brief Which family of routines this command's action belongs to.
+  control::CancelToken m_token;
   std::shared_ptr<AsyncControlState> m_state =
       std::make_shared<AsyncControlState>();
   std::unique_ptr<pros::Task> m_task;
@@ -360,7 +366,11 @@ std::unique_ptr<Command> ChassisController::makeSwingCommand(
 }
 
 std::unique_ptr<Command> ChassisController::makeCorrectHeadingCommand() {
-  return makeAsyncControlCommand([]() { correctHeading(); });
+  // correctHeading() runs alongside the motions rather than instead of them,
+  // so it gets its own cancel token. Sharing the motion one would tear the
+  // heading hold down the first time any other routine was interrupted.
+  return makeAsyncControlCommand([]() { correctHeading(); },
+                                 control::CancelToken::HeadingCorrection);
 }
 
 std::unique_ptr<Command> ChassisController::makeWallResetCommand(
@@ -509,8 +519,9 @@ bool ChassisController::timedOut() const {
 }
 
 std::unique_ptr<Command> ChassisController::makeAsyncControlCommand(
-    std::function<void()> action) {
-  return std::make_unique<AsyncControlCommand>(std::move(action), this);
+    std::function<void()> action,
+    control::CancelToken token) {
+  return std::make_unique<AsyncControlCommand>(std::move(action), this, token);
 }
 
 }  // namespace mclib

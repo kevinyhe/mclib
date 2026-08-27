@@ -24,7 +24,14 @@
  * With no argument the layout comes from the globals in `config.cpp`
  * (`wheel_distance_in`, `vertical_tracker_diameter`,
  * `vertical_tracker_dist_from_center`) and uses the drive encoders. Pass an
- * `OdometryConfig` to use a tracking wheel instead.
+ * `OdometryConfig` to use the vertical tracking wheel instead.
+ *
+ * @warning The task cannot honour `use_horizontal_tracker`: `config.cpp` has
+ * no horizontal sensor, so there is nothing for `sampleOdometrySensors()` to
+ * read. `startOdometry()` clears the flag rather than integrating a constant
+ * zero reading against a real offset, which would invent a sideways
+ * displacement on every turn. `Odometry` itself supports two wheels - wire the
+ * sensor up and call `odometryTick()` on your own schedule.
  */
 
 namespace mclib {
@@ -53,7 +60,8 @@ OdometrySample sampleOdometrySensors();
  * Idempotent: a second call while the task is running does nothing and
  * returns false. The task runs until `stopOdometry()`.
  *
- * @param config Sensor layout.
+ * @param config Sensor layout. `use_horizontal_tracker` is cleared; see the
+ *        file comment.
  * @param period How long to sleep between samples. 10 ms matches the control
  *        loops in `motion.cpp`.
  * @return True if this call started the task.

@@ -20,12 +20,20 @@ void stopChassis(mclib::device::BrakeMode mode)
 
 void resetChassis()
 {
+  // Snapshot the pose BEFORE taring. The odometry task samples these same
+  // encoders every 10 ms on another task; if it ticks between the tare and the
+  // reset it reads the tare as a delta the size of everything driven so far
+  // and corrupts the pose. Reading the pose afterwards would then adopt the
+  // corrupted value as the reset target and make it permanent.
+  const mclib::Pose2D pose = mclib::control::robotState().pose();
+
   // Set both chassis motor encoders to zero
   left_chassis.tarePosition();
   right_chassis.tarePosition();
-  // The odometry samples these same encoders. Re-seed its baseline or the next
-  // tick reads the tare as a delta the size of everything driven so far.
-  mclib::control::resetOdometry(mclib::control::robotState().pose());
+
+  // Re-seed the odometry baseline, which also repairs any tick that landed in
+  // the window above.
+  mclib::control::resetOdometry(pose);
 }
 
 double getLeftRotationDegree()

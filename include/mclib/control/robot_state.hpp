@@ -145,24 +145,36 @@ RobotState& robotState();
 // pros::Task::remove(), a hard kill that can land between two stores and
 // leaves the shared scalars arbitrary. Instead every loop now also tests
 // cancelRequested(), so it exits at a delay boundary with its state intact.
-//
-// The flag is process-wide, not per-command, because the routines it stops are
-// free functions with no handle to check. That is fine for the scheduler's own
-// interrupt path, which ends one command before initialising the next, but two
-// AsyncControlCommands running at once - say inside a ParallelCommandGroup on
-// two different ChassisControllers - share it, and cancelling one stops both.
-// Do not run two blocking chassis routines concurrently; they would be
-// fighting over the same drive motors anyway.
 // ---------------------------------------------------------------------------
 
-/// @brief True when the running motion routine has been asked to stop.
-bool cancelRequested();
+/**
+ * @brief Which family of routines a cancel request applies to.
+ *
+ * The routines being cancelled are free functions with no handle to check, so
+ * the flags are process-wide rather than per-command. One flag would be wrong:
+ * `correctHeading()` is built to run *alongside* a motion - it gates on
+ * `isTurning()` precisely so it can - so a single shared flag would silently
+ * kill the heading hold every time any other routine was interrupted, and
+ * nothing would restart it. Splitting the two keeps them independent.
+ *
+ * Within a family the flag is still shared, so do not run two blocking motion
+ * routines at once. They would be fighting over the same drive motors anyway.
+ */
+enum class CancelToken {
+  /// @brief The blocking motions: driveTo, turnToAngle, moveToPoint, and so on.
+  Motion,
+  /// @brief The long-running correctHeading() loop.
+  HeadingCorrection,
+};
 
-/// @brief Ask the running motion routine to stop at its next loop boundary.
-void requestCancel();
+/// @brief True when routines of @p token have been asked to stop.
+bool cancelRequested(CancelToken token = CancelToken::Motion);
 
-/// @brief Clear the cancel flag. Call before starting a new motion routine.
-void clearCancel();
+/// @brief Ask routines of @p token to stop at their next loop boundary.
+void requestCancel(CancelToken token = CancelToken::Motion);
+
+/// @brief Clear @p token's flag. Call before starting a new routine.
+void clearCancel(CancelToken token = CancelToken::Motion);
 
 }  // namespace control
 }  // namespace mclib

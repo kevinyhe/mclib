@@ -43,6 +43,9 @@ OdometrySample sampleOdometrySensors() {
   sample.left_deg = getLeftRotationDegree();
   sample.right_deg = getRightRotationDegree();
   sample.vertical_deg = vertical_tracker.getPositionDeg();
+  // There is no horizontal tracking wheel in config.cpp, so there is nothing
+  // to read. startOdometry() refuses a config that claims one rather than
+  // letting Odometry integrate this hardcoded zero against a real offset.
   sample.horizontal_deg = 0.0;
   return sample;
 }
@@ -55,7 +58,17 @@ bool startOdometry(const OdometryConfig& config, QTime period) {
     return false;
   }
 
-  setOdometryConfig(config);
+  OdometryConfig effective = config;
+  if (effective.use_horizontal_tracker) {
+    // sampleOdometrySensors() has no horizontal sensor to read. Honouring the
+    // flag would feed a constant zero reading into
+    //   dx_body = 0 - dtheta * horizontal_offset_forward
+    // which invents a sideways displacement on every turn - an in-place pivot
+    // would walk the pose. Drop the flag instead of integrating a lie. Drive
+    // odometryTick() yourself if you have wired a horizontal wheel up.
+    effective.use_horizontal_tracker = false;
+  }
+  setOdometryConfig(effective);
   // Drop any encoder baseline left over from a previous run. Without this, a
   // stop, some driving, and a restart would fold the whole gap into one tick.
   resetOdometry(robotState().pose());

@@ -153,6 +153,7 @@ void testPoseReadsCannotTear() {
 
 void testCancelFlag() {
   std::printf("-- cooperative cancel flag\n");
+  using mclib::control::CancelToken;
   mclib::control::clearCancel();
   CHECK(mclib::control::cancelRequested() == false);
   mclib::control::requestCancel();
@@ -166,6 +167,32 @@ void testCancelFlag() {
 
   mclib::control::clearCancel();
   CHECK(mclib::control::cancelRequested() == false);
+
+  // The two tokens are independent. correctHeading() is built to run alongside
+  // a motion, so cancelling a motion must not take the heading hold down with
+  // it -- one shared flag would have killed it silently on the first
+  // interrupted move and nothing would have restarted it.
+  std::printf("-- Motion and HeadingCorrection cancel independently\n");
+  mclib::control::clearCancel(CancelToken::Motion);
+  mclib::control::clearCancel(CancelToken::HeadingCorrection);
+
+  mclib::control::requestCancel(CancelToken::Motion);
+  CHECK(mclib::control::cancelRequested(CancelToken::Motion) == true);
+  CHECK(mclib::control::cancelRequested(CancelToken::HeadingCorrection) == false);
+
+  mclib::control::requestCancel(CancelToken::HeadingCorrection);
+  mclib::control::clearCancel(CancelToken::Motion);
+  CHECK(mclib::control::cancelRequested(CancelToken::Motion) == false);
+  CHECK(mclib::control::cancelRequested(CancelToken::HeadingCorrection) == true);
+
+  mclib::control::clearCancel(CancelToken::HeadingCorrection);
+  CHECK(mclib::control::cancelRequested(CancelToken::HeadingCorrection) == false);
+
+  // Motion is the default, so the old single-argument spelling still means
+  // the motion routines.
+  mclib::control::requestCancel();
+  CHECK(mclib::control::cancelRequested(CancelToken::Motion) == true);
+  mclib::control::clearCancel();
 }
 
 }  // namespace

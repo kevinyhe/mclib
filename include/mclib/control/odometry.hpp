@@ -182,6 +182,13 @@ class Odometry {
    * reading is not finite is skipped whole - the baseline is left alone, so
    * the distance covered during the dropout is integrated against the next
    * good heading rather than lost or turned into NaN.
+   *
+   * @note That catch-up is a single arc, and the heading delta across it is
+   * wrapped into [-pi, pi]. A dropout long enough for the robot to turn more
+   * than 180 degrees is therefore recorded as the short way round, in the
+   * wrong direction. At a 10 ms tick that needs a fault lasting most of a
+   * second while the robot is spinning; `faultCount()` is there so a caller
+   * that cares can notice and re-seed.
    */
   Pose2D update(const OdometrySample& sample);
 
