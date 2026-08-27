@@ -61,10 +61,17 @@ HOST_CXXFLAGS?=-std=$(CXX_STANDARD) -I$(INCDIR) -I$(TESTDIR) -Wall -Wextra -g -O
 
 # Library sources that compile without PROS headers, linked into every test.
 # Expected to grow as more of src/ is made PROS-free.
+#
+# tests/support/ holds host-only stand-ins for the PROS-backed parts of the
+# library - currently just systemMillis(). It is not globbed into TEST_SRCS
+# because `make test` only globs tests/*.cpp, so nothing in there is mistaken
+# for a test.
 HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
 	$(SRCDIR)/mclib/control/scaling.cpp \
-	$(SRCDIR)/mclib/control/state.cpp
+	$(SRCDIR)/mclib/control/state.cpp \
+	$(SRCDIR)/mclib/pid.cpp \
+	$(TESTDIR)/support/host_time.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on
 # success. No registration, no framework.
