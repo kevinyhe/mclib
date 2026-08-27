@@ -25,6 +25,7 @@
 #include "mclib/mechanism/mechanism.hpp"
 #include "mclib/mechanism/motor_state_mechanism.hpp"
 #include "mclib/mechanism/motor_subsystem.hpp"
+#include "mclib/mechanism/multi_position_mechanism.hpp"
 #include "mclib/mechanism/pneumatic_subsystem.hpp"
 #include "mclib/mechanism/position_mechanism.hpp"
 #include "mclib/mechanism/velocity_mechanism.hpp"
