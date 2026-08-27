@@ -1,7 +1,7 @@
 // mclib
 #include "mclib/pid.hpp"
 
-#include "api.h"
+#include "mclib/time.hpp"
 #include "mclib/utils.hpp"
 
 #include <cmath>
@@ -94,8 +94,8 @@ double PID::update(double input)
         first_time = false;
         previous_error = current_error;
         sum_error = 0;
-        small_check_time = pros::millis();
-        big_check_time = pros::millis();
+        small_check_time = mclib::time::millis();
+        big_check_time = mclib::time::millis();
     }
 
     proportional = kp * current_error;
@@ -127,26 +127,26 @@ double PID::update(double input)
     // arrival detection thresholds.
     if (arrive && fabs(current_error) <= small_error_tolerance && fabs(error_delta) <= derivative_tolerance)
     {
-        if (pros::millis() - small_check_time >= small_error_duration)
+        if (mclib::time::millis() - small_check_time >= small_error_duration)
         {
             arrived = true;
         }
     }
     else
     {
-        small_check_time = pros::millis();
+        small_check_time = mclib::time::millis();
     }
 
     if (arrive && fabs(current_error) <= big_error_tolerance && fabs(error_delta) <= derivative_tolerance)
     {
-        if (pros::millis() - big_check_time >= big_error_duration)
+        if (mclib::time::millis() - big_check_time >= big_error_duration)
         {
             arrived = true;
         }
     }
     else
     {
-        big_check_time = pros::millis();
+        big_check_time = mclib::time::millis();
     }
 
     // Arrival still latches either way. hold_output only decides whether the

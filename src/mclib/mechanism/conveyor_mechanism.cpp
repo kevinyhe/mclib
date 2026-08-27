@@ -1,7 +1,7 @@
 // mclib
 #include "mclib/mechanism/conveyor_mechanism.hpp"
 
-#include "pros/rtos.hpp"
+#include "mclib/time.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -69,7 +69,7 @@ std::unique_ptr<Command> ConveyorMechanism::makeIndexCommand(double timeout_ms) 
   return std::make_unique<FunctionalCommand>(
       [this, start_time]() {
         beginIndex();
-        *start_time = static_cast<double>(pros::millis());
+        *start_time = static_cast<double>(mclib::time::millis());
       },
       []() {},
       [this](bool) {
@@ -87,13 +87,13 @@ std::unique_ptr<Command> ConveyorMechanism::makeIndexCommand(double timeout_ms) 
           return true;
         }
         return timeout_ms > 0.0 &&
-               static_cast<double>(pros::millis()) - *start_time >= timeout_ms;
+               static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
       },
       std::initializer_list<Subsystem*>{this});
 }
 
 void ConveyorMechanism::applyState(const ConveyorState& state) {
-  const double now = static_cast<double>(pros::millis());
+  const double now = static_cast<double>(mclib::time::millis());
 
   m_object_present = m_sensor_gate ? m_sensor_gate() : false;
   if (state == ConveyorState::IndexToSensor && m_object_present) {

@@ -1604,3 +1604,72 @@ report state; `reset()` clears everything but the armed flag.
 `AutoTriggerMechanism` is neither copyable nor movable: the condition and action
 callbacks routinely capture `this`, and moving the object would leave them
 pointing at the old address.
+
+## Time (`mclib/time.hpp`)
+
+`mclib::time::millis()` returns milliseconds since the program started, exactly
+like `pros::millis()` does, and `mclib::time::now()` returns the same value as a
+`QTime`.
+
+```cpp
+#include "mclib/time.hpp"
+
+const std::uint32_t t = mclib::time::millis();  // raw milliseconds
+const QTime now = mclib::time::now();           // same value as a QTime
+```
+
+`time.hpp` includes no PROS header. `src/mclib/time.cpp` is the single
+translation unit in the library that reads `pros::millis()`, through the
+out-of-line function `mclib::time::systemMillis()`. That is what `millis()`
+calls when no clock has been installed, so the clock is live from the first
+static constructor onwards - there is no initialisation order to get wrong -
+and every caller's undefined reference to it forces the linker to pull
+`time.cpp.o` out of `mclib.a`.
+
+### Converted so far
+
+`pid.cpp`, `chassis_controller.cpp`, `mechanism.hpp`, `preset_position_mechanism.hpp`,
+`waitCommand.h` and the mechanism sources (`auto_trigger`, `conveyor`, `homing`,
+`position`, `pto`, `toggle_group`, `velocity`) all read time through the seam.
+`control/motion.cpp`, `control/odometry.cpp` and `auton/autonomous_routine.cpp`
+still call `pros::millis()` and `pros::delay()` directly; they are Phase 3 work.
+Until then a fake clock does not affect those loops, so do not mix a
+`ScopedClock` with a routine that drives them.
+
+### Host tests
+
+Because the seam is a function pointer, a host test can install its own clock,
+step it by hand, and check timing behaviour without a robot or the PROS
+toolchain. A host build does not link `time.cpp`, so it supplies its own
+`systemMillis()` - one line, used only before a fake clock is installed:
+
+```cpp
+namespace mclib {
+namespace time {
+std::uint32_t systemMillis() { return 0; }
+}  // namespace time
+}  // namespace mclib
+
+static std::uint32_t fake_ms = 0;
+
+{
+  mclib::time::ScopedClock clock([]() { return fake_ms; });
+
+  PID pid(1.0, 0.0, 0.0);
+  pid.setTarget(10.0);
+  for (int tick = 0; tick < 6; ++tick) {
+    fake_ms = tick * 20;
+    pid.update(10.0);
+  }
+  // small settle window is 100 ms, so arrival latches on the tick at t = 100 ms
+  assert(pid.targetArrived());
+}
+// ScopedClock put the previous clock back here
+```
+
+`setClock()` installs a clock and returns the previous one, `getClock()` reports
+it, and `restoreSystemClock()` goes back to the platform clock. `ScopedClock`
+does the save/restore for you.
+
+`src/mclib/pid.cpp` compiles and links with no PROS headers reachable at all,
+which is what makes host-side testing of the control code possible.

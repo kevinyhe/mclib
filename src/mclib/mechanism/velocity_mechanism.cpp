@@ -1,7 +1,7 @@
 // mclib
 #include "mclib/mechanism/velocity_mechanism.hpp"
 
-#include "pros/rtos.hpp"
+#include "mclib/time.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -97,14 +97,14 @@ std::unique_ptr<Command> VelocityMechanism::makeSpinUpCommand(
   return std::make_unique<FunctionalCommand>(
       [this, rpm, start_time]() {
         setTargetRpm(rpm);
-        *start_time = static_cast<double>(pros::millis());
+        *start_time = static_cast<double>(mclib::time::millis());
       },
       [this, rpm]() { setTargetRpm(rpm); },
       [](bool) {},
       [this, start_time, timeout_ms]() {
         const bool timed_out =
             timeout_ms > 0.0 &&
-            static_cast<double>(pros::millis()) - *start_time >= timeout_ms;
+            static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
         return atSpeed() || timed_out;
       },
       std::initializer_list<Subsystem*>{this});
@@ -183,7 +183,7 @@ void VelocityMechanism::updateAtSpeed(double error_rpm, double target_rpm) {
     return;
   }
 
-  const double now_ms = static_cast<double>(pros::millis());
+  const double now_ms = static_cast<double>(mclib::time::millis());
   if (!m_in_tolerance) {
     m_in_tolerance = true;
     m_in_tolerance_since_ms = now_ms;

@@ -1,7 +1,7 @@
 // mclib
 #include "mclib/mechanism/toggle_group_mechanism.hpp"
 
-#include "pros/rtos.hpp"
+#include "mclib/time.hpp"
 
 #include <algorithm>
 #include <initializer_list>
@@ -145,12 +145,12 @@ std::unique_ptr<Command> ToggleGroupMechanism::makeSetForCommand(
   return std::make_unique<FunctionalCommand>(
       [this, index, extended, start_time]() {
         set(index, extended);
-        *start_time = pros::millis() * millisecond;
+        *start_time = mclib::time::now();
       },
       [this, index, extended]() { set(index, extended); },
       [](bool) {},
       [start_time, duration]() {
-        return pros::millis() * millisecond - *start_time >= duration;
+        return mclib::time::now() - *start_time >= duration;
       },
       std::initializer_list<Subsystem*>{this});
 }
@@ -161,12 +161,12 @@ std::unique_ptr<Command> ToggleGroupMechanism::makeSetAllForCommand(
   return std::make_unique<FunctionalCommand>(
       [this, extended, start_time]() {
         setAll(extended);
-        *start_time = pros::millis() * millisecond;
+        *start_time = mclib::time::now();
       },
       [this, extended]() { setAll(extended); },
       [](bool) {},
       [start_time, duration]() {
-        return pros::millis() * millisecond - *start_time >= duration;
+        return mclib::time::now() - *start_time >= duration;
       },
       std::initializer_list<Subsystem*>{this});
 }

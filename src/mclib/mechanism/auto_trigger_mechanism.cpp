@@ -1,7 +1,7 @@
 // mclib
 #include "mclib/mechanism/auto_trigger_mechanism.hpp"
 
-#include "pros/rtos.hpp"
+#include "mclib/time.hpp"
 
 #include <utility>
 
@@ -197,7 +197,7 @@ void AutoTriggerMechanism::clearEdgeTracking() {
 }
 
 double AutoTriggerMechanism::nowMs() {
-  return static_cast<double>(pros::millis());
+  return static_cast<double>(mclib::time::millis());
 }
 
 std::unique_ptr<Command> AutoTriggerMechanism::makeArmCommand() {
