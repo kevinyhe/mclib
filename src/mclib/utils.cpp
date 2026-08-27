@@ -2,6 +2,7 @@
 #include "mclib/utils.hpp"
 
 #include <cmath>
+#include <limits>
 
 double degToRad(double deg)
 {
@@ -15,12 +16,16 @@ double radToDeg(double rad)
 
 double getRadius(double x, double y, double x1, double y1, double angle)
 {
-    double delta_x = x1 - x;
-    double delta_y = y1 - y;
-    double denominator = 2 * delta_y * sin(degToRad(90 - angle));
-    if (denominator == 0)
+    const double delta_x = x1 - x;
+    const double delta_y = y1 - y;
+    const double denominator = 2.0 * delta_y * std::sin(degToRad(90.0 - angle));
+    if (denominator == 0.0)
     {
-        return 999;
+        // Degenerate: delta_y == 0, or the heading is exactly +/-90 deg.
+        // No finite value is meaningful here, and the old magic 999 silently
+        // became a finite speed limit downstream. See the header warning --
+        // this formula is frame-buggy; mclib::arcRadius() is the correct one.
+        return std::numeric_limits<double>::infinity();
     }
     return (delta_x * delta_x + delta_y * delta_y) / denominator;
 }
