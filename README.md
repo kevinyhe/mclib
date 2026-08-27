@@ -1095,3 +1095,91 @@ inherited `setState()` and the generic `makeState*Command()` factories are
 hidden, because they take a `std::vector<bool>` of any length and caching a
 short one would make the trailing channels unreachable and latch their
 actuators wherever they happened to be. Use `setAll()` and the factories above.
+## `DiscreteActuatorMechanism`
+
+`ToggleMechanism` drives one boolean actuator. `MultiPositionMechanism` maps a
+state to one number. Neither covers several solenoids whose combined pattern
+encodes a handful of named positions. `DiscreteActuatorMechanism<StateT>` owns
+that decode table and pushes the pattern of the current state into a bank of
+injected actuators every tick.
+
+```cpp
+enum class Tilt { Flat, Angled, Steep };
+
+// Two cylinders, three named angles. The table is the only source of truth:
+// to add an angle, add a row. There is no if/else chain anywhere.
+mclib::mechanism::DiscreteActuatorMechanism<Tilt> tilt(
+    Tilt::Flat,
+    {{Tilt::Flat,   {false, false}},
+     {Tilt::Angled, {true,  false}},
+     {Tilt::Steep,  {true,  true}}},
+    std::vector<std::shared_ptr<mclib::device::Pneumatic>>{front, back});
+
+void initialize() {
+  tilt.setName("tilt");
+  // MUST be idleCommand(). Every factory below finishes after one tick, which
+  // releases the requirement and lets the scheduler reschedule the default
+  // immediately. A default that commanded a state would drag the cylinders
+  // back one tick after every button press. periodic() keeps re-applying the
+  // cached state, so the cylinders stay where the last command put them.
+  tilt.setDefaultCommand(tilt.idleCommand());
+  tilt.registerSelf();
+}
+```
+
+Table values are logical: `true` means extended. `device::Pneumatic` maps
+`raw = (logical == extended_state)` itself, so a backwards-wired cylinder gets
+`extended_state = false` at the device and the table stays readable. The
+`inverted` flag in `DiscreteActuatorMechanismConfig` is for raw
+`std::function<void(bool)>` actuators only; using it with a `Pneumatic` inverts
+twice.
+
+Stepping follows the same convention as `MultiPositionMechanism`:
+
+- `next()` and `previous()` clamp. At the last row `next()` does nothing.
+- `cycle()` wraps. From the last row it goes back to the first.
+
+Commands, all terminating: `makeDiscreteStateCommand(state)`,
+`makeNextCommand()`, `makePreviousCommand()`, `makeCycleCommand()`, and
+`makeDiscreteStateForCommand(state, 500 * millisecond)` which holds a state for
+a duration then finishes and stays there.
+
+```cpp
+// Triggers take a raw pointer, so keep the commands alive yourself.
+std::unique_ptr<Command> tilt_cycle;
+std::unique_ptr<Command> tilt_flat;
+
+void initialize() {
+  tilt_cycle = tilt.makeCycleCommand();
+  tilt_flat = tilt.makeDiscreteStateCommand(Tilt::Flat);
+
+  primary.getTrigger(mclib::device::DigitalButton::R1)
+      ->onTrue(tilt_cycle.get());
+  primary.getTrigger(mclib::device::DigitalButton::A)
+      ->onTrue(tilt_flat.get());
+}
+```
+
+Nothing here can drive a half-decoded combination. Rows whose width does not
+match the actuator count are dropped at construction, so every surviving row
+applies whole. A state that is not in the table is undecodable:
+`applyState()` writes nothing for it and the actuators hold the last pattern
+they were given, `setDiscreteState()` refuses to move to it, and the inherited
+`setState()` / `makeStateCommand()` are private so no command can latch a state
+that can never be applied. Only the initial state can be undecodable, and the
+first `next()`, `previous()`, or `cycle()` resyncs to row 0.
+
+Dropping is silent, so one mistyped row turns into a button that does nothing.
+`droppedRowCount()` reports how many rows were thrown away; check it once at
+startup if a position looks dead.
+
+`makeDiscreteStateForCommand` is the only mutator that does not write the
+actuators itself: it caches the state and lets `periodic()` push it, the same
+as `ToggleMechanism::makeSetForCommand`. That costs one tick normally, and
+costs everything while the subsystem is disabled, since `periodic()` is then
+skipped entirely.
+
+Accessors: `stateCount()`, `actuatorCount()`, `droppedRowCount()`, `empty()`, `indexOf(state)`,
+`currentIndex()`, `stateAt(index)`, `isDecodable(state)`,
+`combinationFor(state)`, `currentCombination()`, `rawValue(index, value)`.
+`StateT` only needs `operator==`, so a scoped enum works.
