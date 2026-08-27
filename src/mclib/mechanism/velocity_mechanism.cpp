@@ -18,6 +18,17 @@ VelocityMechanism::VelocityMechanism(VelocitySource velocity_source,
       m_velocity_source(std::move(velocity_source)),
       m_voltage_sink(std::move(voltage_sink)),
       m_pid(config.kp, config.ki, config.kd) {
+  // A ratio of 0 would divide by zero converting an output target into a motor
+  // target, and a negative one would flip the sign of the loop so it drove away
+  // from the target. An infinite one divides every target down to 0, so the
+  // mechanism would sit still and the integral gate would quietly switch off.
+  // None of those is ever what the caller meant, so fall back to the ungeared
+  // 1.0 and store that, keeping getConfig().ratio honest about what is actually
+  // running. The > 0.0 test also rejects NaN.
+  if (!(std::isfinite(m_config.ratio) && m_config.ratio > 0.0)) {
+    m_config.ratio = 1.0;
+  }
+
   // PID zeroes its own output once it decides it has "arrived" at the target.
   // That is right for a position move and wrong for a velocity loop: dropping
   // the output to 0 V would immediately let the mechanism coast back down.
@@ -28,7 +39,11 @@ VelocityMechanism::VelocityMechanism(VelocitySource velocity_source,
   // ungated integral would saturate and then overshoot badly once the speed
   // arrives. Only accumulate inside integral_range_rpm of the target, and cap
   // the term's contribution in volts.
-  m_pid.setIntegralRange(m_config.integral_range_rpm);
+  //
+  // integral_range_rpm is quoted in output RPM like the rest of the public API,
+  // but the PID sees motor-RPM error, so convert. 0 stays 0 and keeps meaning
+  // "no gate".
+  m_pid.setIntegralRange(m_config.integral_range_rpm / m_config.ratio);
   m_pid.setIntegralMax(m_config.integral_max_volts);
 
   // PID also throws the integral away whenever |error| drops below its small
@@ -48,8 +63,12 @@ double VelocityMechanism::getTargetRpm() const {
   return getState();
 }
 
-double VelocityMechanism::getCurrentRpm() const {
+double VelocityMechanism::getCurrentMotorRpm() const {
   return m_velocity_source ? m_velocity_source() : 0.0;
+}
+
+double VelocityMechanism::getCurrentRpm() const {
+  return getCurrentMotorRpm() * m_config.ratio;
 }
 
 bool VelocityMechanism::atSpeed() const {
@@ -98,7 +117,10 @@ std::unique_ptr<Command> VelocityMechanism::makeStopCommand() {
 }
 
 void VelocityMechanism::applyState(const double& target_rpm) {
-  const double current_rpm = getCurrentRpm();
+  // target_rpm is the state, so it is output RPM. Settling is judged in that
+  // same space, which is what the user quoted tolerance_rpm in.
+  const double current_motor_rpm = getCurrentMotorRpm();
+  const double current_rpm = current_motor_rpm * m_config.ratio;
   updateAtSpeed(target_rpm - current_rpm, target_rpm);
 
   if (!m_voltage_sink) {
@@ -115,9 +137,14 @@ void VelocityMechanism::applyState(const double& target_rpm) {
     return;
   }
 
-  m_pid.setTarget(target_rpm);
-  const double correction = m_pid.update(current_rpm);
-  const double feedforward = m_config.kv * target_rpm;
+  // The loop itself runs in motor RPM: that is the space the velocity source
+  // reports in and the space kp/ki/kd/kv are tuned in. ratio > 0 is guaranteed
+  // by the constructor, so the sign of the motor target matches the sign of the
+  // output target and the clamp below still points the right way.
+  const double target_motor_rpm = target_rpm / m_config.ratio;
+  m_pid.setTarget(target_motor_rpm);
+  const double correction = m_pid.update(current_motor_rpm);
+  const double feedforward = m_config.kv * target_motor_rpm;
   double output = feedforward + correction;
 
   // Clamp to the sign of the target for the same reason: the loop may only
@@ -133,7 +160,7 @@ void VelocityMechanism::applyState(const double& target_rpm) {
 
 void VelocityMechanism::onStateChanged(const double& target_rpm) {
   m_pid.reset();
-  m_pid.setTarget(target_rpm);
+  m_pid.setTarget(target_rpm / m_config.ratio);
   m_at_speed = false;
   m_in_tolerance = false;
   m_in_tolerance_since_ms = 0.0;
@@ -146,6 +173,10 @@ void VelocityMechanism::updateAtSpeed(double error_rpm, double target_rpm) {
     return;
   }
 
+  // error_rpm and tolerance_rpm are both output RPM. Comparing an output-space
+  // tolerance against a motor-space error is the bug this mechanism is built to
+  // avoid: at ratio 2.0 it would latch at twice the speed error the user asked
+  // for, and nothing would look wrong.
   if (std::fabs(error_rpm) > m_config.tolerance_rpm) {
     m_at_speed = false;
     m_in_tolerance = false;

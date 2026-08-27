@@ -496,7 +496,7 @@ any particular device.
 ml::device::MotorGroup motors({1, -2}, ml::device::Gearset::Blue);
 
 ml::mechanism::VelocityMechanismConfig config;
-config.kv = 12.0 / 600.0;  // volts per RPM, roughly max volts / free speed
+config.kv = 12.0 / 600.0;  // volts per motor RPM, max volts / motor free speed
 config.kp = 0.01;
 config.tolerance_rpm = 50.0;
 config.dwell_ms = 200.0;
@@ -513,10 +513,82 @@ spinner.isSpinningUp(); // target commanded, not there yet
 spinner.stop();         // coasts down
 ```
 
-Output is `kv * target_rpm` feedforward plus PID correction, clamped to the
-sign of the target so the mechanism is never driven backwards to brake. The
-integral only accumulates within `integral_range_rpm` of the target, which
-keeps it from winding up during spin-up.
+Output is a `kv * target` feedforward plus PID correction, clamped to the sign
+of the target so the mechanism is never driven backwards to brake. The integral
+only accumulates within `integral_range_rpm` of the target, which keeps it from
+winding up during spin-up.
+
+### Gear ratio
+
+`config.ratio` is the external gearing between the motor and the output shaft,
+written as **output RPM per motor RPM**:
+
+```
+output_rpm = motor_rpm * ratio
+motor_rpm  = output_rpm / ratio
+```
+
+Geared 1:2 for speed, so the output spins twice as fast as the motor, is
+`ratio = 2.0`. Geared 2:1 for torque is `ratio = 0.5`. The default `1.0` means
+the output *is* the motor shaft, and reproduces the ungeared behaviour exactly.
+
+Which RPM is which matters, so it is pinned down:
+
+| Quantity | Space |
+| --- | --- |
+| `setTargetRpm`, `getTargetRpm`, `getCurrentRpm` | output RPM |
+| `makeSpinCommand`, `makeSpinUpCommand` | output RPM |
+| `tolerance_rpm`, `integral_range_rpm` | output RPM |
+| the velocity source callback, `getCurrentMotorRpm()` | motor RPM |
+| `kp`, `ki`, `kd`, `kv` | volts per motor RPM |
+
+The rule: **everything you say to the mechanism is output RPM**, because the
+output speed is what you actually care about. The loop internally divides by
+`ratio` and runs in motor RPM, so the gains keep their natural "volts per motor
+RPM" meaning. For `kv` that means the number itself is unchanged by gearing - it
+is set by the motor's free speed. `kp`, `ki` and `kd` still want retuning when
+you change the gearing, because the load inertia reflected back to the motor
+scales with `ratio` squared; what does not change is the units they are in.
+
+A worked 1:2 example, with a blue-cartridge motor whose free speed is 600 motor
+RPM driving a wheel through 1:2. The config has to be handed to the constructor,
+so build the mechanism from it:
+
+```cpp
+ml::mechanism::VelocityMechanismConfig config;
+config.ratio = 2.0;              // wheel spins 2x the motor
+config.kv = 12.0 / 600.0;        // 0.02 V per motor RPM - unchanged by gearing
+config.kp = 0.02;
+config.tolerance_rpm = 10.0;     // 10 wheel RPM, i.e. 5 motor RPM
+config.integral_range_rpm = 100.0;  // 100 wheel RPM, i.e. 50 motor RPM
+
+ml::mechanism::VelocityMechanism spinner(
+    [&motors] { return motors.getAverageActualVelocity(); },
+    [&motors](double volts) { motors.setVoltage(volts); },
+    config);
+
+spinner.setTargetRpm(600.0);     // 600 wheel RPM = 300 motor RPM
+```
+
+With the motor measured at 280 RPM, the wheel is at 560 RPM:
+
+- `getCurrentRpm()` returns `560.0`, `getCurrentMotorRpm()` returns `280.0`
+- the PID error is the motor-space `300 - 280 = 20`, so P contributes
+  `0.02 * 20 = 0.4 V`
+- the feedforward is `kv * 300 = 6.0 V`, not `kv * 600`
+- output is `6.4 V`
+
+`atSpeed()` is judged in output RPM too. At `ratio = 2.0` with
+`tolerance_rpm = 10.0`, a motor error of 6 RPM is a wheel error of 12 RPM and
+does **not** count as at speed, even though 6 is under 10. Applying the ratio to
+the target but not to the tolerance is the classic silent bug here; it is not
+done that way.
+
+`ratio` must be finite and greater than zero - zero would divide by zero, a
+negative value would invert the loop, and an infinite one would divide every
+target down to nothing. The constructor rejects anything else (NaN included) and
+falls back to `1.0`, and `getConfig().ratio` then reports the `1.0` actually in
+use.
 
 `applyState` runs from `periodic()`, so the mechanism has to be registered with
 the scheduler or nothing moves:
