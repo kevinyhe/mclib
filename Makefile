@@ -44,6 +44,7 @@ TEMPLATE_FILES=$(INCDIR)/mclib/*.hpp \
 	$(INCDIR)/mclib/control/*.hpp \
 	$(INCDIR)/mclib/device/*.hpp \
 	$(INCDIR)/mclib/mechanism/*.hpp \
+	$(INCDIR)/mclib/path/*.hpp \
 	$(INCDIR)/mclib/snapshot/*.hpp \
 	$(INCDIR)/mclib/telemetry/*.hpp \
 	$(INCDIR)/mclib/units/*.hpp
@@ -80,6 +81,9 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/control/profile.cpp \
 	$(SRCDIR)/mclib/control/feedforward.cpp \
 	$(SRCDIR)/mclib/pid.cpp \
+	$(SRCDIR)/mclib/path/path.cpp \
+	$(SRCDIR)/mclib/path/spline.cpp \
+	$(SRCDIR)/mclib/path/pure_pursuit.cpp \
 	$(TESTDIR)/support/host_time.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on

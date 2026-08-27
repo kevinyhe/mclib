@@ -39,6 +39,9 @@
 #include "mclib/mechanism/toggle_group_mechanism.hpp"
 #include "mclib/mechanism/toggle_mechanism.hpp"
 #include "mclib/mechanism/velocity_mechanism.hpp"
+#include "mclib/path/path.hpp"
+#include "mclib/path/pure_pursuit.hpp"
+#include "mclib/path/spline.hpp"
 #include "mclib/snapshot/snapshot_config.hpp"
 #include "mclib/telemetry/telemetry.hpp"
 
