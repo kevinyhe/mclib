@@ -187,6 +187,10 @@ public:
    * @param timeout Give up after this long. Not positive waits forever, which
    *   is what this used to do unconditionally; say so on purpose if you mean
    *   it. See kDefaultWaitUntilTimeout.
+   *
+   * @details Giving up advances to the next step, the same as the condition
+   * coming true. timedOutWaits() and a line on the terminal are what tell the
+   * two apart.
    */
   Routine& waitUntil(std::function<bool()> condition,
                      QTime timeout = kDefaultWaitUntilTimeout);
@@ -216,8 +220,11 @@ public:
    * @brief Mark the most recently added step must-run.
    *
    * @details Applies to the last step of any kind, so it reads the same after
-   * a `runOnce()` as after a motion: `.runOnce(...).mustRun()`. Does nothing
-   * on an empty routine.
+   * a `runOnce()` as after a motion: `.runOnce(...).mustRun()`. On a
+   * `trigger()` step it means something slightly different but consistent: the
+   * triggered command keeps running through the deadline instead of being
+   * cancelled with everything else - the intake the scoring step still needs.
+   * Does nothing on an empty routine.
    */
   Routine& mustRun(bool must_run = true);
 
@@ -238,6 +245,25 @@ public:
   bool budgetExpired() const;
   /// @brief Number of steps the deadline policy skipped. Zero until it fires.
   std::size_t skippedSteps() const;
+
+  /**
+   * @brief How many `waitUntil()` steps gave up instead of seeing their
+   *        condition come true.
+   *
+   * @details A wait that times out looks like a wait that succeeded - the
+   * routine moves on either way - so this is the only thing that tells them
+   * apart afterwards. Each one also prints a line to the terminal as it
+   * happens. Non-zero means a mechanism did not do what the routine assumed.
+   */
+  std::size_t timedOutWaits() const;
+
+  /**
+   * @brief The timeout step @p index was last built with.
+   *
+   * @details The step's own timeout, or the shorter one the budget clamped it
+   * to. Zero for a step that has none and for an index past the end.
+   */
+  QTime stepTimeout(std::size_t index) const;
 
   /**
    * @brief True when a motion was added with no chassis to run it on.
@@ -412,6 +438,8 @@ private:
     bool must_run = false;
     /// @brief This step is a trigger(), whose inner command outlives it.
     bool is_trigger = false;
+    /// @brief This step is a waitUntil(), which can end by giving up.
+    bool is_wait_until = false;
   };
 
   MotionStep addMotion(MotionFactory factory, QTime timeout);
@@ -432,8 +460,15 @@ private:
   std::size_t nextRunnableStep(std::size_t from) const;
   /// @brief Apply the deadline policy. Called once, when the budget runs out.
   void applyDeadlinePolicy();
-  /// @brief Cancel the fire-and-forget commands trigger() left running.
-  void cancelTriggeredCommands();
+  /**
+   * @brief Cancel the fire-and-forget commands trigger() left running.
+   * @param keep_must_run Leave the triggers marked mustRun() running.
+   */
+  void cancelTriggeredCommands(bool keep_must_run = false);
+  /// @brief Add the steps between the cursor and @p next to the skipped count.
+  void countSkipped(std::size_t next);
+  /// @brief Record and report a waitUntil() step that gave up.
+  void noteWaitTimeout(Command& command);
   static void mergeRequirements(std::vector<Subsystem*>& requirements,
                                 const std::vector<Subsystem*>& next);
 
@@ -445,6 +480,7 @@ private:
   /// @brief Set once applyDeadlinePolicy() has run, so it runs only once.
   bool m_deadline_applied = false;
   std::size_t m_skipped_steps = 0;
+  std::size_t m_timed_out_waits = 0;
   bool m_configuration_error = false;
 };
 

@@ -309,6 +309,7 @@ Routine& Routine::waitUntil(std::function<bool()> condition, QTime timeout) {
   add(std::make_unique<WaitUntilTimeoutCommand>(std::move(condition), timeout));
   if (!m_steps.empty()) {
     m_steps.back().timeout = timeout;
+    m_steps.back().is_wait_until = true;
   }
   return *this;
 }
@@ -373,6 +374,17 @@ bool Routine::budgetExpired() const {
 
 std::size_t Routine::skippedSteps() const {
   return m_skipped_steps;
+}
+
+std::size_t Routine::timedOutWaits() const {
+  return m_timed_out_waits;
+}
+
+QTime Routine::stepTimeout(std::size_t index) const {
+  if (index >= m_steps.size()) {
+    return QTime{};
+  }
+  return m_steps[index].options.timeout;
 }
 
 bool Routine::hasConfigurationError() const {
@@ -751,6 +763,7 @@ void Routine::clear() {
   m_budget.reset();
   m_deadline_applied = false;
   m_skipped_steps = 0;
+  m_timed_out_waits = 0;
   m_configuration_error = false;
 }
 
@@ -775,6 +788,7 @@ void Routine::initialize() {
   m_current_initialized = false;
   m_deadline_applied = false;
   m_skipped_steps = 0;
+  m_timed_out_waits = 0;
   m_budget.start();
   initializeCurrent();
 }
@@ -795,9 +809,9 @@ void Routine::execute() {
 
   // The must-run steps do not get to run forever either.
   if (m_deadline_applied && m_budget.graceExpired()) {
+    countSkipped(m_steps.size());
     stopCurrentStep();
     brakeDrive();
-    m_skipped_steps += m_steps.size() - m_index;
     m_index = m_steps.size();
     return;
   }
@@ -808,6 +822,7 @@ void Routine::execute() {
   command->execute();
 
   if (command->isFinished()) {
+    noteWaitTimeout(*command);
     command->end(false);
     m_current_initialized = false;
     advanceStep();
@@ -821,9 +836,16 @@ bool Routine::isFinished() {
 void Routine::end(bool interrupted) {
   if (interrupted && m_index < m_steps.size() && m_current_initialized) {
     m_steps[m_index].command->end(true);
-    cancelTriggeredCommands();
-    brakeDrive();
   }
+
+  // Both paths, not just the interrupted one. A routine whose last motion was
+  // written .withoutStop() told the chassis not to brake because another
+  // motion was going to carry on from it; when the routine ends there is no
+  // other motion, and the drive would otherwise hold its last PID voltage.
+  // The triggered commands have nothing left to run alongside either.
+  cancelTriggeredCommands();
+  brakeDrive();
+
   m_current_initialized = false;
 }
 
@@ -849,8 +871,15 @@ Routine::MotionStep Routine::addMotion(MotionFactory factory,
   Step step{};
   step.reserve_requirements = true;
   step.factory = std::move(factory);
-  step.options = options;
   step.timeout = timeout;
+  step.options = options;
+  // The factories read options.timeout, so the requested timeout has to land
+  // there and not only in step.timeout. Leaving it at the zero default built
+  // every motion with no time limit at all: motion.cpp's loops are
+  // `while (elapsed <= limit)`, so they ran one 10 ms tick and the robot never
+  // moved, while ChassisController reads zero as "no timeout" and hung.
+  // stepTimeoutFor() is the one place that answers this, here and at start.
+  step.options.timeout = stepTimeoutFor(step.timeout, m_budget);
   step.command = step.factory(step.options);
 
   m_steps.push_back(std::move(step));
@@ -899,8 +928,8 @@ void Routine::initializeCurrent() {
   // Clamp the step to what is left of the budget. Only motion steps can be
   // clamped, because only they have a factory to rebuild; a wait already ends
   // on its own timeout, and the deadline catches whatever is left.
-  if (m_budget.active() && step.factory) {
-    const QTime effective = clampStepTimeout(step.timeout, m_budget.remaining());
+  if (step.factory) {
+    const QTime effective = stepTimeoutFor(step.timeout, m_budget);
 
     if (effective != step.options.timeout) {
       step.options.timeout = effective;
@@ -945,12 +974,54 @@ void Routine::brakeDrive() {
   m_chassis->cancel();
 }
 
-void Routine::cancelTriggeredCommands() {
+void Routine::countSkipped(std::size_t next) {
+  if (next <= m_index) {
+    return;
+  }
+
+  // The step at m_index was running and is about to be interrupted. It ran, so
+  // it is not one of the steps that never got a chance.
+  const std::size_t ran = m_current_initialized ? 1 : 0;
+  m_skipped_steps += next - m_index - ran;
+}
+
+void Routine::noteWaitTimeout(Command& command) {
+  if (!m_steps[m_index].is_wait_until) {
+    return;
+  }
+
+  auto& wait = static_cast<WaitUntilTimeoutCommand&>(command);
+  if (!wait.timedOut()) {
+    return;
+  }
+
+  // A waitUntil that gives up looks exactly like one whose condition came
+  // true: the routine moves on either way. Saying so is the difference between
+  // "the lift was up" and "we drove off with the lift down".
+  ++m_timed_out_waits;
+  std::fprintf(stderr,
+               "mclib: Routine step %u waitUntil timed out after %.0f ms; "
+               "the condition never became true\n",
+               static_cast<unsigned>(m_index),
+               wait.timeout().ms());
+}
+
+void Routine::cancelTriggeredCommands(bool keep_must_run) {
   for (std::size_t index = 0; index < m_steps.size() && index <= m_index;
        ++index) {
-    if (m_steps[index].is_trigger && m_steps[index].command != nullptr) {
-      static_cast<TriggerCommand*>(m_steps[index].command.get())->cancelInner();
+    const Step& step = m_steps[index];
+
+    if (!step.is_trigger || step.command == nullptr) {
+      continue;
     }
+    // A trigger is what runs alongside the steps - the intake that the scoring
+    // step needs still spinning. `.trigger(intake.spin()).mustRun()` says keep
+    // it through the deadline; without that it stops with everything else.
+    if (keep_must_run && step.must_run) {
+      continue;
+    }
+
+    static_cast<TriggerCommand*>(step.command.get())->cancelInner();
   }
 }
 
@@ -996,19 +1067,19 @@ void Routine::applyDeadlinePolicy() {
                             m_budget.config().policy ==
                                 DeadlinePolicy::FinishMustRun;
 
-  cancelTriggeredCommands();
+  cancelTriggeredCommands(/*keep_must_run=*/true);
 
   if (keep_current) {
     return;
   }
 
+  const std::size_t next = nextRunnableStep(m_index);
+  countSkipped(next);
+
   stopCurrentStep();
   brakeDrive();
 
-  const std::size_t next = nextRunnableStep(m_index);
-  m_skipped_steps += next - m_index;
   m_index = next;
-
   initializeCurrent();
 }
 

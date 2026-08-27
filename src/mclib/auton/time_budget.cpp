@@ -87,6 +87,13 @@ QTime clampStepTimeout(QTime requested, QTime remaining, QTime floor) {
   return requested > least ? requested : least;
 }
 
+QTime stepTimeoutFor(QTime requested, const TimeBudget& budget) {
+  if (!budget.active()) {
+    return requested;
+  }
+  return clampStepTimeout(requested, budget.remaining());
+}
+
 std::size_t nextStepAfterDeadline(const std::vector<bool>& must_run,
                                   std::size_t from,
                                   DeadlinePolicy policy) {

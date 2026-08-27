@@ -28,6 +28,7 @@ using mclib::auton::clampStepTimeout;
 using mclib::auton::DeadlinePolicy;
 using mclib::auton::kMinStepTimeout;
 using mclib::auton::nextStepAfterDeadline;
+using mclib::auton::stepTimeoutFor;
 using mclib::auton::TimeBudget;
 using mclib::auton::TimeBudgetConfig;
 using mclib::auton::WaitUntilTimeoutCommand;
@@ -211,6 +212,41 @@ void testStepClamp() {
              1800.0, 1e-9);
 }
 
+/**
+ * @brief A routine with no budget hands every step its own timeout, untouched.
+ *
+ * This is the regression for a build where the requested timeout never reached
+ * the command: every motion came out with a timeout of zero. The loops in
+ * motion.cpp are `while (elapsed <= limit)`, so they ran one 10 ms tick and
+ * the robot did not move, while ChassisController reads zero as "no timeout"
+ * and hung instead. Nothing about it is a compile error, and a routine that
+ * never calls withTimeBudget() - which is every routine written so far - is
+ * exactly the case that broke.
+ */
+void testTimeoutWithoutBudget() {
+  g_ms = 0;
+  TimeBudget none;
+
+  CHECK(!none.active());
+  CHECK_NEAR(stepTimeoutFor(2000.0 * millisecond, none).ms(), 2000.0, 1e-9);
+  CHECK_NEAR(stepTimeoutFor(800.0 * millisecond, none).ms(), 800.0, 1e-9);
+  // A step written with no timeout keeps having none, rather than picking up
+  // the floor. Without a budget there is nothing to clamp against.
+  CHECK_NEAR(stepTimeoutFor(0.0 * millisecond, none).ms(), 0.0, 1e-9);
+
+  // A configured but never-started budget still clamps, against the full
+  // allowance: a step built before the routine runs cannot exceed it.
+  TimeBudget budget;
+  budget.configure(config(15000.0, 1500.0));
+  CHECK_NEAR(stepTimeoutFor(2000.0 * millisecond, budget).ms(), 2000.0, 1e-9);
+  CHECK_NEAR(stepTimeoutFor(20000.0 * millisecond, budget).ms(), 13500.0, 1e-9);
+
+  // Once it is running, the same request shortens as the time does.
+  budget.start();
+  g_ms = 13000;
+  CHECK_NEAR(stepTimeoutFor(2000.0 * millisecond, budget).ms(), 500.0, 1e-9);
+}
+
 /// @brief Which step runs next once the budget is gone.
 void testDeadlineSkip() {
   //            0      1      2      3      4
@@ -302,6 +338,7 @@ int main() {
   testGraceClampedToTotal();
   testReconfigureKeepsTheRun();
   testStepClamp();
+  testTimeoutWithoutBudget();
   testDeadlineSkip();
   testWaitUntilTimeout();
   testWaitUntilCondition();

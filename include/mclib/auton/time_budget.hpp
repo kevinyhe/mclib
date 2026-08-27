@@ -207,6 +207,21 @@ QTime clampStepTimeout(QTime requested,
                        QTime floor = kMinStepTimeout);
 
 /**
+ * @brief The timeout to build a step's command with, budget or no budget.
+ *
+ * The single answer to "what timeout does this step get", used both when the
+ * step is first built and again each time it starts. Without a budget that is
+ * the step's own number, unchanged - a routine that never called
+ * `withTimeBudget()` must behave exactly as it did before there was one, and a
+ * motion built with a zero timeout does not drive at all.
+ *
+ * @param requested The step's own timeout, as written in the routine.
+ * @param budget The routine's budget. Inactive means no clamping.
+ * @return @p requested when there is no budget, otherwise the clamped value.
+ */
+QTime stepTimeoutFor(QTime requested, const TimeBudget& budget);
+
+/**
  * @brief The next step to run once the budget has expired.
  *
  * @param must_run One flag per step, in order.
