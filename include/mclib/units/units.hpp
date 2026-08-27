@@ -331,7 +331,9 @@ using QAcceleration = Quantity<1, -2, 0, 0, 0>;
 using QJerk = Quantity<1, -3, 0, 0, 0>;
 using QAngularVelocity = Quantity<0, -1, 1, 0, 0>;
 using QAngularAcceleration = Quantity<0, -2, 1, 0, 0>;
-/// 1 / length - what a pure-pursuit or boomerang controller tracks.
+/// 1 / length - what a pure-pursuit or boomerang controller tracks. Note that
+/// `velocity * curvature` is a QFrequency, not a QAngularVelocity, because
+/// angle is a real dimension here; use turnRate() for that crossing.
 using QCurvature = Quantity<-1, 0, 0, 0, 0>;
 using QFrequency = Quantity<0, -1, 0, 0, 0>;
 
@@ -348,9 +350,13 @@ inline constexpr QLength centimetre = metre / 100.0;
 inline constexpr QLength centimeter = centimetre;
 inline constexpr QLength millimetre = metre / 1000.0;
 inline constexpr QLength millimeter = millimetre;
-// Written as exact base-unit values rather than `millimetre * 25.4` so that
-// `inch.in()` is exactly 1.0 and `(24_in).in()` is exactly 24.0. Going through
-// millimetre first costs a rounding step and leaves 24 in reading 23.999999999999996.
+// Spelled as the exact SI definition of the inch. This is the same double as
+// `millimetre * 25.4` - bit-identical, not merely close - so the form is a
+// readability choice, not a precision one.
+//
+// Do not expect exact decimal round-trips from any of these: `(24_in).in()` is
+// 23.999999999999996, because `24.0 * 0.0254` is not representable. Compare
+// lengths with a tolerance, never with `==`.
 inline constexpr QLength inch = QLength::fromBase(0.0254);
 inline constexpr QLength foot = QLength::fromBase(0.0254 * 12.0);
 /// One VEX field tile, 24 inches.
@@ -461,14 +467,22 @@ inline QAngle atan2(QLength y, QLength x) { return QAngle::fromBase(std::atan2(y
 inline QLength hypot(QLength x, QLength y) { return QLength::fromBase(std::hypot(x.raw(), y.raw())); }
 
 /**
- * @brief Wrap an angle into (-180 deg, +180 deg].
+ * @brief Wrap an angle into [-180 deg, +180 deg].
+ *
+ * Deliberately the same algorithm, and the same closed range, as the
+ * pre-existing `mclib::wrapAngle(double)` in math.hpp - including at exactly
+ * -180 deg, which both leave at -180 rather than folding to +180. Two wrapping
+ * functions that disagreed on that edge would be a trap for motion code
+ * migrating from double to QAngle.
  */
 inline QAngle wrap(QAngle angle) {
-  double value = std::fmod(angle.raw() + pi, 2.0 * pi);
-  if (value <= 0.0) {
-    value += 2.0 * pi;
+  double wrapped = std::fmod(angle.raw(), 2.0 * pi);
+  if (wrapped > pi) {
+    wrapped -= 2.0 * pi;
+  } else if (wrapped < -pi) {
+    wrapped += 2.0 * pi;
   }
-  return QAngle::fromBase(value - pi);
+  return QAngle::fromBase(wrapped);
 }
 
 /**
@@ -490,6 +504,24 @@ constexpr QAngle arcAngle(QLength arc, QLength radius) {
 /// @brief Linear speed at the rim of a wheel of radius @p radius.
 constexpr QVelocity rimVelocity(QLength radius, QAngularVelocity omega) {
   return QVelocity::fromBase(radius.raw() * omega.raw());
+}
+
+/**
+ * @brief Angular velocity of a body moving at @p speed along a path of
+ *        curvature @p curvature.
+ *
+ * The third sanctioned angle-length crossing, alongside arcLength() and
+ * rimVelocity(). `speed * curvature` on its own is a QFrequency - correct
+ * arithmetic, wrong dimension - so pure-pursuit and boomerang controllers go
+ * through here to get a QAngularVelocity out.
+ */
+constexpr QAngularVelocity turnRate(QVelocity speed, QCurvature curvature) {
+  return QAngularVelocity::fromBase(speed.raw() * curvature.raw());
+}
+
+/// @brief Curvature of a turn holding @p omega at @p speed; inverse of turnRate().
+constexpr QCurvature turnCurvature(QVelocity speed, QAngularVelocity omega) {
+  return QCurvature::fromBase(omega.raw() / speed.raw());
 }
 
 // ---------------------------------------------------------------------------
@@ -543,16 +575,36 @@ MCLIB_UNIT_LITERAL(rpm, rpm);
 // ---------------------------------------------------------------------------
 // Global back-compat surface
 //
-// QTime, millisecond and second lived in the global namespace before this file
-// grew a type system, and roughly fifteen call sites across the mechanism,
-// command and auton headers spell `pros::millis() * millisecond` unqualified.
-// Those names stay global, and there is deliberately no opt-out macro: mclib's
-// own headers depend on these aliases, so making them conditional would just
-// mean the library stops compiling. `Quantity` itself is *not* exported - it is
-// a common enough identifier that a downstream global `class Quantity` would
-// become ambiguous - so spell it `mclib::units::Quantity` when you need the
-// template by name.
+// Split into two halves, because they carry different obligations.
+//
+// The first half is load-bearing and unconditional: QTime, millisecond and
+// second lived in the global namespace before this file grew a type system, and
+// mclib's own headers - command.h, mechanism.hpp, waitCommand.h,
+// pto_mechanism.hpp and the rest - spell them unqualified at ~33 sites. Making
+// these conditional would only mean the library stops compiling.
 // ---------------------------------------------------------------------------
+
+using mclib::units::QTime;
+
+using mclib::units::millisecond;
+using mclib::units::second;
+
+// ---------------------------------------------------------------------------
+// The second half is convenience, and it IS opt-out-able. These names are not
+// used unqualified anywhere inside mclib, so a project can switch them off.
+//
+// That matters because okapilib - the library most likely to sit beside mclib
+// in a PROS project - declares the same QLength / QAngle / QArea / QJerk /
+// QFrequency / QAcceleration names and the same _in / _ft / _deg / _rad / _ms /
+// _s / _rpm literal suffixes. A project doing `using namespace okapi;` would
+// otherwise get ambiguity on all of them. Define MCLIB_NO_GLOBAL_UNITS before
+// including mclib and reach for `mclib::units::` instead.
+//
+// `Quantity` itself is never exported: a downstream global `class Quantity`
+// would become ambiguous, so spell it `mclib::units::Quantity`.
+// ---------------------------------------------------------------------------
+
+#ifndef MCLIB_NO_GLOBAL_UNITS
 
 using mclib::units::QAcceleration;
 using mclib::units::QAngle;
@@ -565,11 +617,9 @@ using mclib::units::QFrequency;
 using mclib::units::QJerk;
 using mclib::units::QLength;
 using mclib::units::QNumber;
-using mclib::units::QTime;
 using mclib::units::QVelocity;
 using mclib::units::QVoltage;
 
-using mclib::units::millisecond;
-using mclib::units::second;
-
 using namespace mclib::units::literals;
+
+#endif  // MCLIB_NO_GLOBAL_UNITS

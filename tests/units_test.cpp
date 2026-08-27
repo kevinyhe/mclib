@@ -48,6 +48,12 @@ static_assert(std::is_same_v<decltype(abs(QTime{-1.0})), QTime>);
 static_assert(std::is_same_v<decltype(atan2(1_in, 1_in)), QAngle>);
 static_assert(std::is_same_v<decltype(arcLength(1_in, 1_rad)), QLength>);
 static_assert(std::is_same_v<decltype(rimVelocity(1_in, 1_rpm)), QVelocity>);
+static_assert(std::is_same_v<decltype(turnRate(1_inps, QCurvature{1.0})), QAngularVelocity>);
+static_assert(std::is_same_v<decltype(turnCurvature(1_inps, 1_radps)), QCurvature>);
+// The reason turnRate() has to exist: the bare product is a frequency, because
+// angle is a real dimension in this basis.
+static_assert(std::is_same_v<decltype(QVelocity{1.0} * QCurvature{1.0}), QFrequency>);
+static_assert(!std::is_same_v<decltype(QVelocity{1.0} * QCurvature{1.0}), QAngularVelocity>);
 
 // A Quantity must cost nothing over the double it wraps.
 static_assert(sizeof(QLength) == sizeof(double), "Quantity must be a bare double in memory");
@@ -201,11 +207,12 @@ int main() {
   checkNear(hypot(3_in, 4_in).in(), 5.0, 1e-12, "3-4-5 triangle");
   checkNear(wrap(270_deg).deg(), -90.0, 1e-12, "270 deg wraps to -90 deg");
   checkNear(wrap(-190_deg).deg(), 170.0, 1e-12, "-190 deg wraps to 170 deg");
-  // The interval is half-open at +180, so exactly +180 must not flip sign. Test
-  // the magnitude rather than the value: whether `180.0 * (pi/180.0)` lands on
-  // pi exactly or one ulp above decides between +180 and -180, and that is a
-  // toolchain detail, not a contract.
-  checkNear(std::fabs(wrap(180_deg).deg()), 180.0, 1e-12, "180 deg stays at the wrap boundary");
+  checkNear(wrap(180_deg).deg(), 180.0, 1e-12, "180 deg stays at +180");
+  // The range is closed at both ends and -180 stays negative, matching
+  // mclib::wrapAngle(). This is the edge the two used to disagree on.
+  checkNear(wrap(-180_deg).deg(), -180.0, 1e-12, "-180 deg stays at -180");
+  checkNear(wrap(360_deg).deg(), 0.0, 1e-12, "360 deg wraps to 0");
+  checkNear(wrap(-360_deg).deg(), 0.0, 1e-12, "-360 deg wraps to 0");
 
   // Angle-length crossings.
   checkNear(arcLength(2_in, 1_rad).in(), 2.0, 1e-12, "arc length at r=2 in, 1 rad");
@@ -213,6 +220,12 @@ int main() {
   // A 4 in wheel (2 in radius) at 600 rpm.
   checkNear(rimVelocity(2_in, 600_rpm).inps(), 2.0 * 600.0 * 2.0 * M_PI / 60.0, 1e-9,
             "rim speed of a 4 in wheel at 600 rpm");
+
+  // Curvature crossings: a 24 in radius turn at 12 in/s is 0.5 rad/s.
+  const QCurvature curvature = 1.0 / 24_in;
+  checkNear(turnRate(12_inps, curvature).radps(), 0.5, 1e-12, "turn rate at r=24 in, v=12 in/s");
+  checkNear(turnCurvature(12_inps, turnRate(12_inps, curvature)).raw(), curvature.raw(), 1e-15,
+            "turnCurvature inverts turnRate");
 
   // Ordering, min/max/clamp/abs/sign.
   check(1_in < 1_ft, "an inch is shorter than a foot");

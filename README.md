@@ -407,6 +407,10 @@ A `Quantity` is the same size as the `double` it replaces, all its operations
 are `constexpr` and `inline`, and none of it survives to the ELF - the section
 sizes of `bin/cold.package.elf` are unchanged by the migration.
 
+It is still floating point underneath, so do not expect exact decimal
+round-trips: `(24_in).in()` is `23.999999999999996`, because `24.0 * 0.0254` is
+not representable. Compare with a tolerance, never with `==`.
+
 ### Aliases
 
 `QNumber`, `QLength`, `QArea`, `QTime`, `QAngle`, `QVoltage`, `QCurrent`,
@@ -424,10 +428,19 @@ resistance, `square(QLength{}) ` is an area.
 `_V` `_mV` `_A` `_mA` - voltage and current
 `_mps` `_inps` `_mps2` `_radps` `_degps` `_rpm` - rates
 
-Named constants exist for all of them too: `metre`, `inch`, `tile`,
-`millisecond`, `second`, `minute`, `degree`, `radian`, `rotation`, `volt`,
-`millivolt`, `ampere`, `milliampere`, `rpm`, `percent`. Use them when the number
-is not a literal: `250 * millisecond`, `pros::millis() * millisecond`.
+Named constants exist for all of them too, for when the number is not a
+literal: `metre`, `inch`, `tile`, `minute`, `degree`, `radian`, `rotation`,
+`volt`, `millivolt`, `ampere`, `milliampere`, `rpm`, `percent`. These live in
+`mclib::units` and are **not** global, so qualify them or pull the namespace in:
+
+```cpp
+using namespace mclib::units;
+QLength target = 24 * inch;
+```
+
+The two exceptions are `millisecond` and `second`, which are global for
+back-compat — `250 * millisecond` and `pros::millis() * millisecond` work
+unqualified anywhere.
 
 ### Getting a raw double back out
 
@@ -462,9 +475,17 @@ degrees and `Pose2D::theta` speaks radians; making the conversion a method call
 QLength arc     = arcLength(radius, angle);      // radius * angle
 QAngle  swept   = arcAngle(arc, radius);         // the inverse
 QVelocity rim   = rimVelocity(radius, omega);    // radius * angular velocity
+QAngularVelocity turn = turnRate(speed, curvature);   // speed * curvature
+QCurvature k    = turnCurvature(speed, omega);        // the inverse
 ```
 
-`wrap(angle)` folds an angle into (-180 deg, +180 deg].
+`turnRate` is the one pure pursuit needs: `speed * curvature` on its own is a
+`QFrequency` — right arithmetic, wrong dimension.
+
+`wrap(angle)` folds an angle into [-180 deg, +180 deg], using the same algorithm
+and the same closed range as the pre-existing `mclib::wrapAngle(double)`,
+including at exactly -180 deg. Two wrapping functions that disagreed on that
+edge would be a trap for motion code migrating from `double` to `QAngle`.
 
 ### Math helpers
 
@@ -485,10 +506,20 @@ QTime now = pros::millis() * millisecond;
 if (now - start >= 250 * millisecond) { /* ... */ }
 ```
 
-There is no opt-out macro: mclib's own headers use those unqualified names, so
-making them conditional would only mean the library stops compiling. The
-`Quantity` template itself is *not* exported globally - spell it
-`mclib::units::Quantity` - because a downstream global `class Quantity` would
+The global surface is split in two. `QTime`, `millisecond` and `second` are
+unconditional, because mclib's own headers use them unqualified at ~33 sites —
+making those conditional would only mean the library stops compiling. Everything
+else — the other 13 aliases and all the literal suffixes — is convenience, and
+defining `MCLIB_NO_GLOBAL_UNITS` before including mclib switches it off.
+
+That opt-out exists for a specific collision: okapilib declares the same
+`QLength` / `QAngle` / `QArea` / `QJerk` / `QFrequency` / `QAcceleration` names
+and the same `_in` / `_ft` / `_deg` / `_rad` / `_ms` / `_s` / `_rpm` suffixes, so
+a project doing `using namespace okapi;` alongside mclib would get ambiguity on
+all of them. With the macro defined, reach for `mclib::units::` instead.
+
+The `Quantity` template itself is never exported globally — spell it
+`mclib::units::Quantity` — because a downstream global `class Quantity` would
 otherwise become ambiguous.
 
 One deliberate hole in the type safety: `QNumber` (all exponents zero) converts
@@ -1131,7 +1162,8 @@ zero brakes rather than coasts, so a raised lift stays put. `isShiftSettled()` a
 
 The owning side is expected to write every tick. If it stops for longer than
 `drive_timeout` (default 100 ms) the commanded voltage decays to zero instead of
-latching on the motors; set `drive_timeout` to 0 to keep the last value.
+latching on the motors; set `drive_timeout` to `0 * millisecond` to keep the
+last value.
 
 `motors()` exposes the shared `device::MotorGroup` for brake modes, encoders, and
 temperatures. Writing voltage through it bypasses the guard; use

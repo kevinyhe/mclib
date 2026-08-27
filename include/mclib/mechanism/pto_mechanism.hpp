@@ -53,7 +53,8 @@ struct PTOConfig {
    * The owning consumer is expected to write every scheduler tick, the way a
    * driver-control loop does. If it stops writing — its command ended, its
    * task died — the last voltage would otherwise stay latched on the motors
-   * forever. Set to 0 to disable the watchdog and latch indefinitely.
+   * forever. Set to `0 * millisecond` to disable the watchdog and latch
+   * indefinitely.
    */
   QTime drive_timeout = 100 * millisecond;
 };
