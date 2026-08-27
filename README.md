@@ -2150,3 +2150,196 @@ the logger under a `mclib::time::ScopedClock` and asserts on real CSV text -
 the header, the timestamps, the drop policy, and the round-trip of `24_in` back
 to `24.0`. Only `src/mclib/telemetry/flush_task.cpp` includes a PROS header;
 the logger and both test sinks are header-only.
+
+## Motion profiling and drivetrain feedforward
+
+`mclib/control/profile.hpp` and `mclib/control/feedforward.hpp`.
+
+Every motion in this library used to be a PID against a position error. The
+only way to make one faster was to raise `kp` until it oscillated, and the only
+acceleration limit was `max_slew_accel_fwd` and friends - a rate limit on
+*voltage*, which is a guess at a rate limit on acceleration. A profile plus a
+feedforward model replaces both: the profile says what velocity to be at right
+now, the model says what voltage that velocity costs, and the PID only has to
+clean up the difference.
+
+Both files are pure arithmetic over `mclib::units` - no PROS, no hardware, no
+clock inside the profile at all - so `tests/profile_test.cpp` and
+`tests/feedforward_test.cpp` check every number on the host.
+
+### The profile
+
+```cpp
+using namespace mclib::control;
+
+ProfileConstraints limits{
+    .max_velocity = 48 * mclib::units::inps,
+    .max_acceleration = 96 * inps2,
+};
+const MotionProfile profile = MotionProfile::generate(48_in, limits);
+const ProfileState now = profile.sample(750_ms);
+// now.position == 24 in, now.velocity == 48 in/s, now.acceleration == 0
+```
+
+That worked example: 48 inches at 48 in/s with 96 in/s² both ways is 0.5 s of
+acceleration over 12 inches, 0.5 s of cruise over 24 inches, 0.5 s of
+deceleration over 12 inches. **Total 1.5 s, final position 48.000000000 in.**
+
+`ProfileConstraints` carries four magnitudes, two of which have a "zero means
+something else" convention that keeps the common case a two-field aggregate:
+
+| Field | Zero means |
+| --- | --- |
+| `max_velocity` | nothing - a zero here gives an empty profile |
+| `max_acceleration` | nothing - a zero here gives an empty profile |
+| `max_deceleration` | same as `max_acceleration` |
+| `max_jerk` | unbounded, i.e. `generate()` builds a trapezoid |
+
+Set `max_jerk` and `generate()` builds an S-curve instead: acceleration ramps
+in and out at the jerk limit, so the voltage command has no steps in it.
+Over the same 48 inches with a 384 in/s³ jerk limit that is 0.75 s of ramp
+over 18 inches, 0.25 s of cruise over 12 inches, 0.75 s of ramp down - **1.75 s
+total**. Smoothness costs a quarter of a second.
+
+The cases that break naive implementations are all defined behaviour and all
+pinned by tests:
+
+- **Too short to cruise.** 6 inches under the same limits is a triangle
+  peaking at 24 in/s after 0.25 s, and it still lands exactly on 6 inches.
+- **Asymmetric accel/decel.** This drivetrain already has four slew constants,
+  so `max_deceleration` is separate and `DirectionalConstraints` holds a
+  forward set and a reverse set. 48 inches with 96 in/s² accel and 48 in/s²
+  decel splits 0.50 s / 0.25 s / 1.00 s - 1.75 s total.
+- **Zero distance.** Empty profile, `duration()` 0, `sample()` all zeros.
+- **Negative distance.** A normal profile running the other way; velocity is
+  negative throughout.
+- **Non-zero initial velocity.** Already cruising at 48 in/s over 48 inches
+  drops the acceleration phase entirely: 0.75 s of cruise, 0.5 s of decel,
+  1.25 s. An initial velocity pointing *away* from the target accelerates back
+  through zero at `max_acceleration`.
+- **Too fast to stop.** 2 inches while doing 48 in/s needs 12 inches of
+  braking room. The profile becomes a single deceleration at the limit,
+  `overshoots()` returns true, and `netDisplacement()` reports the 12 inches it
+  really covers. Refusing to build anything would be worse - the robot is
+  moving either way and "brake at the limit" is the best command available.
+  The mirror case is handled the same way: asking to *reach* 48 in/s within
+  4 inches needs 12 inches of runway, so the profile accelerates at the limit,
+  overshoots, and says so.
+
+`DirectionalConstraints::select()` takes the initial velocity as a tiebreak, so
+a zero-distance "stop from where you are" while rolling backwards gets the
+reverse deceleration limit rather than the forward one.
+
+For a path follower, `velocityAtDistance()` and `timeAtDistance()` give the
+same profile parameterised by distance along the path instead of by a
+stopwatch.
+
+### The feedforward model
+
+```
+V = kS * sgn(v) + kV * v + kA * a
+```
+
+`kS` is volts, `kV` is volts per (in/s), `kA` is volts per (in/s²), and all
+three are typed - handing `kV` a bare number is a compile error, not a loop
+that is 39.37x wrong.
+
+```cpp
+SimpleMotorFeedforward model({.kS = 0.8_V,
+                              .kV = 0.2_V / mclib::units::inps,
+                              .kA = 0.02_V / inps2});
+model.calculate(30 * mclib::units::inps);              // 6.8 V
+model.calculate(30 * mclib::units::inps, 100 * inps2); // 8.8 V
+model.maxAchievableVelocity(12_V, {});                 // 56 in/s
+```
+
+`kS` takes the sign of the velocity, or of the acceleration when the velocity
+setpoint is exactly zero, so the first tick of a motion still gets the static
+term. With both zero the output is 0 V, not +kS: a robot that is meant to stand
+still should not be pushed in an arbitrary direction.
+
+### Identifying kS, kV and kA on your robot
+
+A feedforward model nobody can measure is decoration, so both fits ship with
+the library.
+
+**kS and kV.** On a long clear stretch of field, or on blocks:
+
+1. Command a fixed voltage to both sides of the drive. Start around 2 V.
+2. Wait for the speed to stop changing - 500 ms is plenty.
+3. Record the commanded voltage and the measured velocity as one
+   `VelocitySample`. Take the velocity from odometry or from the drive
+   encoders through `DriveGeometry::encoderToDistance()`, **not** from the
+   motor's own `get_actual_velocity()`, which is already filtered.
+4. Repeat in roughly 1 V steps up to 12 V. Eight to twelve points is plenty.
+5. Do the whole run again in reverse and append those samples too.
+
+```cpp
+const VelocityFit fit = fitVelocityGains(samples, count);
+// fit.kS, fit.kV, fit.r_squared, fit.used
+```
+
+Reverse samples are folded onto the forward branch internally - each sample's
+voltage and velocity are both multiplied by the sign of its velocity - so a
+bidirectional run fits one symmetric model rather than two half-models.
+Samples slower than `min_speed` (1 in/s by default) are dropped, so the "3 V,
+did not move" point cannot drag the intercept down. **Check `r_squared`.**
+Below about 0.98 the data is wrong, not the model: samples taken before the
+speed settled, a battery that sagged during the run, or a drivetrain binding.
+
+**kA**, once kS and kV are known:
+
+1. Ramp the voltage linearly 0 → 12 V over about two seconds, logging voltage,
+   velocity and acceleration every tick.
+2. Acceleration comes from differencing the velocity, and a raw difference of
+   encoder velocity is mostly noise - filter it. A three-point central
+   difference over a 10 ms loop is usually enough.
+3. `fitAccelerationGain(samples, count, {.kS = fit.kS, .kV = fit.kV})`.
+
+That fit is a least-squares line **through the origin** of the leftover
+voltage `V - kS*sgn(v) - kV*v` against acceleration, because the model says
+that residual is exactly `kA * a`. Fitting an intercept instead would silently
+absorb an error in kS.
+
+kA is the least important of the three and the hardest to measure. A model
+with `kA` left at zero still takes most of the work off the PID; a fitted kA
+you do not trust is worse than none.
+
+### The follower
+
+```cpp
+ProfileFollower follower({
+    .gains = {.kS = 0.8_V, .kV = kv, .kA = ka},
+    .kp = 1.0_V / mclib::units::inch,
+});
+follower.follow(MotionProfile::generate(48_in, limits));
+
+const QLength start = travelledDistance();
+while (!follower.isFinished()) {
+  const QVoltage command = follower.update(travelledDistance() - start);
+  driveVoltage(command, command);
+  pros::delay(10);
+}
+```
+
+The PID inside runs with `setUseDt(true)` - this is new code, so there are no
+gains fitted against the historical raw-delta numerics to protect, and real
+rates are what `kd` should mean. It also runs with `setArrive(false)`: a
+profile ends when the profile ends, and a latched arrival mid-cruise would zero
+the output while the robot was still moving. The integral is clamped at 2 V by
+default rather than PID's unbounded 0, because a follower stalled against a
+wall would otherwise wind up the whole battery.
+
+With a good model `kp` is small. It is correcting modelling error, not driving
+the motion.
+
+`calculate(setpoint, measured, dt)` is the seam a path follower uses: it brings
+its own setpoint and its own timestep and never touches the follower's
+stopwatch.
+
+`attachTelemetry(&logger)` registers six columns - setpoint position and
+velocity, measured position, error, and the feedforward/feedback split of the
+command - and writes them on every `update()`. That split is the whole tuning
+story: a feedback term that is large next to the feedforward means the model is
+wrong, not that `kp` needs raising. The follower never calls `sample()`; the
+control loop owns the cadence.
