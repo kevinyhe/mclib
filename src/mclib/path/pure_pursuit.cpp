@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 namespace mclib {
 namespace path {
@@ -14,6 +15,9 @@ inline QLength inches(double value) { return units::inch * value; }
 
 /// @brief Curvature magnitudes below this (1/m) are a straight line.
 constexpr double kStraightCurvature = 1e-9;
+
+/// @brief Turn used for a goal behind the robot when the clamp is disabled.
+constexpr units::QCurvature kDefaultTurnCap = 1.0 / (6.0 * units::inch);
 
 /**
  * @brief First intersection of a circle with a segment, at or after @p min_t.
@@ -63,10 +67,14 @@ QVelocity curvatureSpeedLimit(units::QCurvature curvature, QVelocity max_velocit
 }
 
 QVelocity approachSpeedLimit(QLength remaining, QAcceleration max_decel) {
-  const double distance = std::fmax(remaining.raw(), 0.0);
+  // A non-positive budget means "no ramp", the same way a non-positive lateral
+  // budget means "no cornering limit" in curvatureSpeedLimit(). Returning zero
+  // here instead would pin the robot at min_velocity for the whole path, which
+  // is the opposite of switching the limit off.
   if (max_decel.raw() <= 0.0) {
-    return QVelocity::fromBase(0.0);
+    return QVelocity::fromBase(std::numeric_limits<double>::infinity());
   }
+  const double distance = std::fmax(remaining.raw(), 0.0);
   return QVelocity::fromBase(std::sqrt(2.0 * max_decel.raw() * distance));
 }
 
@@ -126,6 +134,7 @@ PurePursuit::Projection PurePursuit::closestPoint(const Vec2& position) const {
   best.t = m_closest_t;
   best.distance = m_path.at(m_closest_index).distance;
   best.point = m_path.at(m_closest_index).point();
+  best.heading = m_path.at(m_closest_index).heading;
 
   if (m_path.size() < 2) {
     best.error = inches((position - best.point).norm());
@@ -136,6 +145,9 @@ PurePursuit::Projection PurePursuit::closestPoint(const Vec2& position) const {
     const Vec2 a = m_path[m_closest_index].point();
     const Vec2 b = m_path[m_closest_index + 1].point();
     best.point = a + m_closest_t * (b - a);
+    best.heading = QAngle::fromBase((b - a).squaredNorm() > 0.0
+                                        ? headingToward(a, b)
+                                        : m_path[m_closest_index].heading.rad());
     best.distance = m_path[m_closest_index].distance +
                     (m_path[m_closest_index + 1].distance -
                      m_path[m_closest_index].distance) *
@@ -159,9 +171,19 @@ PurePursuit::Projection PurePursuit::closestPoint(const Vec2& position) const {
     // Within the segment the cursor is already on, the projection may not slide
     // backwards either.
     const double floor_t = (i == m_closest_index) ? m_closest_t : 0.0;
+    // The scan breaks on whole samples, but one segment of a raw waypoint
+    // polyline can be longer than the whole window, so the parameter inside
+    // the segment has to be bounded too. Without this, search_window bounds
+    // nothing on a two-point path and a single bad pose skips the route for
+    // good.
+    const QLength segment_span = m_path[i + 1].distance - m_path[i].distance;
+    double ceiling_t = 1.0;
+    if (segment_span.raw() > 0.0) {
+      ceiling_t = clamp((limit - m_path[i].distance).raw() / segment_span.raw(), floor_t, 1.0);
+    }
     double t = floor_t;
     if (denominator > 0.0) {
-      t = clamp((position - a).dot(d) / denominator, floor_t, 1.0);
+      t = clamp((position - a).dot(d) / denominator, floor_t, ceiling_t);
     }
     const Vec2 projected = a + t * d;
     const QLength error = inches((position - projected).norm());
@@ -171,6 +193,8 @@ PurePursuit::Projection PurePursuit::closestPoint(const Vec2& position) const {
       best.point = projected;
       best.error = error;
       best.distance = m_path[i].distance + (m_path[i + 1].distance - m_path[i].distance) * t;
+      best.heading = QAngle::fromBase(denominator > 0.0 ? headingToward(a, b)
+                                                        : m_path[i].heading.rad());
     }
   }
   return best;
@@ -190,16 +214,34 @@ Vec2 PurePursuit::findLookaheadPoint(const Vec2& position, const Projection& clo
   }
 
   const double radius = m_config.lookahead.in();
-  for (std::size_t i = m_lookahead_index; i + 1 < m_path.size(); ++i) {
-    const double min_t = (i == m_lookahead_index) ? m_lookahead_t : 0.0;
-    const Vec2 a = m_path[i].point();
-    const Vec2 b = m_path[i + 1].point();
-    double t = 0.0;
-    if (segmentCircleIntersection(a, b, position, radius, min_t, t)) {
-      m_lookahead_index = i;
-      m_lookahead_t = t;
-      found = true;
-      return a + t * (b - a);
+
+  // Two passes. The first walks forward from the lookahead cursor, which is
+  // what keeps a hairpin from handing the goal to the far branch. The second
+  // restarts at the closest point, and only runs when the first found nothing.
+  //
+  // The retry is what stops a stale cursor from faking an end of path: a robot
+  // pushed backwards a couple of inches - a bump, a slip, an odometry
+  // correction - leaves the cursor ahead of its own lookahead circle, and a
+  // single-pass search then reports at_end with most of the route still to
+  // drive. The retry never starts behind the closest point, so it cannot undo
+  // the double-back guarantee.
+  for (int pass = 0; pass < 2; ++pass) {
+    const std::size_t start = (pass == 0) ? m_lookahead_index : closest.index;
+    const double start_t = (pass == 0) ? m_lookahead_t : closest.t;
+    for (std::size_t i = start; i + 1 < m_path.size(); ++i) {
+      const double min_t = (i == start) ? start_t : 0.0;
+      const Vec2 a = m_path[i].point();
+      const Vec2 b = m_path[i + 1].point();
+      double t = 0.0;
+      if (segmentCircleIntersection(a, b, position, radius, min_t, t)) {
+        m_lookahead_index = i;
+        m_lookahead_t = t;
+        found = true;
+        return a + t * (b - a);
+      }
+    }
+    if (pass == 0 && start == closest.index && start_t <= closest.t) {
+      break;  // The retry would repeat the pass that just failed.
     }
   }
   return m_path.back().point();
@@ -229,8 +271,13 @@ PurePursuitOutput PurePursuit::update(const Pose2D& pose) {
   // Signed cross-track error in the *path's* frame: rotate the offset from the
   // path to the robot by the path's heading, and read the "right" component.
   // Positive therefore means the robot sits to the right of the path.
-  const QAngle path_heading = m_path.atDistance(closest.distance).heading;
-  const Vec2 offset = fieldToRobot(position - closest.point, path_heading.rad());
+  //
+  // The heading comes from the segment the projection landed on, not from
+  // Path::atDistance(). On a raw waypoint polyline the vertex headings are
+  // per-segment and atDistance() ramps between them, which scales the reported
+  // error by cos(the ramp) - and flips its sign outright on a corner sharper
+  // than 90 degrees, which is exactly the hairpin case.
+  const Vec2 offset = fieldToRobot(position - closest.point, closest.heading.rad());
   output.cross_track_error = inches(offset.x());
 
   bool found = false;
@@ -242,7 +289,8 @@ PurePursuitOutput PurePursuit::update(const Pose2D& pose) {
       // at the endpoint.
       goal = m_path.atDistance(closest.distance + m_config.lookahead).point();
     } else {
-      // No intersection because the circle hangs off the end of the path.
+      // No intersection anywhere ahead and the robot is on the path: the
+      // circle hangs off the end.
       output.at_end = true;
     }
   }
@@ -255,8 +303,32 @@ PurePursuitOutput PurePursuit::update(const Pose2D& pose) {
   if (std::isfinite(radius_in) && radius_in != 0.0) {
     curvature = 1.0 / inches(radius_in);
   }
+
+  // A goal behind the robot is where pure pursuit falls apart. arcRadius()
+  // answers +infinity for a goal that is straight ahead AND for one that is
+  // straight behind - both are a zero lateral offset - so a robot facing
+  // exactly away from the path is told to drive straight at full speed, and
+  // the forward-only cursor means it never recovers: a drivetrain that starts
+  // reversed drives into a wall. Just off the beam is barely better; at a 170
+  // degree heading error the honest arc is a 29 inch radius, which is mostly
+  // "keep going the wrong way".
+  //
+  // Anything strictly behind gets the tightest turn available instead, toward
+  // whichever side the goal is on. Exactly abeam is left alone: the arc
+  // through it is a well-defined semicircle, not a degenerate case.
+  const Vec2 goal_local = fieldPointToRobot(goal, pose);
+  const bool goal_behind = goal_local.y() < 0.0;
+  if (goal_behind) {
+    const double turn_cap = m_config.max_curvature.raw() > 0.0
+                                ? m_config.max_curvature.raw()
+                                : kDefaultTurnCap.raw();
+    // Ties break to the right so a dead-reversed robot spins consistently
+    // rather than chattering on the sign of a rounding error.
+    const double side = goal_local.x() >= 0.0 ? 1.0 : -1.0;
+    curvature = units::QCurvature::fromBase(side * turn_cap);
+  }
   const double cap = std::fabs(m_config.max_curvature.raw());
-  if (cap > 0.0 && std::fabs(curvature.raw()) > cap) {
+  if (!goal_behind && cap > 0.0 && std::fabs(curvature.raw()) > cap) {
     curvature = units::QCurvature::fromBase(std::copysign(cap, curvature.raw()));
   }
   output.curvature = curvature;

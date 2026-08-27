@@ -61,7 +61,9 @@ struct SplineConfig {
    * @details Scales the knot tangents. 0 is plain Catmull-Rom. 1 zeroes the
    * tangents, which turns the curve into a set of straight-ish segments that
    * meet at the waypoints with a hard heading change - almost never what you
-   * want. Values around 0.2 pull the curve closer to the polyline.
+   * want, and at exactly 1 the derivative vanishes at every knot, so those
+   * samples fall back to the chord bearing and report zero curvature. Values
+   * around 0.2 pull the curve closer to the polyline.
    */
   double tension = 0.0;
 
@@ -88,10 +90,14 @@ struct SplineConfig {
  *         (`valid()` is false); exactly two yields the straight line between
  *         them, since a spline through two points is a line.
  *
- * @note End conditions: the phantom points before the first and after the last
- *       waypoint are reflections (`2*P0 - P1`), which makes the curve leave
- *       the first waypoint and arrive at the last one aimed straight at its
- *       neighbour.
+ * @note End conditions: the tangents at the first and last knots are the
+ *       derivative of the quadratic through the first (or last) three knots,
+ *       `2 * slope - neighbouring tangent`. The obvious alternative - a
+ *       phantom knot reflected through the end, `2*P0 - P1` - collapses to the
+ *       one-sided slope, which is exact for a straight line and badly wrong
+ *       for anything curved: on a circular arc it makes the first segment's
+ *       curvature swing through zero and overshoot to 2/R. With two waypoints
+ *       both tangents are the single chord, i.e. a straight line.
  */
 Path generateSpline(const std::vector<Waypoint>& waypoints,
                     const SplineConfig& config = {});

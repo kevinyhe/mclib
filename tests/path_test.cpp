@@ -30,6 +30,7 @@ using mclib::path::PurePursuitConfig;
 using mclib::path::PurePursuitOutput;
 using mclib::path::SplineConfig;
 using mclib::path::Waypoint;
+using mclib::path::approachSpeedLimit;
 using mclib::path::curvatureSpeedLimit;
 using mclib::path::generateSpline;
 using mclib::path::wheelSpeeds;
@@ -89,9 +90,151 @@ void frameCheck() {
               east_out.lookahead_point.x(), east_out.lookahead_point.y(),
               perInch(east_out.curvature));
   CHECK_NEAR(east_out.lookahead_point.x(), 5.0, 1e-12);
-  // Goal 5 in to the right, dead abeam: arc radius is 5/2 * ... -> k = 2*x/|p|^2
-  // = 2*5/25 = 0.4 /in. Positive because it is to the right.
-  CHECK(perInch(east_out.curvature) > 0.0);
+  // Goal 5 in to the right, dead abeam: k = 2*x/|p|^2 = 2*5/25 = 0.4 /in,
+  // positive because it is to the right. The default max_curvature is 1/6 /in,
+  // which is tighter, so the clamp is what actually comes out - assert the
+  // clamped value, and the raw one with the clamp off.
+  CHECK_NEAR(perInch(east_out.curvature), 1.0 / 6.0, 1e-9);
+  PurePursuitConfig unclamped = config;
+  unclamped.max_curvature = QCurvature{};
+  PurePursuit raw_follower(east, unclamped);
+  const PurePursuitOutput raw_out = raw_follower.update(Pose2D{0.0, 0.0, 0.0});
+  std::printf("   east unclamped curvature=%+.6f /in\n", perInch(raw_out.curvature));
+  CHECK_NEAR(perInch(raw_out.curvature), 0.4, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// 1b. A goal behind the robot must produce a turn, not zero curvature.
+// ---------------------------------------------------------------------------
+void goalBehind() {
+  std::printf("-- goal behind the robot\n");
+  // arcRadius() answers +infinity for a target straight ahead AND for one
+  // straight behind. Believing the second means commanding zero curvature at
+  // full speed away from the path, and the forward-only cursor never recovers.
+  Path path = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 60.0)});
+  PurePursuitConfig config;
+  config.lookahead = 10.0 * inch;
+  config.max_curvature = 1.0 / (6.0 * inch);
+
+  for (double heading_deg : {170.0, 179.0, 180.0, -179.0, -170.0}) {
+    PurePursuit follower(path, config);
+    const PurePursuitOutput out =
+        follower.update(Pose2D{0.0, 10.0, heading_deg * mclib::kPi / 180.0});
+    std::printf("   heading %+7.1f deg -> curvature=%+.6f /in v=%.2f L=%.2f R=%.2f\n",
+                heading_deg, perInch(out.curvature), out.velocity.inps(),
+                out.wheels.left.inps(), out.wheels.right.inps());
+    // Never straight: the goal is behind, so the command must be a hard turn.
+    CHECK(std::fabs(perInch(out.curvature)) > 0.1);
+    CHECK(out.wheels.left.inps() != out.wheels.right.inps());
+  }
+
+  // Exactly reversed: the clamp magnitude, and a stable sign rather than a
+  // zero or a NaN.
+  PurePursuit follower(path, config);
+  const PurePursuitOutput reversed = follower.update(Pose2D{0.0, 10.0, mclib::kPi});
+  CHECK_NEAR(std::fabs(perInch(reversed.curvature)), 1.0 / 6.0, 1e-9);
+
+  // With the clamp disabled it still turns: the fallback is the same radius,
+  // not zero.
+  PurePursuitConfig no_clamp = config;
+  no_clamp.max_curvature = QCurvature{};
+  PurePursuit unclamped_follower(path, no_clamp);
+  const PurePursuitOutput out = unclamped_follower.update(Pose2D{0.0, 10.0, mclib::kPi});
+  std::printf("   clamp disabled, reversed -> curvature=%+.6f /in\n",
+              perInch(out.curvature));
+  CHECK_NEAR(std::fabs(perInch(out.curvature)), 1.0 / 6.0, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// 1c. A robot pushed backwards must not fake an end of path.
+// ---------------------------------------------------------------------------
+void pushedBackwards() {
+  std::printf("-- pushed backwards\n");
+  Path path = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 60.0)});
+  PurePursuitConfig config;
+  config.lookahead = 10.0 * inch;
+  PurePursuit follower(path, config);
+
+  const PurePursuitOutput before = follower.update(Pose2D{0.0, 30.0, 0.0});
+  std::printf("   y=30 -> goal_y=%.4f at_end=%d\n", before.lookahead_point.y(),
+              static_cast<int>(before.at_end));
+  CHECK_NEAR(before.lookahead_point.y(), 40.0, 1e-9);
+  CHECK(!before.at_end);
+
+  // Shoved back two inches: a bump, a slip, an odometry correction. The
+  // lookahead cursor is now ahead of the robot's own circle, and a single-pass
+  // search would report at_end with 30 in of path still to drive.
+  const PurePursuitOutput after = follower.update(Pose2D{0.0, 28.0, 0.0});
+  std::printf("   y=28 -> goal_y=%.4f at_end=%d remaining=%.4f\n",
+              after.lookahead_point.y(), static_cast<int>(after.at_end),
+              after.remaining.in());
+  CHECK(!after.at_end);
+  CHECK_NEAR(after.lookahead_point.y(), 38.0, 1e-9);
+  CHECK(!after.finished);
+}
+
+// ---------------------------------------------------------------------------
+// 1d. search_window bounds the cursor even on a single long segment.
+// ---------------------------------------------------------------------------
+void searchWindowBound() {
+  std::printf("-- search window on a long segment\n");
+  // One 200 in segment: the per-sample scan has nothing to break on, so the
+  // bound has to come from the parameter inside the segment.
+  Path path = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 200.0)});
+  PurePursuitConfig config;
+  config.lookahead = 10.0 * inch;
+  config.search_window = 24.0 * inch;
+  PurePursuit follower(path, config);
+
+  follower.update(Pose2D{0.0, 0.0, 0.0});
+  const PurePursuitOutput spike = follower.update(Pose2D{0.0, 150.0, 0.0});
+  std::printf("   one bad pose at y=150 -> distance_along=%.4f (window 24)\n",
+              spike.distance_along.in());
+  CHECK_NEAR(spike.distance_along.in(), 24.0, 1e-9);
+
+  // Back to the truth: the cursor is 24 in ahead, not 150, so the robot
+  // recovers instead of abandoning the route.
+  const PurePursuitOutput recovered = follower.update(Pose2D{0.0, 1.0, 0.0});
+  std::printf("   back to y=1 -> distance_along=%.4f off_path=%d goal_y=%.4f\n",
+              recovered.distance_along.in(), static_cast<int>(recovered.off_path),
+              recovered.lookahead_point.y());
+  // The cursor is monotone, so it stays at 24 rather than following the robot
+  // back to 1 - and 24 is what search_window promised. Unbounded it would be
+  // 150, and the goal 160 in up a path the robot has not driven. The robot is
+  // 23 in from its own projection, so off_path is set and the goal is the
+  // rejoin point one lookahead past the cursor.
+  CHECK_NEAR(recovered.distance_along.in(), 24.0, 1e-9);
+  CHECK(recovered.off_path);
+  CHECK_NEAR(recovered.lookahead_point.y(), 34.0, 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// 1e. Cross-track error is signed against the segment, not a vertex heading.
+// ---------------------------------------------------------------------------
+void crossTrackOnACorner() {
+  std::printf("-- cross-track error at a corner\n");
+  // Up to (0,10), then a right angle due east to (10,10). A polyline's heading
+  // is per-segment, so an interpolated vertex heading would scale the reported
+  // error by cos(the ramp) - and flip its sign on a corner over 90 degrees.
+  Path path = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 10.0), wp(10.0, 10.0)});
+  PurePursuitConfig config;
+  config.lookahead = 4.0 * inch;
+
+  // Robot 1 in north of the eastbound leg, i.e. 1 in to its LEFT.
+  PurePursuit follower(path, config);
+  follower.update(Pose2D{0.0, 0.0, 0.0});
+  const PurePursuitOutput north = follower.update(Pose2D{5.0, 11.0, mclib::kPi / 2.0});
+  std::printf("   robot (5, 11) on an eastbound leg: xtrack=%+.6f in\n",
+              north.cross_track_error.in());
+  CHECK_NEAR(north.cross_track_error.in(), -1.0, 1e-9);
+
+  // Mirror: 1 in south of it, i.e. 1 in to its right.
+  PurePursuit other(path, config);
+  other.update(Pose2D{0.0, 0.0, 0.0});
+  const PurePursuitOutput south = other.update(Pose2D{5.0, 9.0, mclib::kPi / 2.0});
+  std::printf("   robot (5,  9) on an eastbound leg: xtrack=%+.6f in\n",
+              south.cross_track_error.in());
+  CHECK_NEAR(south.cross_track_error.in(), 1.0, 1e-9);
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +509,18 @@ void splineContinuity() {
     CHECK(jump <= allowed);
   }
 
+  // tension = 1 zeroes the tangents, so the Hermite derivative vanishes at
+  // every knot. Those samples must fall back to the chord bearing, not report
+  // compass 0 - a real direction, pointing along +Y, and wrong.
+  SplineConfig taut;
+  taut.spacing = 1.0 * inch;
+  taut.tension = 1.0;
+  Path pulled = generateSpline({wp(0.0, 0.0), wp(0.0, 20.0), wp(20.0, 20.0)}, taut);
+  std::printf("   tension=1: first heading %.4f deg, last heading %.4f deg\n",
+              pulled.front().heading.deg(), pulled.back().heading.deg());
+  CHECK_NEAR(pulled.front().heading.deg(), 0.0, 1e-9);
+  CHECK_NEAR(pulled.back().heading.deg(), 90.0, 1e-9);
+
   // Curvature is finite everywhere: no cusp from the centripetal parameterisation.
   double worst_curvature = 0.0;
   for (const PathPoint& point : path.points()) {
@@ -387,6 +542,21 @@ void velocityLimiting() {
 
   // Straight: no limit at all.
   CHECK_NEAR(curvatureSpeedLimit(QCurvature{}, max_v, a_lat).inps(), 48.0, 1e-9);
+
+  // A non-positive budget means "no limit" in both directions, so switching the
+  // endpoint ramp off does not pin the robot at min_velocity for the whole path.
+  CHECK(!std::isfinite(approachSpeedLimit(10.0 * inch, QAcceleration{}).inps()));
+  Path straight = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 60.0)});
+  PurePursuitConfig no_ramp;
+  no_ramp.lookahead = 10.0 * inch;
+  no_ramp.max_velocity = 48.0 * inps;
+  no_ramp.min_velocity = 6.0 * inps;
+  no_ramp.max_decel = QAcceleration{};
+  PurePursuit unramped(straight, no_ramp);
+  const PurePursuitOutput flat = unramped.update(Pose2D{0.0, 5.0, 0.0});
+  std::printf("   max_decel = 0 -> %.4f in/s, not the %.1f in/s floor\n",
+              flat.velocity.inps(), no_ramp.min_velocity.inps());
+  CHECK_NEAR(flat.velocity.inps(), 48.0, 1e-9);
 
   // Gentle: R = 48 in -> k = 1/48 /in -> sqrt(60 * 48) = 53.7 in/s, capped at 48.
   const QVelocity gentle = curvatureSpeedLimit(1.0 / (48.0 * inch), max_v, a_lat);
@@ -458,8 +628,20 @@ void pathQueries() {
   // Clamped, not extrapolated.
   CHECK_NEAR(path.atDistance(-5.0 * inch).y.in(), 0.0, 1e-9);
   CHECK_NEAR(path.atDistance(500.0 * inch).x.in(), 10.0, 1e-9);
-  // Heading at the far end is +X, i.e. compass 90 deg.
+  // Heading is the segment *leaving* each vertex; the last one carries the
+  // segment that arrived. The far end runs due east, i.e. compass 90 deg.
+  CHECK_NEAR(path.front().heading.deg(), 0.0, 1e-9);
+  CHECK_NEAR(path.at(1).heading.deg(), 90.0, 1e-9);
   CHECK_NEAR(path.back().heading.deg(), 90.0, 1e-9);
+
+  // A repeated waypoint is dropped rather than recorded with headingToward()'s
+  // zero, which would be a sample on an eastbound path claiming to face +Y.
+  Path duped = Path::fromWaypoints({wp(0.0, 0.0), wp(10.0, 0.0), wp(10.0, 0.0),
+                                    wp(20.0, 0.0)});
+  CHECK_EQ(static_cast<double>(duped.size()), 3.0);
+  for (const PathPoint& point : duped.points()) {
+    CHECK_NEAR(point.heading.deg(), 90.0, 1e-9);
+  }
 
   // An empty or single-point path is unfollowable and says so instead of
   // crashing.
@@ -476,6 +658,10 @@ void pathQueries() {
 
 int main() {
   frameCheck();
+  goalBehind();
+  pushedBackwards();
+  searchWindowBound();
+  crossTrackOnACorner();
   lookaheadDistance();
   arcCurvature();
   lateralOffsetSign();

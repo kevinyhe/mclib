@@ -122,10 +122,13 @@ struct PurePursuitConfig {
   /**
    * @brief Hard cap on commanded curvature magnitude.
    *
-   * @details Only bites near the endpoint, where the effective lookahead
-   * shrinks and the pure-pursuit gain diverges. The default is a 6 inch turn
-   * radius, tighter than any real drivetrain will track. Zero disables the
-   * clamp.
+   * @details The clamp is unconditional, but with the default of a 6 inch turn
+   * radius - tighter than any real drivetrain will track - it only bites near
+   * the endpoint, where the effective lookahead shrinks and the pure-pursuit
+   * gain diverges, and on a goal that has ended up behind the robot. Zero
+   * disables the clamp; the behind-the-robot case then falls back to that same
+   * 6 inch radius, because commanding zero curvature there would drive the
+   * robot away from the path at full speed.
    */
   units::QCurvature max_curvature = 1.0 / (6.0 * units::inch);
 
@@ -203,7 +206,9 @@ QVelocity curvatureSpeedLimit(units::QCurvature curvature, QVelocity max_velocit
 /**
  * @brief Speed cap that still stops in @p remaining: `sqrt(2 a d)`.
  * @param remaining Arc length left. Negative is treated as zero.
- * @param max_decel Deceleration budget.
+ * @param max_decel Deceleration budget. Zero or negative means "no ramp" and
+ *        returns infinity, matching how `curvatureSpeedLimit()` reads a
+ *        non-positive lateral budget.
  */
 QVelocity approachSpeedLimit(QLength remaining, QAcceleration max_decel);
 
@@ -276,6 +281,7 @@ class PurePursuit {
     QLength distance{};      ///< Arc length from the start of the path.
     Vec2 point{0.0, 0.0};    ///< The projected point, field inches.
     QLength error{};         ///< Distance from the queried point to `point`.
+    QAngle heading{};        ///< Compass bearing of the segment, not of a vertex.
   };
 
   /// @brief Forward-only, window-bounded closest-point search.

@@ -59,6 +59,11 @@ PathPoint sampleAt(const Vec2& p1, const Vec2& p2, const Vec2& m1, const Vec2& m
     out.heading = QAngle::fromBase(std::atan2(d1.x(), d1.y()));
     const double cross = d1.y() * d2.x() - d1.x() * d2.y();
     out.curvature = QCurvature::fromBase(cross / (speed * speed * speed));
+  } else {
+    // The derivative vanishes at both ends of every segment when tension is 1,
+    // and leaving heading at its default would record compass 0 - a real
+    // direction, pointing along +Y, and wrong. Fall back to the chord.
+    out.heading = QAngle::fromBase(std::atan2(p2.x() - p1.x(), p2.y() - p1.y()));
   }
   return out;
 }

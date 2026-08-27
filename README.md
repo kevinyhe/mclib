@@ -2206,6 +2206,12 @@ answers a positive cross-track error with a negative curvature. `tests/
 path_test.cpp` asserts both directions explicitly, because a transposed frame
 compiles and runs and merely drives into a wall.
 
+The sign comes from the heading of the *segment* the projection landed on, not
+from `Path::atDistance()`. A polyline's heading is only defined per segment, so
+`atDistance()` ramps between vertex headings, which scales the reported error
+by `cos(the ramp)` — and flips its sign outright on a corner sharper than 90
+degrees, which is exactly the hairpin case.
+
 The frame check that anchors the whole unit: a straight path from `(0, 0)` to
 `(0, 10)`, robot at the origin at heading 0, lookahead 5 in. The goal point
 comes back as exactly `(0, 5)` and the curvature as exactly `0`.
@@ -2245,12 +2251,26 @@ through the first (and last) three knots instead, which reproduces a circle to
   last tick. "First ahead" and not "furthest along" is the point: on a hairpin
   the far branch is also inside the circle, and chasing it cuts the corner and
   abandons the rest of the path.
+  The search runs twice. The first pass walks forward from the lookahead
+  cursor. The second restarts at the closest point, and only runs when the
+  first found nothing — without it, a robot shoved back two inches leaves the
+  cursor ahead of its own lookahead circle and the follower reports the end of
+  the path with 30 in still to drive. The retry never starts behind the closest
+  point, so it cannot undo the doubling-back guarantee.
 - **Off the path.** When the closest path point is further away than the
   lookahead, no intersection exists at all. The follower aims at the path point
   one lookahead *beyond the closest point* - a rejoin, not a lunge at the
   endpoint - and reports `off_path = true`. `finished` is vetoed while
   `off_path` is set, so being shoved past the end of the route does not count
   as arriving.
+- **The goal ends up behind the robot.** This is the one that drives into a
+  wall. `arcRadius()` returns `+infinity` for a goal straight ahead **and** for
+  one straight behind — both are a zero lateral offset — so a reversed robot
+  gets curvature 0 and full speed away from the path, and the forward-only
+  cursor means it never recovers. Anything strictly behind the robot gets the
+  tightest turn available instead, toward whichever side the goal is on.
+  Exactly abeam is left alone: the arc through it is a well-defined semicircle,
+  not a degenerate case.
 - **End of path.** When the search runs off the end, the goal is the final path
   point and `at_end` is true. The effective lookahead then shrinks as the robot
   arrives, so commanded curvature is clamped to `max_curvature` (default a 6 in
@@ -2260,7 +2280,10 @@ through the first (and last) three knots instead, which reproduces a circle to
   closest-point search is bounded to `search_window` (default 24 in) of arc
   length ahead. The test drives up an outbound leg whose return leg is 4 in
   away in field space; an unguarded nearest-point search latches onto the
-  return leg, this one does not.
+  return leg, this one does not. The window is enforced on the parameter
+  *inside* a segment, not only on whole samples — one segment of a
+  `fromWaypoints()` polyline can be longer than the whole window, and without
+  that a single bad pose skips the route for good.
 
 ### Speed
 
@@ -2271,6 +2294,10 @@ Three limits, smallest wins:
 | Configured cap | `max_velocity` |
 | Cornering | `sqrt(max_lateral_accel / k)` over the tightest curvature in the next lookahead of path |
 | Stopping | `sqrt(2 * max_decel * remaining)` |
+
+A non-positive `max_lateral_accel` or `max_decel` means "no limit", not "speed
+zero" — switching the endpoint ramp off must not pin the robot at
+`min_velocity` for the whole path.
 
 `min_velocity` is a floor under the result while the path is unfollowed, and
 the pair is scaled down together if `wheelSpeeds()` would put either wheel over

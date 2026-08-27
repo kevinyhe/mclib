@@ -90,11 +90,20 @@ class Path {
   /**
    * @brief A straight-segment path through the waypoints, with no smoothing.
    *
-   * @details Heading at each waypoint is the heading of the segment arriving
-   * at it (the first waypoint borrows the segment leaving it), and curvature
-   * is zero everywhere. Use this when the route really is a polyline, or in
-   * tests where an exactly known geometry matters more than smoothness. For a
-   * smooth route use `generateSpline()` in `spline.hpp`.
+   * @details Heading at each waypoint is the heading of the segment *leaving*
+   * it (the last waypoint carries the segment that arrived), and curvature is
+   * zero everywhere. Consecutive duplicate waypoints are dropped: a repeated
+   * point has no direction, and `headingToward()` answers 0 for coincident
+   * points, which is a real heading pointing along +Y and wrong.
+   *
+   * A polyline's heading is only defined per segment, so `atDistance()`
+   * interpolates it across a corner rather than stepping. Code that needs the
+   * exact segment direction - `PurePursuit` signing its cross-track error, for
+   * one - should take the bearing between the bracketing samples instead.
+   *
+   * Use this when the route really is a polyline, or in tests where an exactly
+   * known geometry matters more than smoothness. For a smooth route use
+   * `generateSpline()` in `spline.hpp`.
    */
   static Path fromWaypoints(const std::vector<Waypoint>& waypoints);
 

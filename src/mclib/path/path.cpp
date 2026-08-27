@@ -34,18 +34,24 @@ Path Path::fromWaypoints(const std::vector<Waypoint>& waypoints) {
     PathPoint point;
     point.x = waypoint.x;
     point.y = waypoint.y;
+    // A repeated waypoint has no direction, and headingToward() answers 0 for
+    // coincident points - a real heading, pointing along +Y, and wrong. Drop
+    // the duplicate instead of recording it.
+    if (!points.empty() && (point.point() - points.back().point()).norm() < 1e-9) {
+      continue;
+    }
     points.push_back(point);
   }
 
-  // Heading of the segment arriving at each point; the first point borrows the
-  // segment leaving it. Curvature stays zero: a polyline is straight between
-  // its vertices and the corners are not differentiable.
+  // Heading of the segment *leaving* each vertex; the last vertex carries the
+  // segment that arrived at it. Curvature stays zero: a polyline is straight
+  // between its vertices and its corners are not differentiable.
   for (std::size_t i = 0; i + 1 < points.size(); ++i) {
-    const double bearing = headingToward(points[i].point(), points[i + 1].point());
-    points[i + 1].heading = QAngle::fromBase(bearing);
-    if (i == 0) {
-      points[0].heading = QAngle::fromBase(bearing);
-    }
+    points[i].heading = QAngle::fromBase(
+        headingToward(points[i].point(), points[i + 1].point()));
+  }
+  if (points.size() >= 2) {
+    points.back().heading = points[points.size() - 2].heading;
   }
 
   return Path(std::move(points));
