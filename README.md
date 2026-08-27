@@ -909,3 +909,82 @@ for the per-solenoid values the device layer reports. Those values are logical
 too, not pin levels; they are for spotting one solenoid out of sync with the
 rest of the group. Writes through `group()` do not update the cached state and
 are overwritten by the next `periodic()`.
+
+## PresetPositionMechanism: presets on top of a PID loop
+
+`PresetPositionMechanism<StateT>` is `MultiPositionMechanism` and
+`PositionMechanism` wired together. The first owns the ordered preset table and
+`next` / `previous` / `cycle`; the second owns the PID loop, the tolerance and
+dwell exit, the voltage clamp and the manual-voltage override. Neither is
+re-implemented. Use it for an articulated joint, a lift, a tilter, an indexer:
+anything with discrete stops. The preset enum is yours.
+
+```cpp
+enum class ArmPreset { Down, Load, Score };
+
+mclib::device::MotorGroup arm_motors({-11, 12});
+mclib::device::Rotation arm_sensor(13);
+
+mclib::mechanism::PresetPositionMechanism<ArmPreset> arm(
+    ArmPreset::Down,
+    {{ArmPreset::Down, 0.0}, {ArmPreset::Load, 45.0}, {ArmPreset::Score, 130.0}},
+    [&]() { return arm_sensor.getAngleDeg(); },
+    [&](double volts) { arm_motors.setVoltage(volts); },
+    mclib::mechanism::PositionMechanismConfig{.kp = 0.12, .small_error = 1.5});
+
+void initialize() {
+  arm_motors.setBrakeMode(mclib::device::BrakeMode::Hold);
+  arm.setName("arm");
+  arm.setDefaultCommand(arm.idleCommand());
+  arm.registerSelf();
+}
+```
+
+One registration, not two. `MultiPositionMechanism` and `PositionMechanism` are
+both `Subsystem`s, and registering both for one physical mechanism would let two
+commands drive it at the same time. So the class *derives* from
+`MultiPositionMechanism` (that is the scheduler requirement) and *owns* the
+`PositionMechanism` as a component that is never registered; it is ticked from
+the outer `applyState()`. `controller()` exposes it for tuning and diagnostics.
+Do not register what `controller()` returns.
+
+API: `setPreset(preset)`, `getPreset()`, `next()`, `previous()`, `cycle()`,
+`moveTo(raw)`, `positionValue()`, `targetValue()`, `presetSetpoint()`,
+`atTarget()`, `isManual()`, `setManualVoltage(volts)`, `stop()`.
+
+Commands: `makePresetCommand(preset, timeout_ms = 0.0)` and
+`makeMoveToCommand(raw, timeout_ms = 0.0)` finish on `atTarget()` or on the
+timeout, and brake if interrupted. `makeNextCommand()`, `makePreviousCommand()`
+and `makeCycleCommand()` are one-shots. `makeManualCommand(volts)` and
+`makeStopCommand()` hold the requirement for as long as they run.
+
+Behaviors worth knowing:
+
+- Nothing drives until you ask. A fresh mechanism sits at 0 V with the loop
+  disengaged, like a bare `PositionMechanism`. The first `setPreset()`,
+  step, `moveTo()`, `setManualVoltage()` or `stop()` engages it.
+- The table pushes its setpoint every tick, but the mechanism only retargets
+  when the setpoint actually changed or when a retarget was asked for. Feeding
+  the sink straight into `moveTo()` would reset the PID 50 times a second and
+  the loop would never settle.
+- Re-issuing the *same* preset after a manual override still takes control
+  back. `setState` only fires `onStateChanged` on a real value change, so
+  `setPreset()` requests the retarget explicitly.
+- `next()` at the last preset and `previous()` at the first do nothing at all
+  while the table is in charge: no PID reset, no dwell restart, `atTarget()`
+  does not flip back to false. If a manual voltage or a raw target *was* in
+  charge, a clamped step still hands control back to the table, otherwise a
+  latched manual voltage would keep driving.
+- `setPreset()` restarts the loop on every call, which is what takes control
+  back from a manual override. Do not call it every tick. `holdPreset()` is
+  the idempotent version for commands that execute every frame, and it is what
+  `makeStateCommand` / `makeStateUntilCommand` use.
+- `moveTo(raw)` and `setManualVoltage(volts)` put the table on hold so it
+  cannot pull the mechanism back. After `moveTo()` and `stop()` the reported
+  preset snaps to the entry with the closest setpoint, so `getPreset()` is
+  never stale and a following `next()` steps from somewhere sensible.
+- `stop()` brakes, it does not coast: the present position becomes the target
+  and the loop holds it. Pair it with `BrakeMode::Hold` on the motors so a
+  raised mechanism cannot back-drive. Use `setManualVoltage(0.0)` to go limp.
+- Neither copyable nor movable: the setpoint sink and the command factories
+  capture `this`.
