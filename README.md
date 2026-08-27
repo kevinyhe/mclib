@@ -909,3 +909,77 @@ for the per-solenoid values the device layer reports. Those values are logical
 too, not pin levels; they are for spotting one solenoid out of sync with the
 rest of the group. Writes through `group()` do not update the cached state and
 are overwritten by the next `periodic()`.
+
+## ToggleGroupMechanism
+
+`ToggleMechanism` moves a whole group of actuators with one shared boolean.
+`ToggleGroupMechanism` gives each actuator its own boolean while keeping them
+in a single subsystem, so they share one scheduler requirement and two commands
+can never fight over them.
+
+Channels are addressed by index, and any scoped enum works as an index:
+
+```cpp
+enum class Side : std::size_t { Left = 0, Right = 1 };
+
+// One pneumatic per channel. Both plumbed so pin high extends.
+mclib::mechanism::ToggleGroupMechanism sides({
+    std::make_shared<mclib::device::Pneumatic>('A'),
+    std::make_shared<mclib::device::Pneumatic>('B'),
+});
+
+void initialize() {
+  sides.setName("sides");
+  sides.setDefaultCommand(sides.idleCommand());  // see below, this matters
+  sides.registerSelf();
+}
+
+sides.set(Side::Left, true);
+sides.get(Side::Right);   // false
+sides.toggle(Side::Right);
+sides.setAll(false);
+sides.toggleAll();
+sides.allSet();           // every channel extended
+sides.anySet();           // at least one extended
+sides.setCount();         // how many are extended
+sides.count();            // how many channels there are
+```
+
+Commands, all of which finish after one tick:
+
+```cpp
+controller.getButton(DIGITAL_L1)->onTrue(sides.makeToggleCommand(Side::Left));
+controller.getButton(DIGITAL_R1)->onTrue(sides.makeToggleCommand(Side::Right));
+controller.getButton(DIGITAL_A)->onTrue(sides.makeSetAllCommand(true));
+controller.getButton(DIGITAL_B)->onTrue(sides.makeToggleAllCommand());
+
+// Timed variants stay where they finish, they do not restore the old state.
+sides.makeSetForCommand(Side::Left, true, 500 * millisecond);
+sides.makeSetAllForCommand(false, 250 * millisecond);
+```
+
+The default command MUST be `idleCommand()`. Every factory above terminates,
+which releases the requirement, and `CommandScheduler::run()` reschedules the
+default on the very next tick. A "retract everything" default would therefore
+undo every set one tick after it happened. `periodic()` keeps re-writing the
+cached states, so the actuators stay where the last command put them.
+
+Per channel inversion is for raw `std::function<void(bool)>` actuators only:
+
+```cpp
+bool left_raw = false;
+bool right_raw = false;
+mclib::mechanism::ToggleGroupMechanism raw_sides(
+    {[&](bool v) { left_raw = v; }, [&](bool v) { right_raw = v; }},
+    {.initial_states = {false, true}, .inverted = {false, true}});
+```
+
+Do not set `inverted` for a channel driving a `device::Pneumatic`. `Pneumatic`
+already takes and returns a logical value and inverts internally through its
+`extended_state` flag. Inverting on top of that inverts twice and leaves
+`Pneumatic::get_value()` reporting the opposite of `get(index)`. For a solenoid
+wired backwards, write `Pneumatic(port, false, false)` and leave the inversion
+entry false.
+
+Out of range indices are ignored by the mutators and read back as `false`, so a
+bad enum value cannot corrupt the state. Copy and move are deleted.
