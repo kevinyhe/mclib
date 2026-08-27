@@ -3,8 +3,8 @@
 
 #include "mclib/command/command.h"
 #include "mclib/command/parallelRaceGroup.h"
+#include "mclib/time.hpp"
 #include "mclib/units/units.hpp"
-#include "pros/rtos.hpp"
 
 /**
  * @brief Creates a \refitem Command with no requirements that finishes after a user-specified duration
@@ -26,7 +26,7 @@ public:
 	 * @brief Initializes the WaitCommand and sets the start time of the WaitCommand
 	 */
 	void initialize() override {
-		startTime = pros::millis() * millisecond;
+		startTime = mclib::time::now();
 	}
 
 	/**
@@ -35,7 +35,7 @@ public:
 	 * @return Returns true if the duration has passed, false otherwise
 	 */
 	bool isFinished() override {
-		return pros::millis() * millisecond - startTime > duration;
+		return mclib::time::now() - startTime > duration;
 	}
 
 	~WaitCommand() override = default;

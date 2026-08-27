@@ -1,7 +1,7 @@
 // mclib
 #include "mclib/mechanism/homing_mechanism.hpp"
 
-#include "pros/rtos.hpp"
+#include "mclib/time.hpp"
 
 #include <cmath>
 #include <utility>
@@ -233,7 +233,7 @@ void HomingMechanism::recordZero() {
 }
 
 double HomingMechanism::nowMs() {
-  return static_cast<double>(pros::millis());
+  return static_cast<double>(mclib::time::millis());
 }
 
 }  // namespace mechanism

@@ -6,7 +6,7 @@
 #include "mclib/mechanism/mechanism.hpp"
 #include "mclib/mechanism/multi_position_mechanism.hpp"
 #include "mclib/mechanism/position_mechanism.hpp"
-#include "pros/rtos.hpp"
+#include "mclib/time.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -326,7 +326,7 @@ public:
     return std::make_unique<FunctionalCommand>(
         [this, preset, start_time]() {
           setPreset(preset);
-          *start_time = static_cast<double>(pros::millis());
+          *start_time = static_cast<double>(mclib::time::millis());
         },
         []() {},
         [this](bool interrupted) {
@@ -337,7 +337,7 @@ public:
         [this, start_time, timeout_ms]() {
           const bool timed_out =
               timeout_ms > 0.0 &&
-              static_cast<double>(pros::millis()) - *start_time >= timeout_ms;
+              static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
           return atTarget() || timed_out;
         },
         std::initializer_list<Subsystem*>{this});
@@ -354,7 +354,7 @@ public:
     return std::make_unique<FunctionalCommand>(
         [this, target, start_time]() {
           moveTo(target);
-          *start_time = static_cast<double>(pros::millis());
+          *start_time = static_cast<double>(mclib::time::millis());
         },
         []() {},
         [this](bool interrupted) {
@@ -365,7 +365,7 @@ public:
         [this, start_time, timeout_ms]() {
           const bool timed_out =
               timeout_ms > 0.0 &&
-              static_cast<double>(pros::millis()) - *start_time >= timeout_ms;
+              static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
           return atTarget() || timed_out;
         },
         std::initializer_list<Subsystem*>{this});
@@ -422,12 +422,12 @@ public:
     return std::make_unique<FunctionalCommand>(
         [this, preset, start_time]() {
           setPreset(preset);
-          *start_time = pros::millis() * millisecond;
+          *start_time = mclib::time::now();
         },
         []() {},
         [](bool) {},
         [start_time, duration]() {
-          return pros::millis() * millisecond - *start_time >= duration;
+          return mclib::time::now() - *start_time >= duration;
         },
         std::initializer_list<Subsystem*>{this});
   }

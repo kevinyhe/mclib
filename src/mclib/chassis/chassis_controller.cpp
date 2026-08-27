@@ -4,6 +4,7 @@
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion.hpp"
 #include "mclib/control/state.hpp"
+#include "mclib/time.hpp"
 #include "pros/rtos.hpp"
 
 #include <algorithm>
@@ -118,7 +119,7 @@ void ChassisController::driveDistance(double distance_in,
   m_mode = Mode::DriveDistance;
   m_goal = distance_in;
   m_start_distance_in = m_chassis.averageDistanceIn();
-  m_start_time_ms = pros::millis();
+  m_start_time_ms = mclib::time::millis();
   m_timeout_ms = timeout_ms;
   m_goal_max_voltage = max_voltage > 0.0 ? max_voltage : m_config.max_voltage;
   m_stop_at_end = stop_at_end;
@@ -136,7 +137,7 @@ void ChassisController::turnToHeading(double heading_deg,
                                       double max_voltage) {
   m_mode = Mode::TurnToHeading;
   m_goal = heading_deg;
-  m_start_time_ms = pros::millis();
+  m_start_time_ms = mclib::time::millis();
   m_timeout_ms = timeout_ms;
   m_goal_max_voltage = max_voltage > 0.0 ? max_voltage : m_config.max_voltage;
   m_stop_at_end = stop_at_end;
@@ -437,7 +438,7 @@ void ChassisController::finishGoal() {
 
 bool ChassisController::timedOut() const {
   return m_timeout_ms > 0.0 &&
-         (static_cast<double>(pros::millis()) - m_start_time_ms) >= m_timeout_ms;
+         (static_cast<double>(mclib::time::millis()) - m_start_time_ms) >= m_timeout_ms;
 }
 
 std::unique_ptr<Command> ChassisController::makeAsyncControlCommand(

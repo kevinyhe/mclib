@@ -3,8 +3,8 @@
 
 #include "mclib/command/functionalCommand.h"
 #include "mclib/command/subsystem.h"
+#include "mclib/time.hpp"
 #include "mclib/units/units.hpp"
-#include "pros/rtos.hpp"
 
 #include <functional>
 #include <memory>
@@ -91,12 +91,12 @@ public:
     return std::make_unique<FunctionalCommand>(
         [this, state, start_time]() {
           setState(state);
-          *start_time = pros::millis() * millisecond;
+          *start_time = mclib::time::now();
         },
         [this, state]() { setState(state); },
         [](bool) {},
         [start_time, duration]() {
-          return pros::millis() * millisecond - *start_time >= duration;
+          return mclib::time::now() - *start_time >= duration;
         },
         std::initializer_list<Subsystem*>{this});
   }

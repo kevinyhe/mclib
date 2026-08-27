@@ -3,6 +3,7 @@
 
 #include "mclib/units/units.hpp"
 #include "mclib/math.hpp"
+#include "mclib/time.hpp"
 #include "mclib/utils.hpp"
 #include "mclib/pid.hpp"
 #include "mclib/auton/autonomous_routine.hpp"
