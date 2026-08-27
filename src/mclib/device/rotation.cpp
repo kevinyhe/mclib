@@ -1,6 +1,8 @@
 // mclib
 #include "mclib/device/rotation.hpp"
 
+#include "pros/error.h"
+
 namespace mclib {
 namespace device {
 
@@ -16,6 +18,14 @@ Rotation::Rotation(std::int8_t port, bool reversed)
 
 double Rotation::getPositionDeg() const {
   return m_rotation.get_position() / 100.0;
+}
+
+std::optional<units::QAngle> Rotation::position() const {
+  const std::int32_t centidegrees = m_rotation.get_position();
+  if (centidegrees == PROS_ERR) {
+    return std::nullopt;
+  }
+  return (centidegrees / 100.0) * units::degree;
 }
 
 void Rotation::resetPosition() {

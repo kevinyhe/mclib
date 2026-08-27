@@ -11,6 +11,10 @@ std::int32_t Controller::getAnalog(AnalogAxis axis) const {
   return m_controller.get_analog(toProsAnalogAxis(axis));
 }
 
+units::QNumber Controller::analog(AnalogAxis axis) const {
+  return static_cast<double>(getAnalog(axis)) / 127.0;
+}
+
 bool Controller::getDigital(DigitalButton button) const {
   return m_controller.get_digital(toProsDigitalButton(button));
 }

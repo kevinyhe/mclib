@@ -35,5 +35,25 @@ void Inertial::setRotationDeg(double heading_deg) {
   m_imu.set_rotation(heading_deg / m_gain);
 }
 
+std::optional<units::QAngle> Inertial::rotation() const {
+  const double degrees = getRotationDeg();
+  if (!std::isfinite(degrees)) {
+    return std::nullopt;
+  }
+  return degrees * units::degree;
+}
+
+std::optional<units::QAngle> Inertial::heading() const {
+  const double degrees = getHeadingDeg();
+  if (!std::isfinite(degrees)) {
+    return std::nullopt;
+  }
+  return degrees * units::degree;
+}
+
+void Inertial::setRotation(units::QAngle heading) {
+  setRotationDeg(heading.deg());
+}
+
 }  // namespace device
 }  // namespace mclib
