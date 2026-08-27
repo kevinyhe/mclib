@@ -990,3 +990,108 @@ disables `ki` entirely. Call `setSmallBigErrorTolerance(0, 0)` for those loops
 `pid.hpp` now documents every method and the interaction between `arrive`,
 `arrived`, `hold_output`, the two error tolerances and the two settle
 durations.
+## ToggleGroupMechanism
+
+`ToggleMechanism` moves a whole group of actuators with one shared boolean.
+`ToggleGroupMechanism` gives each actuator its own boolean while keeping them
+in a single subsystem, so they share one scheduler requirement and two commands
+can never fight over them.
+
+Channels are addressed by index, and any scoped enum works as an index:
+
+```cpp
+enum class Side : std::size_t { Left = 0, Right = 1 };
+
+// One pneumatic per channel. Both plumbed so pin high extends.
+mclib::mechanism::ToggleGroupMechanism sides({
+    std::make_shared<mclib::device::Pneumatic>('A'),
+    std::make_shared<mclib::device::Pneumatic>('B'),
+});
+
+void example() {
+  sides.set(Side::Left, true);
+  sides.get(Side::Right);   // false
+  sides.toggle(Side::Right);
+  sides.setAll(false);
+  sides.toggleAll();
+  sides.allSet();           // every channel extended
+  sides.anySet();           // at least one extended
+  sides.setCount();         // how many are extended
+  sides.count();            // how many channels there are
+}
+```
+
+Every command factory finishes on its own: the one-shot ones after a single
+tick, the `...ForCommand(QTime)` variants once their duration is up. The timed
+variants stay where they finish, they do not restore the old state.
+
+`Trigger::onTrue` takes a raw `Command*`, so something has to keep the command
+alive for as long as the scheduler can reach it. Hold each one in a
+`std::unique_ptr` that outlives the scheduler, or hand them to a
+`MechanismManager`; binding a temporary leaves a dangling pointer.
+
+```cpp
+CommandController primary(mclib::device::ControllerId::Master);
+
+std::unique_ptr<Command> left_toggle;
+std::unique_ptr<Command> right_toggle;
+std::unique_ptr<Command> both_out;
+std::unique_ptr<Command> both_toggle;
+std::unique_ptr<Command> left_pulse;
+
+void initialize() {
+  left_toggle = sides.makeToggleCommand(Side::Left);
+  right_toggle = sides.makeToggleCommand(Side::Right);
+  both_out = sides.makeSetAllCommand(true);
+  both_toggle = sides.makeToggleAllCommand();
+  left_pulse = sides.makeSetForCommand(Side::Left, true, 500 * millisecond);
+
+  sides.setName("sides");
+  sides.setDefaultCommand(sides.idleCommand());  // see below, this matters
+  sides.registerSelf();
+
+  primary.getTrigger(mclib::device::DigitalButton::L1)->onTrue(left_toggle.get());
+  primary.getTrigger(mclib::device::DigitalButton::R1)->onTrue(right_toggle.get());
+  primary.getTrigger(mclib::device::DigitalButton::A)->onTrue(both_out.get());
+  primary.getTrigger(mclib::device::DigitalButton::B)->onTrue(both_toggle.get());
+  primary.getTrigger(mclib::device::DigitalButton::X)->onTrue(left_pulse.get());
+}
+```
+
+The default command MUST be `idleCommand()`. Every factory above terminates,
+which releases the requirement, and `CommandScheduler::run()` reschedules the
+default on the very next tick. A "retract everything" default would therefore
+undo every set one tick after it happened. `periodic()` keeps re-writing the
+cached states, so the actuators stay where the last command put them.
+
+Per channel inversion is for raw `std::function<void(bool)>` actuators only:
+
+```cpp
+bool left_raw = false;
+bool right_raw = false;
+
+// Channel 1's actuator is wired backwards, so it gets the negated value while
+// get(1) still answers "is it extended".
+mclib::mechanism::ToggleGroupMechanism raw_sides(
+    {[](bool v) { left_raw = v; }, [](bool v) { right_raw = v; }},
+    {.initial_states = {false, true}, .inverted = {false, true}});
+```
+
+Lambdas that capture by reference cannot live at namespace scope, so build the
+mechanism inside a function if your actuators need captures.
+
+Do not set `inverted` for a channel driving a `device::Pneumatic`. `Pneumatic`
+already takes and returns a logical value and inverts internally through its
+`extended_state` flag. Inverting on top of that inverts twice and leaves
+`Pneumatic::get_value()` reporting the opposite of `get(index)`. For a solenoid
+wired backwards, write `Pneumatic(port, false, false)` and leave the inversion
+entry false.
+
+Out of range indices are ignored by the mutators and read back as `false`, so a
+bad enum value cannot corrupt the state. Copy and move are deleted.
+
+The channel count is fixed at construction by the number of actuators. The
+inherited `setState()` and the generic `makeState*Command()` factories are
+hidden, because they take a `std::vector<bool>` of any length and caching a
+short one would make the trailing channels unreachable and latch their
+actuators wherever they happened to be. Use `setAll()` and the factories above.
