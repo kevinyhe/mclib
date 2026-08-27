@@ -52,27 +52,29 @@ void testGetRadius() {
   // Negative dy flips the sign of the radius.
   CHECK_NEAR(getRadius(0.0, 0.0, 3.0, -4.0, 0.0), -3.125, 1e-12);
 
-  // Magic sentinel: dy == 0 makes the denominator exactly zero and the
-  // function returns 999 instead of dividing.
-  CHECK_EQ(getRadius(0.0, 0.0, 5.0, 0.0, 0.0), 999.0);
-  CHECK_EQ(getRadius(0.0, 0.0, 0.0, 0.0, 0.0), 999.0);
-  CHECK_EQ(getRadius(7.0, 7.0, -3.0, 7.0, 30.0), 999.0);
+  // Degenerate: dy == 0 makes the denominator exactly zero, so the function
+  // returns +infinity rather than dividing. (It returned a magic 999 before
+  // the frame-reconciliation change; infinity is an honest "no finite radius"
+  // and does not silently become a finite speed limit downstream.)
+  CHECK(std::isinf(getRadius(0.0, 0.0, 5.0, 0.0, 0.0)));
+  CHECK(std::isinf(getRadius(0.0, 0.0, 0.0, 0.0, 0.0)));
+  CHECK(std::isinf(getRadius(7.0, 7.0, -3.0, 7.0, 30.0)));
 
-  // angle == 90 gives sin(0), which is exactly zero, so this also hits 999.
-  CHECK_EQ(getRadius(0.0, 0.0, 1.0, 1.0, 90.0), 999.0);
+  // angle == 90 gives sin(0), which is exactly zero, so this is degenerate too.
+  CHECK(std::isinf(getRadius(0.0, 0.0, 1.0, 1.0, 90.0)));
 
   // BUG (report only, owned by another worker): the zero check is an exact
   // `denominator == 0` test. angle == -90 is geometrically the same
   // degenerate case as angle == 90, but sin(degToRad(180)) is 1.22e-16
   // rather than 0, so no sentinel is returned and the radius blows up to
-  // ~1e15 instead. Same for angle == 270.
+  // ~1e15 instead of +infinity. Same for angle == 270.
   // Reported, not asserted: switching to an epsilon check is the fix, and
   // that must not turn this test red.
   const double near_degenerate = getRadius(0.0, 0.0, 0.0, 1.0, -90.0);
   mclib::test::knownBug(
-      near_degenerate != 999.0,
+      !std::isinf(near_degenerate),
       "getRadius compares the denominator to exactly 0, so angle == -90 "
-      "returns ~1e15 instead of the 999 sentinel");
+      "returns ~1e15 instead of +infinity");
 }
 
 }  // namespace

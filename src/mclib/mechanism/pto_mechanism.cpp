@@ -66,10 +66,8 @@ bool PTOMechanism::isShiftSettled() const {
 }
 
 QTime PTOMechanism::remainingSettleTime() const {
-  const QTime elapsed = pros::millis() * millisecond - m_last_shift_time;
-  return mclib::units::max(0 * millisecond, m_config.shift_settle_time - elapsed);
   const QTime elapsed = mclib::time::now() - m_last_shift_time;
-  return std::max(0.0, m_config.shift_settle_time - elapsed);
+  return mclib::units::max(0 * millisecond, m_config.shift_settle_time - elapsed);
 }
 
 bool PTOMechanism::acceptsWriteFrom(bool engaged_side) const {
