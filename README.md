@@ -2150,3 +2150,147 @@ the logger under a `mclib::time::ScopedClock` and asserts on real CSV text -
 the header, the timestamps, the drop policy, and the round-trip of `24_in` back
 to `24.0`. Only `src/mclib/telemetry/flush_task.cpp` includes a PROS header;
 the logger and both test sinks are header-only.
+
+## Paths and pure pursuit (`mclib/path/`)
+
+Multi-segment autons used to mean chaining point-to-point moves, each one
+stopping dead at its endpoint. `mclib/path/` replaces that with a path the
+robot follows without stopping.
+
+Three files, all PROS-free and host-tested:
+
+- `path/path.hpp` - `Waypoint`, `PathPoint`, and `Path`: an ordered list of
+  baked samples in field coordinates, each carrying position, tangent heading,
+  signed curvature and arc length from the start. Query it by arc length
+  (`atDistance`), by normalised parameter (`atParameter`), or ask for
+  `length()` and `maxAbsCurvature()`.
+- `path/spline.hpp` - `generateSpline()`, a centripetal Catmull-Rom.
+- `path/pure_pursuit.hpp` - the follower, plus the free functions
+  `curvatureSpeedLimit()`, `approachSpeedLimit()` and `wheelSpeeds()`.
+
+```cpp
+#include "mclib/mclib.hpp"
+
+using namespace mclib;
+using namespace mclib::path;
+
+Path route = generateSpline({
+    Waypoint{0_in, 0_in},
+    Waypoint{24_in, 24_in},
+    Waypoint{48_in, 12_in},
+});
+
+PurePursuitConfig config;
+config.lookahead = 12_in;
+config.track_width = 11.375_in;
+config.max_velocity = 48_in / 1_s;
+
+PurePursuit follower(route, config);
+while (true) {
+  const PurePursuitOutput out = follower.update(control::robotState().pose());
+  if (out.finished) {
+    break;
+  }
+  drive(out.wheels.left, out.wheels.right);
+  pros::delay(10);
+}
+```
+
+### Frame and sign
+
+Field frame, compass convention: heading 0 is +Y, clockwise-positive
+(`math.hpp`). **Curvature is signed the way `mclib::arcRadius()` is: positive
+curves to the robot's right.** `PurePursuitOutput::cross_track_error` is
+positive when the robot is to the *right* of the path, so a correct follower
+answers a positive cross-track error with a negative curvature. `tests/
+path_test.cpp` asserts both directions explicitly, because a transposed frame
+compiles and runs and merely drives into a wall.
+
+The frame check that anchors the whole unit: a straight path from `(0, 0)` to
+`(0, 10)`, robot at the origin at heading 0, lookahead 5 in. The goal point
+comes back as exactly `(0, 5)` and the curvature as exactly `0`.
+
+### Why Catmull-Rom
+
+An auton is written as "drive through these field positions". Catmull-Rom
+**interpolates** - the curve passes through every waypoint you type. A Bezier
+approximates: its interior control points are not on the curve, so the author
+places handles that mean nothing on a field diagram and the robot does not go
+through the numbers they wrote down.
+
+The parameterisation is **centripetal** (alpha = 0.5). Uniform Catmull-Rom
+overshoots and can form a cusp or a loop when waypoint spacing is uneven, which
+is the exact shape that makes a pure-pursuit follower spin.
+
+The curve is **C1**: the two segments either side of a waypoint share a
+tangent, so position and heading are continuous across it. It is not C2 -
+curvature steps at a waypoint. `tests/path_test.cpp` samples 4000 points across
+a four-waypoint spline and asserts the heading change across each interior knot
+is no more than the local curvature times the arc length across it.
+
+End conditions are the part that naive Catmull-Rom gets wrong. Reflecting a
+phantom point through the first knot yields the one-sided slope: exact for a
+straight line, badly wrong for anything curved. On a 48 in circular arc it made
+the first segment's curvature swing through zero and overshoot to 2/R, and the
+curvature velocity limiter believed it and halved the speed for the first two
+inches of every path. The end tangents are the derivative of the quadratic
+through the first (and last) three knots instead, which reproduces a circle to
+0.4%: measured curvature 0.020793 /in against an exact 1/48 = 0.020833 /in.
+
+### The cases that break naive followers
+
+- **More than one intersection.** The lookahead circle can cut the path in
+  several places. The follower takes the **first intersection at or after a
+  monotone lookahead cursor**, walking segments forward from where it stopped
+  last tick. "First ahead" and not "furthest along" is the point: on a hairpin
+  the far branch is also inside the circle, and chasing it cuts the corner and
+  abandons the rest of the path.
+- **Off the path.** When the closest path point is further away than the
+  lookahead, no intersection exists at all. The follower aims at the path point
+  one lookahead *beyond the closest point* - a rejoin, not a lunge at the
+  endpoint - and reports `off_path = true`. `finished` is vetoed while
+  `off_path` is set, so being shoved past the end of the route does not count
+  as arriving.
+- **End of path.** When the search runs off the end, the goal is the final path
+  point and `at_end` is true. The effective lookahead then shrinks as the robot
+  arrives, so commanded curvature is clamped to `max_curvature` (default a 6 in
+  radius). Once the remaining arc length is inside `finish_tolerance`,
+  `finished` is true and both wheel speeds are zero.
+- **Doubling back.** Both search cursors move forward only, and the
+  closest-point search is bounded to `search_window` (default 24 in) of arc
+  length ahead. The test drives up an outbound leg whose return leg is 4 in
+  away in field space; an unguarded nearest-point search latches onto the
+  return leg, this one does not.
+
+### Speed
+
+Three limits, smallest wins:
+
+| Limit | Formula |
+| --- | --- |
+| Configured cap | `max_velocity` |
+| Cornering | `sqrt(max_lateral_accel / k)` over the tightest curvature in the next lookahead of path |
+| Stopping | `sqrt(2 * max_decel * remaining)` |
+
+`min_velocity` is a floor under the result while the path is unfollowed, and
+the pair is scaled down together if `wheelSpeeds()` would put either wheel over
+`max_velocity`. Measured, with 60 in/s^2 of lateral budget: a 48 in radius arc
+runs at 42.7 in/s (the 48 in/s cap, scaled by the 1.125 outer-wheel spread), a
+10 in radius arc at 24.5 in/s, an 8 in radius at 21.9, a 2 in radius at 11.0.
+
+These are stateless kinematic one-liners on purpose. A trapezoidal or S-curve
+profile layers on top by ignoring `PurePursuitOutput::velocity` and feeding the
+profile's speed through `wheelSpeeds()` with the reported curvature.
+
+### Logging
+
+`PurePursuit::attachLogger(logger)` registers five channels - goal x, goal y,
+cross-track error, curvature in 1/in, and commanded velocity - and every
+`update()` writes them. A path follower you cannot plot is a path follower you
+cannot tune.
+
+### Do not use `getRadius()`
+
+`utils.hpp`'s `getRadius()` is frame-transposed and returns 5.0 for a target
+dead ahead, where the true radius is infinite. `mclib::arcRadius()` in
+`math.hpp` is the correct primitive and is what this unit calls.
