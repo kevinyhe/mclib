@@ -91,6 +91,97 @@ Create a PROS template package:
 pros make template
 ```
 
+## Tests
+
+```sh
+make test
+```
+
+`make test` compiles every `tests/*.cpp` into its own host binary with the
+system `g++` and runs it. It never touches the ARM toolchain, never links PROS,
+and never runs the firmware build. Binaries land in `bin/tests/`, which is
+already gitignored, and `make clean` removes them.
+
+`tests/` sits at the repo root, deliberately outside `src/`. `common.mk` globs
+`src/**` recursively into the firmware, so a test directory under `src/` would
+be compiled into the library. Do not move it, and do not add `tests/` to
+`TEMPLATE_FILES`.
+
+### Writing a test
+
+One test per file, each with its own `int main()`. There is no framework, no
+registration macro, and nothing to add to the `Makefile` — the glob picks up
+any new `tests/*.cpp` on the next run.
+
+```cpp
+// mclib
+#include "mclib/math.hpp"
+
+#include "test_assert.hpp"
+
+int main() {
+  CHECK_NEAR(mclib::wrapAngle(3.0 * mclib::kPi), mclib::kPi, 1e-12);
+  CHECK_EQ(mclib::clamp(11.0, 0.0, 10.0), 10.0);
+  CHECK(mclib::clamp(5.0, 10.0, 0.0) == 5.0);
+  return mclib::test::summary("my feature");
+}
+```
+
+`tests/test_assert.hpp` gives you three macros:
+
+| Macro | Use |
+| --- | --- |
+| `CHECK(cond)` | boolean condition |
+| `CHECK_NEAR(actual, expected, eps)` | floating point within a tolerance |
+| `CHECK_EQ(actual, expected)` | exact equality on doubles |
+
+Prefer the numeric ones. A failure prints the file, the line, the expression,
+and both values:
+
+```text
+== utils_test
+  FAIL ./tests/utils_test.cpp:44: CHECK_NEAR(getRadius(0.0, 0.0, 3.0, 4.0, 0.0), 6.4, 1e-12)
+       expected 6.4, got 3.125 (diff -3.275)
+FAIL utils (1 of 120 checks failed)
+
+FAILED TESTS: utils_test
+```
+
+A failed assertion does not stop the run, so one invocation reports every
+broken check. `mclib::test::summary()` returns 0 when everything passed and 1
+otherwise; `make test` exits non-zero and names each failing binary.
+
+### Documenting a bug you are not allowed to fix
+
+Do not `CHECK` the wrong value. Pinning known-bad behaviour means the person
+who eventually fixes it gets a red build blamed on their commit. Use
+`mclib::test::knownBug(still_present, "what is wrong")` instead — it prints
+either `KNOWN BUG (still present)` or `KNOWN BUG (appears FIXED, update this
+test)` and never touches the exit code.
+
+```cpp
+double left = -6.0;
+double right = -6.0;
+scaleToMax(left, right, 4.0);
+mclib::test::knownBug(left < -4.0, "scaleToMax does not cap equal negatives");
+```
+
+### What can be tested
+
+Tests link against `HOST_TEST_SRC` in the `Makefile` — the library sources that
+compile without PROS headers. Today that is:
+
+- `src/mclib/math.cpp`
+- `src/mclib/utils.cpp`
+- `src/mclib/control/scaling.cpp`
+- `src/mclib/control/state.cpp`
+
+This list is expected to grow. Anything that pulls in `pros/...` cannot be
+linked on the host, so making a source testable usually means putting a seam in
+front of the PROS call (a time source, a motor interface) rather than changing
+the test setup. When a source becomes PROS-free, add it to `HOST_TEST_SRC` and
+it is available to every test.
+
 ## Usage
 
 ```cpp
