@@ -174,7 +174,14 @@ compile without PROS headers. Today that is:
 - `src/mclib/math.cpp`
 - `src/mclib/utils.cpp`
 - `src/mclib/control/scaling.cpp`
-- `src/mclib/control/state.cpp`
+- `src/mclib/control/robot_state.cpp`
+- `src/mclib/control/odometry.cpp`
+
+Those last two are PROS-free by construction, not by accident. `sync.hpp`
+picks `std::mutex` over `pros::Mutex` when `MCLIB_HOST_BUILD` is defined, and
+`Odometry` takes a struct of raw sensor readings rather than reading devices
+itself -- the task that does read them lives in `control/odometry_task.cpp`,
+which is not host-testable and holds no math.
 
 This list is expected to grow. Anything that pulls in `pros/...` cannot be
 linked on the host, so making a source testable usually means putting a seam in
@@ -643,12 +650,12 @@ mclib has one canonical frame, the **compass / field frame**:
 
 Both of those are the transpose of the usual textbook formulas. This is
 deliberate: it matches how VEX field diagrams are drawn, and it is what
-`control/odometry.cpp`, `control/motion.cpp`, `Chassis::updateOdometry()`, and
-`snapshot/raycast.cpp` already do.
+`control/odometry.cpp`, `control/motion.cpp` and `snapshot/raycast.cpp`
+already do.
 
 Units: angles are **radians** everywhere inside `math.hpp` (`Pose2D::theta`,
 `wrapAngle`), and **degrees** at the public motion API (`Chassis`,
-`control/motion.cpp`, `correct_angle`). Convert at that boundary with
+`control/motion.cpp`, `RobotState::correctAngleDeg()`). Convert at that boundary with
 `degToRad` / `radToDeg` from `utils.hpp`. Translations are inches.
 
 The robot frame is chosen to coincide with the field frame at `theta = 0`:

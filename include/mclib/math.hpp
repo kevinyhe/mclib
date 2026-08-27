@@ -20,8 +20,8 @@
  *   second. Again the transpose of the usual `atan2(y, x)`.
  *
  * This matches how VEX field diagrams are drawn, and it is what
- * `control/odometry.cpp`, `control/motion.cpp`, `Chassis::updateOdometry()`,
- * and `snapshot/raycast.cpp` already do. Do not introduce a second
+ * `control/odometry.cpp`, `control/motion.cpp`, the odometry task in
+ * `control/odometry_task.cpp`, and `snapshot/raycast.cpp` already do. Do not introduce a second
  * convention. If you need to turn a heading into a vector, or a vector into a
  * heading, call `headingVector()` / `headingToward()` below instead of writing
  * sin/cos by hand.
@@ -30,8 +30,8 @@
  *
  * - Internally, every angle in this header is **radians**. `Pose2D::theta`
  *   and `wrapAngle()` are radians.
- * - The public motion API (`Chassis`, `control/motion.cpp`, `correct_angle`)
- *   is **degrees**. Convert at that boundary with `degToRad` / `radToDeg`
+ * - The public motion API (`Chassis`, `control/motion.cpp`, and
+ *   `RobotState::correctAngleDeg()`) is **degrees**. Convert at that boundary with `degToRad` / `radToDeg`
  *   from `utils.hpp`; `Chassis::headingDeg()` already does.
  * - Translations are inches.
  *

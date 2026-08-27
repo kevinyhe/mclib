@@ -5,7 +5,9 @@
 #include "mclib/config.hpp"
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/scaling.hpp"
-#include "mclib/control/state.hpp"
+#include "mclib/control/odometry.hpp"
+#include "mclib/control/robot_state.hpp"
+#include "mclib/math.hpp"
 #include "mclib/pid.hpp"
 #include "mclib/utils.hpp"
 
@@ -42,12 +44,55 @@ void holdRightSide() {
   right_chassis.setBrakeMode(mclib::device::BrakeMode::Hold);
   right_chassis.brake();
 }
+
+/// @brief The shared state that replaced the bare globals in state.hpp.
+mclib::control::RobotState& state() {
+  return mclib::control::robotState();
+}
+
+/**
+ * @brief True once someone has asked the running motion routine to stop.
+ *
+ * Every loop below tests this next to its timeout. That is what lets
+ * AsyncControlCommand cancel a motion by asking instead of by calling
+ * pros::Task::remove() on a task that might be mid-store.
+ */
+bool cancelled() {
+  return mclib::control::cancelRequested(
+      mclib::control::CancelToken::Motion);
+}
+
+/**
+ * @brief The heading to hold after a routine that aimed at @p commanded_deg.
+ *
+ * A routine that ran to completion reached its target, so that is the heading
+ * to hold. A cancelled one was stopped short, and publishing the commanded
+ * angle would have correctHeading() actively drive toward a heading the robot
+ * never got to. Report where it actually is.
+ */
+double settledHeadingDeg(double commanded_deg);
+
+/**
+ * @brief True once someone has asked correctHeading() to stop.
+ *
+ * A separate token from cancelled(). correctHeading() runs *alongside* the
+ * motions - it gates on isTurning() so it can - so cancelling a motion must
+ * not take the heading hold down with it.
+ */
+bool headingCorrectionCancelled() {
+  return mclib::control::cancelRequested(
+      mclib::control::CancelToken::HeadingCorrection);
+}
+
+double settledHeadingDeg(double commanded_deg) {
+  return cancelled() ? getInertialHeading() : commanded_deg;
+}
 }  // namespace
 void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double max_output, double min_speed)
 {
   // Brake mode helps dissipate momentum near the setpoint and reduces hunting.
   stopChassis(mclib::device::BrakeMode::Brake);
-  is_turning = true;
+  state().setTurning(true);
   const double threshold = 1;
   PID pid(turn_kp, turn_ki, turn_kd);
 
@@ -76,7 +121,7 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   if (!exit && getInertialHeading() < turn_angle)
   {
     // early exit path drives until the inertial pose passes the commanded heading allowing chained moves
-    while (getInertialHeading() < turn_angle && pros::millis() - start_time <= time_limit_msec)
+    while (getInertialHeading() < turn_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       output = pid.update(getInertialHeading());
       // keep a minimum turning speed so the robot doesn't stall mid-chain
@@ -89,7 +134,7 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   }
   else if (!exit && getInertialHeading() > turn_angle)
   {
-    while (getInertialHeading() > turn_angle && pros::millis() - start_time <= time_limit_msec)
+    while (getInertialHeading() > turn_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       output = pid.update(getInertialHeading());
       if (min_speed_output > 0 && fabs(output) < min_speed_output)
@@ -101,7 +146,7 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   }
   else
   {
-    while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec)
+    while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       output = clampOutput(pid.update(getInertialHeading()));
       driveChassis(output, -output);
@@ -113,8 +158,8 @@ void turnToAngle(double turn_angle, double time_limit_msec, bool exit, double ma
   {
     stopChassis(mclib::device::BrakeMode::Hold);
   }
-  correct_angle = turn_angle;
-  is_turning = false;
+  state().setCorrectAngleDeg(settledHeadingDeg(turn_angle));
+  state().setTurning(false);
 }
 
 void driveTo(double distance_in, double time_limit_msec, bool exit, double max_output, double min_speed)
@@ -122,7 +167,7 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
   // Store initial encoder values
   double start_left = getLeftRotationDegree(), start_right = getRightRotationDegree();
   stopChassis(mclib::device::BrakeMode::Coast);
-  is_turning = true;
+  state().setTurning(true);
   double threshold = 0.5;
   int drive_direction = distance_in > 0 ? 1 : -1;
   double max_slew_fwd = drive_direction > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
@@ -163,7 +208,7 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
   pid_distance.setSmallBigErrorDuration(50, 250);
   pid_distance.setDerivativeTolerance(5);
 
-  pid_heading.setTarget(normalizeTarget(correct_angle));
+  pid_heading.setTarget(normalizeTarget(state().correctAngleDeg()));
   pid_heading.setIntegralMax(0);
   pid_heading.setIntegralRange(1);
   pid_heading.setSmallBigErrorTolerance(0, 0);
@@ -174,9 +219,13 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
   double start_time = pros::millis();
   double left_output = 0, right_output = 0, correction_output = 0;
   double current_distance = 0, current_angle = 0;
+  // Local mirror of the shared slew baseline: read once here, published once
+  // at the end, so the loop below never touches the lock.
+  double prev_left_output = state().prevLeftOutput();
+  double prev_right_output = state().prevRightOutput();
 
   // Main PID loop for driving straight
-  while (((!pid_distance.targetArrived()) && pros::millis() - start_time <= time_limit_msec && exit) || (exit == false && current_distance < distance_in && pros::millis() - start_time <= time_limit_msec))
+  while ((((!pid_distance.targetArrived()) && pros::millis() - start_time <= time_limit_msec && exit) || (exit == false && current_distance < distance_in && pros::millis() - start_time <= time_limit_msec)) && !cancelled())
   {
     // integrate wheel travel by converting encoder degrees into linear inches and averaging both treads
     current_distance = (fabs(((getLeftRotationDegree() - start_left) / 360.0) * wheel_distance_in) + fabs(((getRightRotationDegree() - start_right) / 360.0) * wheel_distance_in)) / 2;
@@ -234,7 +283,7 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
     const double ramp_start = pros::millis();
     const double ramp_timeout = 500; // ms safety cap
     while ((fabs(prev_left_output) > 0.15 || fabs(prev_right_output) > 0.15) &&
-           pros::millis() - ramp_start < ramp_timeout)
+           pros::millis() - ramp_start < ramp_timeout && !cancelled())
     {
       prev_left_output = applySlewLimit(0, prev_left_output, exit_decel, exit_decel, 10);
       prev_right_output = applySlewLimit(0, prev_right_output, exit_decel, exit_decel, 10);
@@ -244,11 +293,11 @@ void driveTo(double distance_in, double time_limit_msec, bool exit, double max_o
     prev_left_output = 0;
     prev_right_output = 0;
     stopChassis(mclib::device::BrakeMode::Hold);
-    // Zero the global slew baseline so the next motion starts cleanly
-    ::prev_left_output = 0;
-    ::prev_right_output = 0;
   }
-  is_turning = false;
+  // Publish the slew baseline so the next motion picks up where this one left
+  // off (zero, on the exit path above).
+  state().setPrevOutputs(prev_left_output, prev_right_output);
+  state().setTurning(false);
 }
 
 void curveCircle(double result_angle_deg, double center_radius, double time_limit_msec, bool exit, double max_output, double min_speed, bool reverse)
@@ -262,7 +311,8 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   // Normalize the target angle to be within +/-180 degrees of the current heading
   result_angle_deg = normalizeTarget(result_angle_deg);
   // convert delta heading into radians so arc length math can use radius times angle
-  result_angle = (result_angle_deg - correct_angle) * 3.14159265359 / 180;
+  const double entry_angle_deg = state().correctAngleDeg();
+  result_angle = (result_angle_deg - entry_angle_deg) * 3.14159265359 / 180;
 
   // Calculate arc lengths for inner and outer wheels
   // inner and outer tread travel differ by wheel base offset so compute each arc explicitly
@@ -271,13 +321,13 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   ratio = in_arc / out_arc;
 
   stopChassis(mclib::device::BrakeMode::Coast);
-  is_turning = true;
+  state().setTurning(true);
   double threshold = 0.5;
 
   // Determine curve and drive direction
   int curve_direction = center_radius > 0 ? 1 : -1;
   int drive_direction = 0;
-  if ((curve_direction == 1 && (result_angle_deg - correct_angle) > 0) || (curve_direction == -1 && (result_angle_deg - correct_angle) < 0))
+  if ((curve_direction == 1 && (result_angle_deg - entry_angle_deg) > 0) || (curve_direction == -1 && (result_angle_deg - entry_angle_deg) < 0))
   {
     drive_direction = 1;
   }
@@ -344,12 +394,12 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   if (curve_direction == -1 && exit == true)
   {
     // Left curve, stop at end
-    while (!pid_out.targetArrived() && pros::millis() - start_time <= time_limit_msec)
+    while (!pid_out.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
       current_right = fabs(((getRightRotationDegree() - start_right) / 360.0) * wheel_distance_in);
       // interpolate instantaneous heading by mapping right wheel progress onto desired arc fraction
-      real_angle = current_right / out_arc * (result_angle_deg - correct_angle) + correct_angle;
+      real_angle = current_right / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       right_output = pid_out.update(current_right) * drive_direction;
       left_output = right_output * ratio;
@@ -375,11 +425,11 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   else if (curve_direction == 1 && exit == true)
   {
     // Right curve, stop at end
-    while (!pid_out.targetArrived() && pros::millis() - start_time <= time_limit_msec)
+    while (!pid_out.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
       current_left = fabs(((getLeftRotationDegree() - start_left) / 360.0) * wheel_distance_in);
-      real_angle = current_left / out_arc * (result_angle_deg - correct_angle) + correct_angle;
+      real_angle = current_left / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       left_output = pid_out.update(current_left) * drive_direction;
       right_output = left_output * ratio;
@@ -402,11 +452,11 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   else if (curve_direction == -1 && exit == false)
   {
     // Left curve, chaining (do not stop at end)
-    while (current_right < out_arc && pros::millis() - start_time <= time_limit_msec)
+    while (current_right < out_arc && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
       current_right = fabs(((getRightRotationDegree() - start_right) / 360.0) * wheel_distance_in);
-      real_angle = current_right / out_arc * (result_angle_deg - correct_angle) + correct_angle;
+      real_angle = current_right / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       right_output = pid_out.update(current_right) * drive_direction;
       left_output = right_output * ratio;
@@ -429,11 +479,11 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
   else
   {
     // Right curve, chaining (do not stop at end)
-    while (current_left < out_arc && pros::millis() - start_time <= time_limit_msec)
+    while (current_left < out_arc && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
       current_left = fabs(((getLeftRotationDegree() - start_left) / 360.0) * wheel_distance_in);
-      real_angle = current_left / out_arc * (result_angle_deg - correct_angle) + correct_angle;
+      real_angle = current_left / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       left_output = pid_out.update(current_left) * drive_direction;
       right_output = left_output * ratio;
@@ -459,8 +509,8 @@ void curveCircle(double result_angle_deg, double center_radius, double time_limi
     stopChassis(mclib::device::BrakeMode::Hold);
   }
   // Update the global heading
-  correct_angle = result_angle_deg;
-  is_turning = false;
+  state().setCorrectAngleDeg(settledHeadingDeg(result_angle_deg));
+  state().setTurning(false);
 }
 
 void curveCircleReverse(double result_angle_deg, double center_radius, double time_limit_msec, bool exit, double max_output, double min_speed)
@@ -471,7 +521,7 @@ void curveCircleReverse(double result_angle_deg, double center_radius, double ti
 void swing(double swing_angle, double drive_direction, double time_limit_msec, bool exit, double max_output, double min_speed)
 {
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before starting swing
-  is_turning = true;                      // Set turning state
+  state().setTurning(true);                      // Set turning state
   double threshold = 1;
   PID pid = PID(turn_kp, turn_ki, turn_kd); // Initialize PID for turning
 
@@ -488,19 +538,20 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   double start_time = pros::millis();
   double output;
   const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-  double current_heading = correct_angle;
+  const double entry_angle_deg = state().correctAngleDeg();
+  double current_heading = entry_angle_deg;
   int choice = 1;
 
   // choice encodes which tread stays locked so swing math can reuse one code path per quadrant
-  if (swing_angle - correct_angle < 0 && drive_direction == 1)
+  if (swing_angle - entry_angle_deg < 0 && drive_direction == 1)
   {
     choice = 1;
   }
-  else if (swing_angle - correct_angle > 0 && drive_direction == 1)
+  else if (swing_angle - entry_angle_deg > 0 && drive_direction == 1)
   {
     choice = 2;
   }
-  else if (swing_angle - correct_angle < 0 && drive_direction == -1)
+  else if (swing_angle - entry_angle_deg < 0 && drive_direction == -1)
   {
     choice = 3;
   }
@@ -513,7 +564,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   if (choice == 1 && exit == false)
   {
     // Swing left, forward
-    while (current_heading > swing_angle && pros::millis() - start_time <= time_limit_msec)
+    while (current_heading > swing_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_heading = getInertialHeading();
       output = pid.update(current_heading);
@@ -534,7 +585,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   else if (choice == 2 && exit == false)
   {
     // Swing right, forward
-    while (current_heading < swing_angle && pros::millis() - start_time <= time_limit_msec)
+    while (current_heading < swing_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_heading = getInertialHeading();
       output = pid.update(current_heading);
@@ -555,7 +606,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   else if (choice == 3 && exit == false)
   {
     // Swing left, backward
-    while (current_heading > swing_angle && pros::millis() - start_time <= time_limit_msec)
+    while (current_heading > swing_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_heading = getInertialHeading();
       output = pid.update(current_heading);
@@ -576,7 +627,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   else
   {
     // Swing right, backward
-    while (current_heading < swing_angle && pros::millis() - start_time <= time_limit_msec && exit == false)
+    while (current_heading < swing_angle && pros::millis() - start_time <= time_limit_msec && exit == false && !cancelled())
     {
       current_heading = getInertialHeading();
       output = pid.update(current_heading);
@@ -596,7 +647,7 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   }
 
   // PID loop for exit == true (stop at end)
-  while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && exit == true)
+  while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && exit == true && !cancelled())
   {
     current_heading = getInertialHeading();
     output = pid.update(current_heading);
@@ -633,8 +684,8 @@ void swing(double swing_angle, double drive_direction, double time_limit_msec, b
   {
     stopChassis(mclib::device::BrakeMode::Hold); // Stop chassis at end if required
   }
-  correct_angle = swing_angle; // Update global heading
-  is_turning = false;          // Reset turning state
+  state().setCorrectAngleDeg(settledHeadingDeg(swing_angle)); // Update shared heading
+  state().setTurning(false);          // Reset turning state
 }
 
 void correctHeading()
@@ -642,8 +693,8 @@ void correctHeading()
   double output = 0;
   PID pid = PID(heading_correction_kp, heading_correction_ki, heading_correction_kd);
 
-  pid.setTarget(correct_angle); // Set PID target to current heading
-  pid.setIntegralRange(fabs(correct_angle) / 2.5);
+  pid.setTarget(state().correctAngleDeg()); // Set PID target to current heading
+  pid.setIntegralRange(fabs(state().correctAngleDeg()) / 2.5);
 
   pid.setSmallBigErrorTolerance(0, 0);
   pid.setSmallBigErrorDuration(0, 0);
@@ -652,10 +703,10 @@ void correctHeading()
 
   // feed equal magnitude opposite sign voltages
   // this cancels drift while driving straight
-  while (heading_correction)
+  while (heading_correction && !headingCorrectionCancelled())
   {
-    pid.setTarget(correct_angle);
-    if (is_turning == false)
+    pid.setTarget(state().correctAngleDeg());
+    if (!state().isTurning())
     {
       output = pid.update(getInertialHeading());
       driveChassis(output, -output); // Apply correction to chassis
@@ -678,7 +729,7 @@ void wallReset(double reset_x, double reset_y, double reset_heading,
   // Give the robot a moment to start moving before checking stall
   pros::delay(200);
 
-  while (pros::millis() - start_time <= time_limit_msec)
+  while (pros::millis() - start_time <= time_limit_msec && !cancelled())
   {
     // Average current across all motors on both sides (mA)
     auto left_currents = left_chassis.getCurrentDraws();
@@ -735,33 +786,39 @@ void wallReset(double reset_x, double reset_y, double reset_heading,
   // Stop motors
   stopChassis(mclib::device::BrakeMode::Brake);
 
-  // Reset position to known coordinates
-  xpos = reset_x;
-  ypos = reset_y;
-
-  // Reset heading if a valid value was provided
+  // Reset heading first if a valid value was provided, so the pose below is
+  // built from the IMU value we are actually going to keep.
   if (!std::isnan(reset_heading))
   {
     inertial_sensor.setRotationDeg(reset_heading);
-    correct_angle = reset_heading;
+    state().setCorrectAngleDeg(reset_heading);
   }
   else
   {
-    correct_angle = getInertialHeading();
+    state().setCorrectAngleDeg(getInertialHeading());
   }
+
+  // Reset position to known coordinates. This goes through the odometry, not
+  // just the pose, so the next odometry tick re-seeds its encoder baseline
+  // instead of integrating a delta across the teleport. A non-finite heading
+  // leaves the odometry's heading alone.
+  mclib::control::resetOdometry(
+      mclib::Pose2D{reset_x, reset_y, degToRad(getInertialHeading())});
 }
 
 void turnToPoint(double x, double y, int direction, double time_limit_msec, double min_speed)
 {
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before turning
-  is_turning = true;                      // Set turning state
+  state().setTurning(true);                      // Set turning state
   double threshold = 1, add = 0;
   if (direction == -1)
   {
     add = 180; // Add 180 degrees if turning to face backward
   }
+  // One locked read: x and y always come from the same odometry tick.
+  mclib::Pose2D pose = state().pose();
   // Calculate target angle using atan2 and normalize
-  double turn_angle = normalizeTarget(radToDeg(atan2(x - xpos, y - ypos))) + add;
+  double turn_angle = normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y))) + add;
   PID pid = PID(turn_kp, turn_ki, turn_kd);
 
   pid.setTarget(turn_angle); // Set PID target
@@ -774,9 +831,10 @@ void turnToPoint(double x, double y, int direction, double time_limit_msec, doub
 
   double start_time = pros::millis();
   const double min_speed_output = fmax(0.0, min_speed < 0 ? min_output : min_speed);
-  while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec)
+  while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
   {
-    pid.setTarget(normalizeTarget(radToDeg(atan2(x - xpos, y - ypos))) + add);
+    pose = state().pose();
+    pid.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y))) + add);
     double output = pid.update(getInertialHeading());
     if (min_speed_output > 0 && fabs(output) < min_speed_output)
     {
@@ -786,14 +844,14 @@ void turnToPoint(double x, double y, int direction, double time_limit_msec, doub
     pros::delay(10);
   }
   stopChassis(mclib::device::BrakeMode::Hold); // Stop at end
-  correct_angle = getInertialHeading();  // Update global heading
-  is_turning = false;                    // Reset turning state
+  state().setCorrectAngleDeg(getInertialHeading());  // Update shared heading
+  state().setTurning(false);                    // Reset turning state
 }
 
 void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit, double max_output, bool overturn, double min_speed)
 {
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before moving
-  is_turning = true;                      // Set turning state
+  state().setTurning(true);                      // Set turning state
   double threshold = 0.5;
   int add = dir > 0 ? 0 : 180;
   double max_slew_fwd = dir > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
@@ -825,15 +883,17 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
   PID pid_distance = PID(distance_kp, distance_ki, distance_kd);
   PID pid_heading = PID(heading_correction_kp, heading_correction_ki, heading_correction_kd);
 
+  // One locked read: x and y always come from the same odometry tick.
+  mclib::Pose2D pose = state().pose();
   // Set PID targets for distance and heading
-  pid_distance.setTarget(hypot(x - xpos, y - ypos));
+  pid_distance.setTarget(hypot(x - pose.x, y - pose.y));
   pid_distance.setIntegralMax(0);
   pid_distance.setIntegralRange(3);
   pid_distance.setSmallBigErrorTolerance(threshold, threshold * 3);
   pid_distance.setSmallBigErrorDuration(50, 250);
   pid_distance.setDerivativeTolerance(5);
 
-  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - xpos, y - ypos)) + add));
+  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y)) + add));
   pid_heading.setIntegralMax(0);
   pid_heading.setIntegralRange(1);
 
@@ -852,17 +912,18 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
   bool ch = true;
 
   // Main PID loop for moving to point
-  while (pros::millis() - start_time <= time_limit_msec)
+  while (pros::millis() - start_time <= time_limit_msec && !cancelled())
   {
     // Continuously update targets as robot moves
-    pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - xpos, y - ypos)) + add));
-    pid_distance.setTarget(hypot(x - xpos, y - ypos));
+    pose = state().pose();
+    pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y)) + add));
+    pid_distance.setTarget(hypot(x - pose.x, y - pose.y));
     current_angle = getInertialHeading();
     // Calculate drive output based on heading and distance
-    left_output = pid_distance.update(0) * cos(degToRad(atan2(x - xpos, y - ypos) * 180 / M_PI + add - current_angle)) * dir;
+    left_output = pid_distance.update(0) * cos(degToRad(atan2(x - pose.x, y - pose.y) * 180 / M_PI + add - current_angle)) * dir;
     right_output = left_output;
     // Check if robot has crossed the perpendicular line to the target
-    perpendicular_line = ((ypos - y) * -cos(degToRad(normalizeTarget(current_angle + add))) <= (xpos - x) * sin(degToRad(normalizeTarget(current_angle + add))) + exittolerance);
+    perpendicular_line = ((pose.y - y) * -cos(degToRad(normalizeTarget(current_angle + add))) <= (pose.x - x) * sin(degToRad(normalizeTarget(current_angle + add))) + exittolerance);
     if (perpendicular_line && !prev_perpendicular_line)
     {
       break;
@@ -870,7 +931,7 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     prev_perpendicular_line = perpendicular_line;
 
     // Only apply heading correction if far from target
-    if (hypot(x - xpos, y - ypos) > 8 && ch == true)
+    if (hypot(x - pose.x, y - pose.y) > 8 && ch == true)
     {
       correction_output = pid_heading.update(current_angle);
       // Cap correction so it can't overwhelm the forward drive and cause a pivot
@@ -946,7 +1007,7 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     const double ramp_start = pros::millis();
     const double ramp_timeout = 500; // ms safety cap
     while ((fabs(prev_left_output) > 0.15 || fabs(prev_right_output) > 0.15) &&
-           pros::millis() - ramp_start < ramp_timeout)
+           pros::millis() - ramp_start < ramp_timeout && !cancelled())
     {
       prev_left_output = applySlewLimit(0, prev_left_output, exit_decel, exit_decel, 10);
       prev_right_output = applySlewLimit(0, prev_right_output, exit_decel, exit_decel, 10);
@@ -956,18 +1017,17 @@ void moveToPoint(double x, double y, int dir, double time_limit_msec, bool exit,
     prev_left_output = 0;
     prev_right_output = 0;
     stopChassis(mclib::device::BrakeMode::Hold); // Stop at end if required
-    // Zero the global slew baseline so the next driveTo starts cleanly
-    ::prev_left_output = 0;
-    ::prev_right_output = 0;
+    // Zero the shared slew baseline so the next driveTo starts cleanly
+    state().setPrevOutputs(0.0, 0.0);
   }
-  correct_angle = getInertialHeading(); // Update global heading
-  is_turning = false;                   // Reset turning state
+  state().setCorrectAngleDeg(getInertialHeading()); // Update shared heading
+  state().setTurning(false);                   // Reset turning state
 }
 
 void boomerang(double x, double y, int dir, double a, double dlead, double time_limit_msec, bool exit, double max_output, bool overturn, double min_speed)
 {
   stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before moving
-  is_turning = true;                      // Set turning state
+  state().setTurning(true);                      // Set turning state
   double threshold = 0.5;
   int add = dir > 0 ? 0 : 180;
   double max_slew_fwd = dir > 0 ? max_slew_accel_fwd : max_slew_decel_rev;
@@ -999,17 +1059,19 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
   PID pid_distance = PID(distance_kp, distance_ki, distance_kd);
   PID pid_heading = PID(heading_correction_kp, heading_correction_ki, heading_correction_kd);
 
+  // One locked read: x and y always come from the same odometry tick.
+  mclib::Pose2D pose = state().pose();
   // Compute initial carrot so the PID starts with a real nonzero target
-  double init_hyp = hypot(xpos - x, ypos - y);
+  double init_hyp = hypot(pose.x - x, pose.y - y);
   double init_carrot_x = x - init_hyp * sin(degToRad(a + add)) * dlead;
   double init_carrot_y = y - init_hyp * cos(degToRad(a + add)) * dlead;
-  pid_distance.setTarget(hypot(init_carrot_x - xpos, init_carrot_y - ypos) * dir);
+  pid_distance.setTarget(hypot(init_carrot_x - pose.x, init_carrot_y - pose.y) * dir);
   pid_distance.setIntegralMax(3);
   pid_distance.setSmallBigErrorTolerance(threshold, threshold * 3);
   pid_distance.setSmallBigErrorDuration(50, 250);
   pid_distance.setDerivativeTolerance(5);
 
-  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - xpos, y - ypos))));
+  pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y))));
   pid_heading.setIntegralMax(0);
   pid_heading.setIntegralRange(1);
   pid_heading.setSmallBigErrorTolerance(0, 0);
@@ -1019,24 +1081,28 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
 
   double start_time = pros::millis();
   double left_output = 0, right_output = 0, correction_output = 0, slip_speed = 0, overturn_value = 0;
+  // Local mirror of the shared slew baseline; see driveTo().
+  double prev_left_output = state().prevLeftOutput();
+  double prev_right_output = state().prevRightOutput();
   double exit_tolerance = 3;
   bool perpendicular_line = false, prev_perpendicular_line = true;
   double current_angle = 0, hypotenuse = 0, carrot_x = 0, carrot_y = 0;
 
   // Main PID loop for boomerang path
-  while (pros::millis() - start_time <= time_limit_msec)
+  while (pros::millis() - start_time <= time_limit_msec && !cancelled())
   {
-    hypotenuse = hypot(xpos - x, ypos - y); // Distance to target
+    pose = state().pose();
+    hypotenuse = hypot(pose.x - x, pose.y - y); // Distance to target
     // Calculate carrot point for path leading
     carrot_x = x - hypotenuse * sin(degToRad(a + add)) * dlead;
     carrot_y = y - hypotenuse * cos(degToRad(a + add)) * dlead;
-    pid_distance.setTarget(hypot(carrot_x - xpos, carrot_y - ypos) * dir);
+    pid_distance.setTarget(hypot(carrot_x - pose.x, carrot_y - pose.y) * dir);
     current_angle = getInertialHeading();
     // Calculate drive output based on carrot point
-    left_output = pid_distance.update(0) * cos(degToRad(atan2(carrot_x - xpos, carrot_y - ypos) * 180 / M_PI + add - current_angle));
+    left_output = pid_distance.update(0) * cos(degToRad(atan2(carrot_x - pose.x, carrot_y - pose.y) * 180 / M_PI + add - current_angle));
     right_output = left_output;
     // Check if robot has crossed the perpendicular line to the target
-    perpendicular_line = ((ypos - y) * -cos(degToRad(normalizeTarget(a))) <= (xpos - x) * sin(degToRad(normalizeTarget(a))) + exit_tolerance);
+    perpendicular_line = ((pose.y - y) * -cos(degToRad(normalizeTarget(a))) <= (pose.x - x) * sin(degToRad(normalizeTarget(a))) + exit_tolerance);
     if (perpendicular_line && !prev_perpendicular_line)
     {
       break;
@@ -1050,28 +1116,28 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
     }
 
     // Heading correction logic based on distance to carrot/target
-    if (hypot(carrot_x - xpos, carrot_y - ypos) > 8)
+    if (hypot(carrot_x - pose.x, carrot_y - pose.y) > 8)
     {
-      pid_heading.setTarget(normalizeTarget(radToDeg(atan2(carrot_x - xpos, carrot_y - ypos)) + add));
+      pid_heading.setTarget(normalizeTarget(radToDeg(atan2(carrot_x - pose.x, carrot_y - pose.y)) + add));
       correction_output = pid_heading.update(current_angle);
     }
-    else if (hypot(x - xpos, y - ypos) > 6)
+    else if (hypot(x - pose.x, y - pose.y) > 6)
     {
-      pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - xpos, y - ypos)) + add));
+      pid_heading.setTarget(normalizeTarget(radToDeg(atan2(x - pose.x, y - pose.y)) + add));
       correction_output = pid_heading.update(current_angle);
     }
     else
     {
       pid_heading.setTarget(normalizeTarget(a));
       correction_output = pid_heading.update(current_angle);
-      if (exit && hypot(x - xpos, y - ypos) < 5 && pros::millis() - start_time > 200)
+      if (exit && hypot(x - pose.x, y - pose.y) < 5 && pros::millis() - start_time > 200)
       {
         break;
       }
     }
 
     // Limit slip speed for smoother curves
-    slip_speed = sqrt(chase_power * getRadius(xpos, ypos, carrot_x, carrot_y, current_angle) * 9.8);
+    slip_speed = sqrt(chase_power * getRadius(pose.x, pose.y, carrot_x, carrot_y, current_angle) * 9.8);
     if (left_output > slip_speed)
     {
       left_output = slip_speed;
@@ -1130,7 +1196,7 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
     const double ramp_start = pros::millis();
     const double ramp_timeout = 500; // ms safety cap
     while ((fabs(prev_left_output) > 0.15 || fabs(prev_right_output) > 0.15) &&
-           pros::millis() - ramp_start < ramp_timeout)
+           pros::millis() - ramp_start < ramp_timeout && !cancelled())
     {
       prev_left_output = applySlewLimit(0, prev_left_output, exit_decel, exit_decel, 10);
       prev_right_output = applySlewLimit(0, prev_right_output, exit_decel, exit_decel, 10);
@@ -1140,10 +1206,10 @@ void boomerang(double x, double y, int dir, double a, double dlead, double time_
     prev_left_output = 0;
     prev_right_output = 0;
     stopChassis(mclib::device::BrakeMode::Hold); // Stop at end if required
-    // Zero the global slew baseline so the next driveTo starts cleanly
-    ::prev_left_output = 0;
-    ::prev_right_output = 0;
   }
-  correct_angle = a;  // Update global heading
-  is_turning = false; // Reset turning state
+  // Publish the slew baseline so the next motion picks up where this one left
+  // off (zero, on the exit path above).
+  state().setPrevOutputs(prev_left_output, prev_right_output);
+  state().setCorrectAngleDeg(settledHeadingDeg(a));  // Update shared heading
+  state().setTurning(false); // Reset turning state
 }

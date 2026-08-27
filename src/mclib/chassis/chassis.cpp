@@ -1,6 +1,9 @@
 // mclib
 #include "mclib/chassis/chassis.hpp"
 
+#include "mclib/control/odometry.hpp"
+#include "mclib/control/robot_state.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -56,11 +59,14 @@ void Chassis::setBrakeMode(device::BrakeMode mode) {
 }
 
 void Chassis::tare() {
+  // Snapshot first: the odometry task samples these same encoders on another
+  // task, so a tick landing between the tare and the reset would read the tare
+  // as a delta the size of everything driven so far. Reading the pose after
+  // the tare would then adopt that corrupted value permanently.
+  const Pose2D pose = control::robotState().pose();
   m_left.tarePosition();
   m_right.tarePosition();
-  m_prev_left_in = 0.0;
-  m_prev_right_in = 0.0;
-  m_prev_heading_rad = headingDeg() * kPi / 180.0;
+  control::resetOdometry(pose);
 }
 
 double Chassis::leftPositionDeg() {
@@ -91,37 +97,22 @@ double Chassis::headingDeg() {
   if (m_imu != nullptr) {
     return m_imu->getRotationDeg();
   }
-  return m_pose.theta * 180.0 / kPi;
+  return control::robotState().pose().theta * 180.0 / kPi;
 }
 
 void Chassis::setPose(const Pose2D& pose) {
-  m_pose = Pose2D{pose.x, pose.y, wrapAngle(pose.theta)};
-  m_prev_left_in = leftDistanceIn();
-  m_prev_right_in = rightDistanceIn();
-  m_prev_heading_rad = m_pose.theta;
+  // The odometry tracks heading as IMU deltas from whatever theta it was last
+  // reset to, while the motion routines steer on raw IMU degrees. Move the IMU
+  // too, or the two frames drift apart by exactly the offset introduced here
+  // and every subsequent moveToPoint aims wrong.
+  if (m_imu != nullptr) {
+    m_imu->setRotationDeg(wrapAngle(pose.theta) * 180.0 / kPi);
+  }
+  control::resetOdometry(pose);
 }
 
 Pose2D Chassis::getPose() const {
-  return m_pose;
-}
-
-Pose2D Chassis::updateOdometry() {
-  const double left_in = leftDistanceIn();
-  const double right_in = rightDistanceIn();
-  const double delta_left = left_in - m_prev_left_in;
-  const double delta_right = right_in - m_prev_right_in;
-  const double heading_rad = headingDeg() * kPi / 180.0;
-  const double delta_distance = (delta_left + delta_right) * 0.5;
-  const double avg_heading = m_prev_heading_rad + wrapAngle(heading_rad - m_prev_heading_rad) * 0.5;
-
-  m_pose.x += delta_distance * std::sin(avg_heading);
-  m_pose.y += delta_distance * std::cos(avg_heading);
-  m_pose.theta = wrapAngle(heading_rad);
-
-  m_prev_left_in = left_in;
-  m_prev_right_in = right_in;
-  m_prev_heading_rad = heading_rad;
-  return m_pose;
+  return control::robotState().pose();
 }
 
 ChassisDimensions Chassis::getDimensions() const {

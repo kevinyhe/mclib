@@ -17,14 +17,9 @@
 #include <string>
 #include <vector>
 
-// The host build links its own clock, exactly as time.hpp documents. Nothing
-// in these tests runs before the ScopedClock is installed, so the value here
-// only has to exist.
-namespace mclib {
-namespace time {
-std::uint32_t systemMillis() { return 0; }
-}  // namespace time
-}  // namespace mclib
+// The host definition of mclib::time::systemMillis() lives in
+// tests/support/host_time.cpp, which HOST_TEST_SRC links into every test
+// binary. Defining it here too is a duplicate symbol at link time.
 
 namespace {
 
