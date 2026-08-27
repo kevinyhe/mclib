@@ -28,6 +28,7 @@
 #include "mclib/mechanism/pneumatic_subsystem.hpp"
 #include "mclib/mechanism/position_mechanism.hpp"
 #include "mclib/mechanism/velocity_mechanism.hpp"
+#include "mclib/mechanism/toggle_mechanism.hpp"
 #include "mclib/snapshot/snapshot_config.hpp"
 
 #ifndef MCLIB_NO_ALIAS
