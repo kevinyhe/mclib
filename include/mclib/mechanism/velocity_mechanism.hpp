@@ -40,9 +40,11 @@ struct VelocityMechanismConfig {
   /// motor) is ratio = 2.0; geared 2:1 for torque it is 0.5. 1.0 means the
   /// output is the motor shaft, which is the default and reproduces the
   /// ungeared behaviour exactly.
-  /// Must be > 0. A value <= 0 would divide by zero or invert the loop, so the
-  /// constructor rejects it and falls back to 1.0; getConfig().ratio then
-  /// reports the 1.0 that is actually in use, not the bad value passed in.
+  /// Must be finite and > 0. A value <= 0 would divide by zero or invert the
+  /// loop, and an infinite one would silently zero the target and the integral
+  /// gate, so the constructor rejects anything else and falls back to 1.0;
+  /// getConfig().ratio then reports the 1.0 that is actually in use, not the
+  /// bad value passed in.
   double ratio = 1.0;
   /// How close to the target counts as "at speed", in *output* RPM.
   double tolerance_rpm = 100.0;
@@ -79,9 +81,15 @@ struct VelocityMechanismConfig {
  *
  * The control loop itself runs in motor RPM: the PID error and the kv
  * feedforward are both motor-space, so kp/ki/kd/kv keep their natural "volts
- * per motor RPM" meaning and do not have to be retuned when the gearing
- * changes. The user-facing config numbers that are in output RPM
- * (tolerance_rpm, integral_range_rpm) are divided by ratio on the way in.
+ * per motor RPM" meaning. kv in particular is set by the motor's free speed and
+ * so is unchanged by gearing; kp/ki/kd still want retuning when the gearing
+ * changes, because the load inertia reflected to the motor scales with the
+ * square of ratio.
+ *
+ * integral_range_rpm gates the PID's motor-RPM error, so it is divided by
+ * ratio on the way in. tolerance_rpm is not: atSpeed() compares it against
+ * an output-RPM error, and dividing it too would be the exact bug this class is
+ * careful to avoid.
  */
 class VelocityMechanism : public StateMechanism<double> {
 public:

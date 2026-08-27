@@ -545,10 +545,14 @@ Which RPM is which matters, so it is pinned down:
 The rule: **everything you say to the mechanism is output RPM**, because the
 output speed is what you actually care about. The loop internally divides by
 `ratio` and runs in motor RPM, so the gains keep their natural "volts per motor
-RPM" meaning and do not need retuning when you change the gearing.
+RPM" meaning. For `kv` that means the number itself is unchanged by gearing - it
+is set by the motor's free speed. `kp`, `ki` and `kd` still want retuning when
+you change the gearing, because the load inertia reflected back to the motor
+scales with `ratio` squared; what does not change is the units they are in.
 
 A worked 1:2 example, with a blue-cartridge motor whose free speed is 600 motor
-RPM driving a wheel through 1:2:
+RPM driving a wheel through 1:2. The config has to be handed to the constructor,
+so build the mechanism from it:
 
 ```cpp
 ml::mechanism::VelocityMechanismConfig config;
@@ -557,6 +561,11 @@ config.kv = 12.0 / 600.0;        // 0.02 V per motor RPM - unchanged by gearing
 config.kp = 0.02;
 config.tolerance_rpm = 10.0;     // 10 wheel RPM, i.e. 5 motor RPM
 config.integral_range_rpm = 100.0;  // 100 wheel RPM, i.e. 50 motor RPM
+
+ml::mechanism::VelocityMechanism spinner(
+    [&motors] { return motors.getAverageActualVelocity(); },
+    [&motors](double volts) { motors.setVoltage(volts); },
+    config);
 
 spinner.setTargetRpm(600.0);     // 600 wheel RPM = 300 motor RPM
 ```
@@ -575,9 +584,11 @@ does **not** count as at speed, even though 6 is under 10. Applying the ratio to
 the target but not to the tolerance is the classic silent bug here; it is not
 done that way.
 
-`ratio` must be greater than zero - zero would divide by zero and a negative
-value would invert the loop. The constructor rejects anything else and falls
-back to `1.0`, and `getConfig().ratio` then reports the `1.0` actually in use.
+`ratio` must be finite and greater than zero - zero would divide by zero, a
+negative value would invert the loop, and an infinite one would divide every
+target down to nothing. The constructor rejects anything else (NaN included) and
+falls back to `1.0`, and `getConfig().ratio` then reports the `1.0` actually in
+use.
 
 `applyState` runs from `periodic()`, so the mechanism has to be registered with
 the scheduler or nothing moves:

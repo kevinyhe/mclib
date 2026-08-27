@@ -20,10 +20,12 @@ VelocityMechanism::VelocityMechanism(VelocitySource velocity_source,
       m_pid(config.kp, config.ki, config.kd) {
   // A ratio of 0 would divide by zero converting an output target into a motor
   // target, and a negative one would flip the sign of the loop so it drove away
-  // from the target. Neither is ever what the caller meant, so fall back to the
-  // ungeared 1.0 and store that, keeping getConfig().ratio honest about what is
-  // actually running.
-  if (!(m_config.ratio > 0.0)) {
+  // from the target. An infinite one divides every target down to 0, so the
+  // mechanism would sit still and the integral gate would quietly switch off.
+  // None of those is ever what the caller meant, so fall back to the ungeared
+  // 1.0 and store that, keeping getConfig().ratio honest about what is actually
+  // running. The > 0.0 test also rejects NaN.
+  if (!(std::isfinite(m_config.ratio) && m_config.ratio > 0.0)) {
     m_config.ratio = 1.0;
   }
 
