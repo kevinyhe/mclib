@@ -1,7 +1,10 @@
 // mclib
 #include "mclib/device/motor.hpp"
 
+#include "pros/error.h"
+
 #include <algorithm>
+#include <cmath>
 
 namespace mclib {
 namespace device {
@@ -43,6 +46,34 @@ double Motor::getCurrentDraw() const {
 
 double Motor::getTemperature() const {
   return m_motor.get_temperature();
+}
+
+void Motor::setVoltage(units::QVoltage voltage) {
+  setVoltage(voltage.volts());
+}
+
+std::optional<units::QAngle> Motor::position() const {
+  const double degrees = getPositionDeg();
+  if (!std::isfinite(degrees)) {
+    return std::nullopt;
+  }
+  return degrees * units::degree;
+}
+
+std::optional<units::QAngularVelocity> Motor::velocity() const {
+  const double rpm = getActualVelocity();
+  if (!std::isfinite(rpm)) {
+    return std::nullopt;
+  }
+  return rpm * units::rpm;
+}
+
+std::optional<units::QCurrent> Motor::current() const {
+  const double milliamps = getCurrentDraw();
+  if (!std::isfinite(milliamps) || milliamps == static_cast<double>(PROS_ERR)) {
+    return std::nullopt;
+  }
+  return milliamps * units::milliampere;
 }
 
 std::int32_t Motor::voltsToMillivolts(double volts) {

@@ -1,9 +1,12 @@
 // mclib
 #pragma once
 
-#include <cstdint>
+#include "mclib/units/units.hpp"
 
 #include "api.h"
+
+#include <cstdint>
+#include <optional>
 
 namespace mclib {
 namespace device {
@@ -13,6 +16,21 @@ public:
   explicit Rotation(std::int8_t port, bool reversed = false);
 
   double getPositionDeg() const;
+
+  /**
+   * @brief Sensor position as a typed angle, or nullopt when the sensor is not
+   *        reporting.
+   *
+   * Units-typed sibling of getPositionDeg(): same value, same sign, same
+   * unbounded (non-wrapping) accumulation. Feed it straight to
+   * `DriveGeometry::encoderToDistance()`.
+   *
+   * getPositionDeg() turns a disconnected sensor's PROS_ERR into 21 474 836.47
+   * degrees, which odometry differences into a 21-million-degree jump in the
+   * pose. Same reasoning as Inertial: a dropout has to be unwrappable, not
+   * silently numeric.
+   */
+  std::optional<units::QAngle> position() const;
   void resetPosition();
   bool isInstalled() const;
 
