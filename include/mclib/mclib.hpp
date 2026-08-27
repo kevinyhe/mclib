@@ -39,6 +39,7 @@
 #include "mclib/mechanism/toggle_mechanism.hpp"
 #include "mclib/mechanism/velocity_mechanism.hpp"
 #include "mclib/snapshot/snapshot_config.hpp"
+#include "mclib/telemetry/telemetry.hpp"
 
 #ifndef MCLIB_NO_ALIAS
 namespace ml = mclib;

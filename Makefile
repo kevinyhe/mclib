@@ -45,6 +45,7 @@ TEMPLATE_FILES=$(INCDIR)/mclib/*.hpp \
 	$(INCDIR)/mclib/device/*.hpp \
 	$(INCDIR)/mclib/mechanism/*.hpp \
 	$(INCDIR)/mclib/snapshot/*.hpp \
+	$(INCDIR)/mclib/telemetry/*.hpp \
 	$(INCDIR)/mclib/units/*.hpp
 
 .DEFAULT_GOAL=quick

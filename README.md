@@ -2030,3 +2030,116 @@ does the save/restore for you.
 
 `src/mclib/pid.cpp` compiles and links with no PROS headers reachable at all,
 which is what makes host-side testing of the control code possible.
+
+## Telemetry: CSV logging to the SD card
+
+Tuning a PID by watching the robot and guessing is the slowest way to do it.
+`mclib/telemetry/telemetry.hpp` gives you a fixed-rate CSV log on the V5 SD
+card, with columns that say what unit they are in.
+
+```cpp
+#include "mclib/telemetry/telemetry.hpp"
+
+void autonomous() {
+  // A Logger is one-shot: register, sample, close. Build a fresh one per run
+  // so a second autonomous over field control gets a second log. The ring
+  // storage is static because sizeof(Row) is ~200 bytes and 256 rows has no
+  // business on a task stack; the logger is not.
+  static mclib::telemetry::RowBuffer<256> tlm_buffer;
+  mclib::telemetry::SdCardSink tlm_sink("auton");
+  mclib::telemetry::Logger tlm(tlm_sink, tlm_buffer,
+                               {.period = 20 * mclib::units::millisecond});
+
+  // Register channels before the first sample. One line each.
+  auto x = tlm.addLength("x");            // column "x_in"
+  auto heading = tlm.addAngle("heading"); // column "heading_deg"
+  auto cmd = tlm.addVoltage("left_cmd");  // column "left_cmd_V"
+  auto err = tlm.addNumber("error");      // column "error", no unit
+
+  // Starts a background pros::Task that does the SD writes. Declared after the
+  // logger, so it is destroyed first and never outlives what it drains.
+  mclib::telemetry::FlushTask flusher(tlm);
+
+  while (!controller.settled()) {
+    // ... control tick ...
+    tlm.set(x, pose.x);
+    tlm.set(heading, pose.theta);
+    tlm.set(cmd, left_command);
+    tlm.set(err, controller.error());
+    tlm.sample();  // no-op until the 20 ms period elapses
+    pros::delay(10);
+  }
+  flusher.stop();  // joins the task, drains the buffer, closes the file
+}
+```
+
+If the logger has to live longer than one run - shared between auton and
+driver control, say - keep it in a `std::optional` and re-construct it at the
+start of each run. Registration, sampling and `close()` are all one-way on a
+given `Logger`: once `close()` has run, that object is finished.
+
+The file lands at `/usd/auton000.csv`, then `auton001.csv`, and so on - the
+sink picks the first index that does not already exist, so a re-run never
+overwrites the previous match's log. Output looks like this:
+
+```
+t_ms,x_in,heading_deg,left_cmd_V,error
+0,0,0,12,24
+20,1.4,0.2,12,22.6
+40,3.1,0.4,11.8,20.9
+...
+# rows=412 dropped=0
+```
+
+Column names carry the unit, which is what makes a log readable a week later.
+`24_in` written into an `addLength` channel reads back as `24.0` in the column
+called `x_in`.
+
+### What it costs the control loop
+
+`set()` is one double store. `sample()` is a clock read, and on a sampling tick
+a `sizeof(Row)` copy (about 200 bytes) into a lock-free ring plus one release
+store. No allocation, no lock, no file I/O on the producer side. That is the
+whole worst case a control tick pays - sub-microsecond on the V5's Cortex-A9,
+and independent of how slow or jittery the SD card is.
+
+The writing happens in `FlushTask`, a `pros::Task` at priority
+`TASK_PRIORITY_DEFAULT - 1`, which drains the ring every 100 ms by default.
+Batching means one `fwrite` per five rows at a 20 ms period rather than one per
+row. The ring is single-producer / single-consumer over two `std::atomic`
+indices, so the control loop never waits on the flush task and never waits on
+the card.
+
+### Bounded resources
+
+Nothing here can grow without limit:
+
+- **Buffer full: drop newest.** The new row is discarded and the buffered rows
+  are kept, so the log is a contiguous prefix of the run with a gap at the end.
+  A contiguous prefix beats a log with a hole punched in the middle, and it is
+  the only policy a lock-free SPSC ring can offer without the producer racing
+  the consumer's read cursor. Dropped rows are counted and the count is written
+  into the CSV trailer, so a truncated log says so.
+- **Row cap.** `LoggerConfig::max_rows` defaults to 30000 - ten minutes at
+  20 ms. Past it the logger stops committing.
+- **File size cap.** `SdSinkConfig::max_bytes` defaults to 4 MiB. Past it the
+  sink closes the file. A log that fills the card mid-match is worse than none.
+- **Channel cap.** 24 columns, names truncated to 32 characters. Registering a
+  25th channel returns an invalid handle; writing through one is ignored.
+
+### No SD card
+
+`SdCardSink` probes for the card exactly once, on the first flush, by opening
+the file. If there is no card the sink reports itself unavailable and every
+later call is a no-op: no exceptions, no crash, no retry storm. The logger
+still drains its ring so the control loop never wedges behind a dead sink. The
+same holds for a card that dies mid-match.
+
+### Testing without a card
+
+The sink is an interface. `MemorySink` captures everything in a `std::string`
+and `NullSink` is permanently unavailable, so `tests/telemetry_test.cpp` drives
+the logger under a `mclib::time::ScopedClock` and asserts on real CSV text -
+the header, the timestamps, the drop policy, and the round-trip of `24_in` back
+to `24.0`. Only `src/mclib/telemetry/flush_task.cpp` includes a PROS header;
+the logger and both test sinks are header-only.
