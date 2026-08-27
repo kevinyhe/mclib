@@ -1,11 +1,13 @@
 // mclib
 #pragma once
 
+#include "mclib/auton/time_budget.hpp"
 #include "mclib/chassis/chassis_controller.hpp"
 #include "mclib/command/command.h"
 #include "mclib/math.hpp"
 #include "mclib/units/units.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -27,6 +29,16 @@ struct Point {
 };
 
 /**
+ * @brief How long `waitUntil()` waits when the caller does not say.
+ *
+ * A predicate that never becomes true used to hang the routine for the rest of
+ * the match. Five seconds is a third of the autonomous period: long enough
+ * that no honest wait for a mechanism hits it, short enough that a stuck one
+ * still leaves time for the steps behind it.
+ */
+inline constexpr QTime kDefaultWaitUntilTimeout = 5.0 * units::second;
+
+/**
  * @brief A sequence of motions and commands, built by chaining calls.
  *
  * Every motion returns a MotionStep, whose `withXxx()` setters rebuild that
@@ -37,6 +49,43 @@ struct Point {
  *        .turnToAngle(90_deg, 800_ms)
  *        .moveToPoint(Point{24_in, 36_in}, 1, 1500_ms).withoutExit();
  * @endcode
+ *
+ * ## The time budget
+ *
+ * Autonomous is 15 seconds. A routine used to have no idea of that: it knew
+ * each step's own timeout and nothing about the period they all had to fit
+ * inside, so a routine that ran long was simply cut off by the field, drive
+ * still commanded, last step never reached.
+ *
+ * `withTimeBudget()` gives the routine a start stamp and an allowance:
+ *
+ * @code
+ * routine.withTimeBudget(14_s)
+ *        .driveTo(24_in, 2_s)
+ *        .moveToPoint(Point{24_in, 36_in}, 1, 3_s)
+ *        .runOnce([] { claw.open(); }).mustRun();
+ * @endcode
+ *
+ * Three things follow from it.
+ *
+ * 1. `elapsed()` and `remaining()` answer how much autonomous is left, both to
+ *    the caller and to a `runOnce()` lambda inside the routine.
+ * 2. A motion whose timeout is longer than what is left is rebuilt with the
+ *    shorter one before it starts, so it ends itself inside the budget instead
+ *    of overrunning it. A motion with no timeout at all gets the time that
+ *    remains as one.
+ * 3. When the allowance runs out the routine interrupts the running step and
+ *    puts the drive at rest - see stopCurrentStep() and brakeDrive() in the
+ *    source - and applies its DeadlinePolicy. The default, FinishMustRun,
+ *    skips the rest except the steps marked
+ *    `mustRun()`, which share the grace window: the last 1.5 s of the budget,
+ *    held back for them rather than added on the end. That is the case this is
+ *    built for - the driving is behind schedule, but the half-second action
+ *    that scores what the robot is already carrying still happens, and it
+ *    happens before the field disables the robot.
+ *
+ * Without `withTimeBudget()` nothing here is on and the routine behaves as it
+ * always did.
  */
 class Routine : public Command {
 public:
@@ -61,13 +110,22 @@ public:
     /// @brief Motor speed below which `wallReset()` calls it a stall.
     MotionStep& withVelocityThreshold(QAngularVelocity velocity_threshold);
 
+    /**
+     * @brief Run this step even if the routine's time budget has expired.
+     *
+     * Marking a long drive `mustRun()` mostly defeats the point of the budget;
+     * this is for the short actions at the end of a routine.
+     */
+    MotionStep& mustRun(bool must_run = true);
+
     Routine& done();
     Routine& add(std::unique_ptr<Command> command);
     Routine& then(std::unique_ptr<Command> command);
     Routine& trigger(std::unique_ptr<Command> command);
     Routine& runOnce(std::function<void()> action);
     Routine& wait(QTime duration);
-    Routine& waitUntil(std::function<bool()> condition);
+    Routine& waitUntil(std::function<bool()> condition,
+                       QTime timeout = kDefaultWaitUntilTimeout);
 
     MotionStep driveDistance(QLength distance, QTime timeout = 0.0 * units::second);
     MotionStep turnToHeading(QAngle heading, QTime timeout = 0.0 * units::second);
@@ -121,7 +179,73 @@ public:
   Routine& trigger(std::unique_ptr<Command> command);
   Routine& runOnce(std::function<void()> action);
   Routine& wait(QTime duration);
-  Routine& waitUntil(std::function<bool()> condition);
+
+  /**
+   * @brief Wait for a predicate, giving up after @p timeout.
+   *
+   * @param condition Checked once per scheduler tick.
+   * @param timeout Give up after this long. Not positive waits forever, which
+   *   is what this used to do unconditionally; say so on purpose if you mean
+   *   it. See kDefaultWaitUntilTimeout.
+   */
+  Routine& waitUntil(std::function<bool()> condition,
+                     QTime timeout = kDefaultWaitUntilTimeout);
+
+  // -------------------------------------------------------------------------
+  // Time budget. See the class documentation.
+  // -------------------------------------------------------------------------
+
+  /// @brief Give the routine @p total to run in, with the default policy.
+  Routine& withTimeBudget(QTime total = kAutonomousPeriod);
+  /// @brief Give the routine a fully specified budget.
+  Routine& withTimeBudget(const TimeBudgetConfig& config);
+  /// @brief What the routine does when the budget runs out.
+  Routine& withDeadlinePolicy(DeadlinePolicy policy);
+  /**
+   * @brief How much of the budget to hold back for the must-run steps.
+   *
+   * Held back out of the total, not added to it: with a 15 s budget and a
+   * 1.5 s grace the driving stops at 13.5 s and the must-run steps run from
+   * there to 15 s.
+   */
+  Routine& withGrace(QTime grace);
+  /// @brief Remove the budget; the routine runs to completion however long.
+  Routine& withoutTimeBudget();
+
+  /**
+   * @brief Mark the most recently added step must-run.
+   *
+   * @details Applies to the last step of any kind, so it reads the same after
+   * a `runOnce()` as after a motion: `.runOnce(...).mustRun()`. Does nothing
+   * on an empty routine.
+   */
+  Routine& mustRun(bool must_run = true);
+
+  /// @brief True when a positive budget is configured.
+  bool hasTimeBudget() const;
+  /// @brief The budget in force.
+  const TimeBudget& timeBudget() const;
+  /// @brief Time since the routine started. Zero before it does.
+  QTime elapsed() const;
+  /**
+   * @brief Time left before the routine must stop.
+   *
+   * Counts down the budget, then the grace window once the budget has expired.
+   * Zero when there is no budget - test hasTimeBudget() first.
+   */
+  QTime remaining() const;
+  /// @brief True once the budget ran out and the deadline policy was applied.
+  bool budgetExpired() const;
+  /// @brief Number of steps the deadline policy skipped. Zero until it fires.
+  std::size_t skippedSteps() const;
+
+  /**
+   * @brief True when a motion was added with no chassis to run it on.
+   *
+   * @details Those motions become no-ops instead of taking the program down.
+   * See the note on the missing-chassis path in the source.
+   */
+  bool hasConfigurationError() const;
 
   MotionStep driveDistance(ChassisController& chassis,
                            QLength distance,
@@ -257,6 +381,15 @@ private:
     QVoltage drive_power = -4.0 * units::volt;
     QCurrent current_threshold = 2500.0 * units::milliampere;
     QAngularVelocity velocity_threshold = 5.0 * units::rpm;
+    /**
+     * @brief The timeout the command is built with. Zero means none.
+     *
+     * @details Here rather than captured in the factory so the time budget can
+     * shorten it: `initializeCurrent()` writes the clamped value and rebuilds
+     * the command, and the motion then honours the shorter timeout itself,
+     * settling and stopping the way it would at any other timeout.
+     */
+    QTime timeout{};
   };
 
   using MotionFactory =
@@ -267,13 +400,40 @@ private:
     bool reserve_requirements = true;
     MotionFactory factory;
     MotionOptions options;
+    /**
+     * @brief The timeout the step was written with, before any clamping.
+     *
+     * `options.timeout` is what the command was last built with, which the
+     * budget may have shortened. This one never moves, so a step that runs
+     * again is clamped against its own number, not against the clamp.
+     */
+    QTime timeout{};
+    /// @brief Run this step even after the budget expires. See mustRun().
+    bool must_run = false;
+    /// @brief This step is a trigger(), whose inner command outlives it.
+    bool is_trigger = false;
   };
 
-  ChassisController& requireChassis() const;
-  MotionStep addMotion(MotionFactory factory);
-  MotionStep addMotion(MotionFactory factory, MotionOptions options);
+  MotionStep addMotion(MotionFactory factory, QTime timeout);
+  MotionStep addMotion(MotionFactory factory,
+                       MotionOptions options,
+                       QTime timeout);
+  /// @brief The placeholder step a motion becomes when there is no chassis.
+  MotionStep addMissingChassisStep();
   void rebuildMotion(std::size_t index);
   void initializeCurrent();
+  /// @brief End the running step as interrupted and drop it.
+  void stopCurrentStep();
+  /// @brief Put the drive at rest, whatever the interrupted step asked for.
+  void brakeDrive();
+  /// @brief Move to the next step, skipping the skippable ones after expiry.
+  void advanceStep();
+  /// @brief The next step to run from @p from, under the deadline policy.
+  std::size_t nextRunnableStep(std::size_t from) const;
+  /// @brief Apply the deadline policy. Called once, when the budget runs out.
+  void applyDeadlinePolicy();
+  /// @brief Cancel the fire-and-forget commands trigger() left running.
+  void cancelTriggeredCommands();
   static void mergeRequirements(std::vector<Subsystem*>& requirements,
                                 const std::vector<Subsystem*>& next);
 
@@ -281,6 +441,11 @@ private:
   std::vector<Step> m_steps;
   std::size_t m_index = 0;
   bool m_current_initialized = false;
+  TimeBudget m_budget{};
+  /// @brief Set once applyDeadlinePolicy() has run, so it runs only once.
+  bool m_deadline_applied = false;
+  std::size_t m_skipped_steps = 0;
+  bool m_configuration_error = false;
 };
 
 using AutonomousRoutine = Routine;
