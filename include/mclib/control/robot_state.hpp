@@ -36,7 +36,9 @@
  * ## Consistency
  *
  * `pose()` returns x, y and theta from a single locked read, so a caller can
- * never pair an x from one odometry tick with a y from the next. Every
+ * never pair an x from one odometry tick with a y from the next. There are no
+ * single-axis position accessors, deliberately: the tearing read shape is not
+ * expressible, rather than merely discouraged. Every
  * expression in `motion.cpp` that used to read `xpos` and `ypos` as two
  * separate loads now takes one `Pose2D` first.
  */
@@ -74,17 +76,9 @@ class RobotState {
    */
   void setPosition(double x_in, double y_in);
 
-  /// @brief Field X in inches. Prefer pose() when you also need y.
-  double x() const;
-  /// @brief Field Y in inches. Prefer pose() when you also need x.
-  double y() const;
   /// @brief Heading in radians, compass frame. Prefer pose() when you also need x/y.
   double headingRad() const;
 
-  /// @brief The current pose position as a unit-typed pair.
-  QLength xLength() const;
-  /// @brief @copydoc xLength
-  QLength yLength() const;
   /// @brief The current heading as a QAngle.
   QAngle heading() const;
 

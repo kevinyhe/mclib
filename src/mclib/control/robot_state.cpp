@@ -22,28 +22,14 @@ void RobotState::setPosition(double x_in, double y_in) {
   m_pose.y = y_in;
 }
 
-double RobotState::x() const {
-  sync::LockGuard lock(m_mutex);
-  return m_pose.x;
-}
 
-double RobotState::y() const {
-  sync::LockGuard lock(m_mutex);
-  return m_pose.y;
-}
 
 double RobotState::headingRad() const {
   sync::LockGuard lock(m_mutex);
   return m_pose.theta;
 }
 
-QLength RobotState::xLength() const {
-  return x() * units::inch;
-}
 
-QLength RobotState::yLength() const {
-  return y() * units::inch;
-}
 
 QAngle RobotState::heading() const {
   return headingRad() * units::radian;

@@ -73,8 +73,11 @@ void testDefaultsAndRoundTrip() {
 void testUnitAccessors() {
   std::printf("-- unit-typed accessors agree with the raw ones\n");
   robotState().setPose(Pose2D{24.0, -12.0, kPi / 2.0});
-  CHECK_NEAR(robotState().xLength().in(), 24.0, 1e-9);
-  CHECK_NEAR(robotState().yLength().in(), -12.0, 1e-9);
+  // Position comes from pose() only - there are no single-axis accessors, so
+  // the tearing read shape cannot be written.
+  CHECK_NEAR(robotState().pose().x, 24.0, 1e-9);
+  CHECK_NEAR(robotState().pose().y, -12.0, 1e-9);
+  CHECK_NEAR(robotState().headingRad(), kPi / 2.0, 1e-9);
   CHECK_NEAR(robotState().heading().deg(), 90.0, 1e-9);
 }
 
@@ -94,8 +97,6 @@ void testPoseReadsCannotTear() {
 
   std::atomic_bool stop{false};
   std::atomic<long> consistent_reads{0};
-  std::atomic<long> torn_consistent_reads{0};
-  std::atomic<long> torn_reads{0};
   std::atomic<long> atomic_tears{0};
 
   robotState().setPose(Pose2D{0.0, 1.0, 0.0});
@@ -117,16 +118,6 @@ void testPoseReadsCannotTear() {
       } else {
         atomic_tears.fetch_add(1);
       }
-
-      // The read shape this class exists to stamp out: two independent loads
-      // with a window between them.
-      const double x = robotState().x();
-      const double y = robotState().y();
-      if (y == 2.0 * x + 1.0) {
-        torn_consistent_reads.fetch_add(1);
-      } else {
-        torn_reads.fetch_add(1);
-      }
     }
   });
 
@@ -135,20 +126,15 @@ void testPoseReadsCannotTear() {
 
   std::printf("   pose():      %ld consistent, %ld torn\n",
               consistent_reads.load(), atomic_tears.load());
-  std::printf("   x() then y(): %ld consistent, %ld torn\n",
-              torn_consistent_reads.load(), torn_reads.load());
 
   // The property under test: not one of those reads saw a half-updated pose.
   CHECK_EQ(static_cast<double>(atomic_tears.load()), 0.0);
   CHECK(consistent_reads.load() > 0);
 
-  // The separate-loads shape is the one that tears. It is timing-dependent, so
-  // report it rather than assert on it - a run that happened not to interleave
-  // is not a failure, it is a run that got lucky.
-  ::mclib::test::knownBug(
-      torn_reads.load() > 0,
-      "reading x() and y() separately can straddle an odometry update; use "
-      "pose()");
+  // The separate-loads shape that used to tear here is now unrepresentable:
+  // x(), y(), xLength() and yLength() were removed, so pose() is the only way
+  // to read a position and it takes one lock for both fields. Nothing to
+  // report - the bug cannot be written.
 }
 
 void testCancelFlag() {

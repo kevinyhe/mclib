@@ -85,7 +85,7 @@ public:
      * @param interrupted true if the command was stopped before
      * isFinished returned true, false otherwise
      */
-    virtual void end(bool interrupted){};
+    virtual void end(bool /*interrupted*/){};
 
     /**
      * @brief This function returns the necessary subsystems needed to
