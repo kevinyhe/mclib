@@ -15,6 +15,7 @@
 #include "mclib/path/pure_pursuit.hpp"
 #include "mclib/path/spline.hpp"
 #include "mclib/units/units.hpp"
+#include "mclib/utils.hpp"
 #include "test_assert.hpp"
 
 #include <cmath>
@@ -654,6 +655,183 @@ void pathQueries() {
   CHECK_EQ(out.velocity.inps(), 0.0);
 }
 
+// ---------------------------------------------------------------------------
+// 14. Overshooting the end of the path is a stop, not a lap.
+// ---------------------------------------------------------------------------
+void pastTheEnd() {
+  std::printf("-- past the end of the path\n");
+  // A 24 in path along +Y, the robot 16 in past its end, still facing +Y. 16 in
+  // is more than the 12 in lookahead, so off_path is true and the projection is
+  // pinned at the end of the path.
+  Path path = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 24.0)});
+  PurePursuitConfig config;  // Defaults: 12 in lookahead, 2 in finish tolerance.
+  PurePursuit follower(path, config);
+
+  const PurePursuitOutput first = follower.update(Pose2D{0.0, 40.0, 0.0});
+  std::printf("   at (0, 40): off_path=%d past_end=%d remaining=%.4f finished=%d v=%.4f\n",
+              static_cast<int>(first.off_path), static_cast<int>(first.past_end),
+              first.remaining.in(), static_cast<int>(first.finished),
+              first.velocity.inps());
+  CHECK(first.off_path);
+  CHECK(first.past_end);
+  CHECK_NEAR(first.remaining.in(), 0.0, 1e-9);
+  CHECK(first.finished);
+  CHECK_EQ(first.velocity.inps(), 0.0);
+  CHECK_EQ(perInch(first.curvature), 0.0);
+  CHECK_EQ(first.wheels.left.inps(), 0.0);
+  CHECK_EQ(first.wheels.right.inps(), 0.0);
+
+  // Drive the closed loop the way a chassis task would and count the ticks.
+  // Before the fix this ran 627 ticks - 6.3 s of a 15 s autonomous - and
+  // wandered out to (14.8, 30.5) on the way. It has to be tick 0 now.
+  PurePursuit loop(path, config);
+  Pose2D pose{0.0, 40.0, 0.0};
+  const double dt = 0.010;
+  int ticks = 0;
+  double worst_excursion = 0.0;
+  for (; ticks < 2000; ++ticks) {
+    const PurePursuitOutput out = loop.update(pose);
+    if (out.finished) {
+      break;
+    }
+    // Unicycle in the compass frame: theta = 0 is +Y, clockwise positive.
+    pose.theta = mclib::wrapAngle(pose.theta + out.turn_rate.raw() * dt);
+    pose.x += out.velocity.inps() * std::sin(pose.theta) * dt;
+    pose.y += out.velocity.inps() * std::cos(pose.theta) * dt;
+    worst_excursion =
+        std::fmax(worst_excursion, (Vec2{pose.x, pose.y} - Vec2{0.0, 40.0}).norm());
+  }
+  std::printf("   closed loop: finished after %d ticks (%.2f s), final (%.4f, %.4f), "
+              "worst excursion %.4f in\n",
+              ticks, ticks * dt, pose.x, pose.y, worst_excursion);
+  CHECK_EQ(static_cast<double>(ticks), 0.0);
+  CHECK_NEAR(worst_excursion, 0.0, 1e-12);
+
+  // Being off to the side but not past the end is still not a finish: there is
+  // path left to rejoin.
+  PurePursuit beside(path, config);
+  const PurePursuitOutput abeam = beside.update(Pose2D{30.0, 4.0, 0.0});
+  std::printf("   at (30, 4): off_path=%d past_end=%d finished=%d\n",
+              static_cast<int>(abeam.off_path), static_cast<int>(abeam.past_end),
+              static_cast<int>(abeam.finished));
+  CHECK(abeam.off_path);
+  CHECK(!abeam.past_end);
+  CHECK(!abeam.finished);
+
+  // Nor is being past the end of an *earlier* leg: past_end reads the final leg
+  // only, and there is still a whole second leg to drive.
+  Path corner = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 24.0), wp(24.0, 24.0)});
+  PurePursuit turning(corner, config);
+  const PurePursuitOutput mid = turning.update(Pose2D{0.0, 40.0, 0.0});
+  std::printf("   past leg 1 of 2: past_end=%d remaining=%.4f finished=%d\n",
+              static_cast<int>(mid.past_end), mid.remaining.in(),
+              static_cast<int>(mid.finished));
+  CHECK(!mid.past_end);
+  CHECK(!mid.finished);
+
+  // past_end is a half-plane test on the *final* leg, so on a path whose last
+  // leg heads back toward the start the plain geometry is satisfied from the
+  // very first tick. The remaining-distance gate is what keeps the flag honest.
+  Path loops = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 24.0), wp(10.0, 24.0),
+                                    wp(10.0, 0.0)});
+  PurePursuit lap(loops, config);
+  const PurePursuitOutput start = lap.update(Pose2D{0.0, 0.0, 0.0});
+  std::printf("   start of a path that doubles back: past_end=%d remaining=%.4f\n",
+              static_cast<int>(start.past_end), start.remaining.in());
+  CHECK(!start.past_end);
+  CHECK(!start.finished);
+
+  // Finishing off the path is a stop, not an arrival. The caller is told how
+  // far off it is, in path_error and off_path, and must gate on those if it
+  // cares.
+  PurePursuit sideways(path, config);
+  const PurePursuitOutput wide = sideways.update(Pose2D{30.0, 25.0, 0.0});
+  std::printf("   at (30, 25): past_end=%d finished=%d path_error=%.4f off_path=%d\n",
+              static_cast<int>(wide.past_end), static_cast<int>(wide.finished),
+              wide.path_error.in(), static_cast<int>(wide.off_path));
+  CHECK(wide.past_end);
+  CHECK(wide.finished);
+  CHECK(wide.off_path);
+  CHECK_NEAR(wide.path_error.in(), std::hypot(30.0, 1.0), 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// 15. atDistance() heading across a corner.
+// ---------------------------------------------------------------------------
+void headingAcrossACorner() {
+  std::printf("-- heading across a corner\n");
+  // North for 24 in, then east for 24 in: a 90 degree corner at (0, 24). The
+  // true tangent is compass 0 everywhere on the first leg and compass 90
+  // everywhere on the second.
+  Path path = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 24.0), wp(24.0, 24.0)});
+
+  double worst = 0.0;
+  double worst_at = 0.0;
+  for (double d = 0.0; d <= 48.0; d += 0.25) {
+    const double truth = (d < 24.0) ? 0.0 : 90.0;
+    const double reported = path.atDistance(inch * d).heading.deg();
+    const double error = radToDeg(
+        std::fabs(mclib::wrapAngle(degToRad(reported - truth))));
+    if (error > worst) {
+      worst = error;
+      worst_at = d;
+    }
+  }
+  std::printf("   90 deg corner at 24 in: worst |heading - tangent| = %.4f deg at d = %.2f in\n",
+              worst, worst_at);
+  // Before the fix the heading ramped from 0 to 90 across the whole first leg,
+  // so the error was 45 deg at the middle of that leg and 89.06 deg just short
+  // of the corner.
+  CHECK(worst < 1e-9);
+
+  // Either side of the corner, spelled out.
+  CHECK_NEAR(path.atDistance(inch * 1.0).heading.deg(), 0.0, 1e-9);
+  CHECK_NEAR(path.atDistance(inch * 12.0).heading.deg(), 0.0, 1e-9);
+  CHECK_NEAR(path.atDistance(inch * 23.9).heading.deg(), 0.0, 1e-9);
+  CHECK_NEAR(path.atDistance(inch * 24.0).heading.deg(), 90.0, 1e-9);
+  CHECK_NEAR(path.atDistance(inch * 24.1).heading.deg(), 90.0, 1e-9);
+  CHECK_NEAR(path.atDistance(inch * 47.0).heading.deg(), 90.0, 1e-9);
+
+  // A 135 degree corner, to show the reported heading is the leg's own bearing
+  // whatever the corner angle is, not a blend of the two.
+  Path sharp = Path::fromWaypoints({wp(0.0, 0.0), wp(0.0, 24.0), wp(-24.0, 0.0)});
+  const double leg2 = std::hypot(24.0, 24.0);
+  const double tangent2 =
+      radToDeg(mclib::headingToward(Vec2{0.0, 24.0}, Vec2{-24.0, 0.0}));
+  std::printf("   135 deg corner: leg 2 tangent = %.4f deg, reported at 24.1 in = %.4f deg\n",
+              tangent2, sharp.atDistance(inch * 24.1).heading.deg());
+  CHECK_NEAR(sharp.atDistance(inch * 12.0).heading.deg(), 0.0, 1e-9);
+  CHECK_NEAR(sharp.atDistance(inch * (24.0 + leg2 * 0.5)).heading.deg(), tangent2, 1e-9);
+
+  // A spline still gets a smoothly ramped heading: its samples carry real
+  // curvature, so the turn is spread along the arc rather than parked on a
+  // vertex. Checked against the true tangent of a circle.
+  const double radius = 30.0;
+  std::vector<Waypoint> arc_points;
+  for (int i = 0; i <= 12; ++i) {
+    const double angle = static_cast<double>(i) / 12.0 * (mclib::kPi / 2.0);
+    arc_points.push_back(wp(radius * std::sin(angle), radius * (1.0 - std::cos(angle))));
+  }
+  SplineConfig spline_config;
+  spline_config.spacing = 0.5 * inch;
+  Path arc = generateSpline(arc_points, spline_config);
+  double arc_worst = 0.0;
+  for (double t = 0.05; t <= 0.95; t += 0.01) {
+    const PathPoint point = arc.atParameter(t);
+    // Quarter circle of radius `radius` centred on (0, radius), swept from
+    // (0, 0) eastward. A point at sweep angle `a` sits at
+    // `centre + (R sin a, -R cos a)`, and the compass tangent there is 90 - a.
+    const double sweep = std::atan2(point.x.in(), radius - point.y.in());
+    const double truth = mclib::kPi / 2.0 - sweep;
+    arc_worst = std::fmax(arc_worst,
+                          radToDeg(std::fabs(
+                              mclib::wrapAngle(point.heading.rad() - truth))));
+  }
+  std::printf("   spline arc: worst |heading - true tangent| over t in [0.05, 0.95] = %.6f deg\n",
+              arc_worst);
+  CHECK(arc_worst < 0.2);
+}
+
 }  // namespace
 
 int main() {
@@ -670,5 +848,7 @@ int main() {
   splineContinuity();
   velocityLimiting();
   pathQueries();
+  pastTheEnd();
+  headingAcrossACorner();
   return mclib::test::summary("path");
 }

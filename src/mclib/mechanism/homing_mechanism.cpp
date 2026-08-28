@@ -38,8 +38,10 @@ void HomingMechanism::startHoming() {
   m_phase_start_ms = nowMs();
   m_run_start_ms = m_phase_start_ms;
   m_stall_start_ms = 0.0;
+  m_current_start_ms = 0.0;
   m_stepped = false;
   m_stalling = false;
+  m_over_current = false;
   m_has_moved = false;
   setState(HomingState::Seeking);
 }
@@ -160,7 +162,9 @@ void HomingMechanism::applyState(const HomingState& state) {
 void HomingMechanism::onStateChanged(const HomingState& state) {
   m_phase_start_ms = nowMs();
   m_stall_start_ms = 0.0;
+  m_current_start_ms = 0.0;
   m_stalling = false;
+  m_over_current = false;
   if (state == HomingState::Seeking) {
     // Covers setState(Seeking) called directly, without startHoming().
     m_run_start_ms = m_phase_start_ms;
@@ -181,9 +185,28 @@ bool HomingMechanism::stopDetected() {
     return true;
   }
 
-  if (past_grace && m_current_source && m_config.current_threshold_amps > 0.0 &&
-      m_current_source() >= m_config.current_threshold_amps) {
-    return true;
+  // Current, with a dwell of its own. The stall detector waits stall_dwell_ms
+  // before believing a low velocity; the current detector used to believe a
+  // single over-threshold sample, so a loaded mechanism that was still
+  // accelerating tripped it on its own inrush and zeroed the sensor somewhere
+  // in the middle of its range. startup_grace_ms only covers the first
+  // startup_grace_ms of a run; the dwell covers every spike after it.
+  if (m_current_source && m_config.current_threshold_amps > 0.0) {
+    const bool over = m_current_source() >= m_config.current_threshold_amps;
+    if (!over || !past_grace) {
+      // Below threshold, or still inside the ramp-up window where the reading
+      // means nothing. Either way any timer in progress is stale.
+      m_over_current = false;
+      m_current_start_ms = 0.0;
+    } else {
+      if (!m_over_current) {
+        m_over_current = true;
+        m_current_start_ms = now;
+      }
+      if (now - m_current_start_ms >= m_config.current_dwell_ms) {
+        return true;
+      }
+    }
   }
 
   if (m_velocity_source && m_config.velocity_threshold_rpm > 0.0) {

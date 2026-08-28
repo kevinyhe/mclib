@@ -1,6 +1,7 @@
 // mclib
 #include "mclib/snapshot/snapshot_config.hpp"
 
+#include "mclib/config.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/utils.hpp"
 
@@ -12,10 +13,22 @@ namespace snapshot
   namespace
   {
 
-    // Default local devices
-    // Replace with extern declarations if your code has ownership of these sensors elsewhere
-    mclib::device::Distance distFront(1);
-    mclib::device::Distance distRight(2);
+    // The sensors these defaults read are the ones config.cpp already owns:
+    // left_reset on port 10, right_reset on port 9. They used to be locally
+    // constructed on ports 1 and 2, which are not distance sensors at all -
+    // port 2 is one of the intake motors - so every default read came back as a
+    // bad port and snapshot_setpose_quadrant() answered TOO_FEW_SENSORS on
+    // every call. Taking the externs means there is one place the port numbers
+    // live, which is what stopped these two from drifting apart again.
+    //
+    // Which physical sensor plays which role below is a PLACEHOLDER, and so are
+    // the mounting offsets. Only the team that built the robot knows where the
+    // sensors are bolted and which way they point. Measure them and call
+    // snapshot_config_set_sensors(). What must not change is that the two
+    // sensors look along *different* field axes. A pair that faces exactly
+    // opposite ways only ever pins down one axis: SnapshotConfig::damping then
+    // holds the other at the odometry guess, by design, and the solve reports
+    // success having corrected half the pose.
 
     SnapshotConfig g_cfg{};
     std::vector<DistanceSensorConfig> g_sensors;
@@ -133,8 +146,10 @@ namespace snapshot
         g_sensors.clear();
         g_sensors.reserve(2);
 
+        // Forward-facing. Together with the sideways sensor below this spans
+        // both field axes, which is what makes (x, y) observable at all.
         DistanceSensorConfig front{};
-        front.dev = &distFront;
+        front.dev = &left_reset;
         front.x_right_in = 0.0f;
         front.y_fwd_in = 7.0f;
         front.rel_deg = 0.0f;
@@ -144,7 +159,7 @@ namespace snapshot
         g_sensors.push_back(front);
 
         DistanceSensorConfig right{};
-        right.dev = &distRight;
+        right.dev = &right_reset;
         right.x_right_in = 7.0f;
         right.y_fwd_in = 0.0f;
         right.rel_deg = 90.0f;
@@ -199,6 +214,27 @@ namespace snapshot
     };
 
   } // namespace
+
+  std::size_t snapshot_config_live_sensor_count()
+  {
+    init_once();
+    std::size_t live = 0u;
+    for (const DistanceSensorConfig &sensor : g_sensors)
+    {
+      // Distance::distance() is the accessor that reports a bad port. The mm
+      // and inch accessors hand PROS_ERR (INT32_MAX) straight back, which reads
+      // as ~84 million inches and passes any naive range or confidence check.
+      if (sensor.dev != nullptr && sensor.dev->distance().has_value())
+        ++live;
+    }
+    return live;
+  }
+
+  std::size_t snapshot_config_sensor_count()
+  {
+    init_once();
+    return g_sensors.size();
+  }
 
   bool snapshot_config_set_runtime(const SnapshotPoseRuntime &runtime)
   {

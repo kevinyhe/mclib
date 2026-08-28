@@ -35,6 +35,13 @@ struct HomingMechanismConfig {
   /// Current draw at or above this (amps) counts as a hard stop. <= 0 disables.
   /// The injected current source must return amps, not milliamps.
   double current_threshold_amps = 2.0;
+  /// How long the over-current must persist before it counts (ms).
+  /// Without a dwell, a loaded mechanism that is still accelerating trips the
+  /// detector on its own inrush and zeroes the sensor mid-travel.
+  /// startup_grace_ms covers the inrush at the very start of a run; this covers
+  /// every later current spike - a load change, a hit, a direction reversal.
+  /// 0 fires on the first over-threshold reading, which is the old behaviour.
+  double current_dwell_ms = 100.0;
   /// |velocity| below this (rpm) counts as stalled. <= 0 disables.
   double velocity_threshold_rpm = 5.0;
   /// How long the stall must persist before it counts (ms).
@@ -61,7 +68,13 @@ struct HomingMechanismConfig {
  * Three stop detectors can be enabled independently; the first one to fire wins:
  *  1. a limit-switch predicate,
  *  2. current draw above HomingMechanismConfig::current_threshold_amps,
+ *     sustained for HomingMechanismConfig::current_dwell_ms,
  *  3. a velocity stall sustained for HomingMechanismConfig::stall_dwell_ms.
+ *
+ * Both the current and the stall detector need a dwell for the same reason: a
+ * single sample is not evidence. A loaded arm still accelerating draws inrush
+ * current well past startup_grace_ms, and a detector with no dwell reads that
+ * as the hard stop and zeroes the sensor in the middle of the travel.
  *
  * The stall detector is armed once the mechanism has been seen moving
  * (|rpm| >= velocity_threshold_rpm), so the ramp-up from rest does not read as
@@ -136,9 +149,11 @@ private:
   double m_phase_start_ms = 0.0;
   double m_run_start_ms = 0.0;
   double m_stall_start_ms = 0.0;
+  double m_current_start_ms = 0.0;
   double m_last_step_ms = 0.0;
   bool m_stepped = false;
   bool m_stalling = false;
+  bool m_over_current = false;
   bool m_has_moved = false;
 };
 

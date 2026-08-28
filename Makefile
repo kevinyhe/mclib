@@ -89,6 +89,7 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/snapshot/snapshot_pose.cpp \
 	$(SRCDIR)/mclib/command/subsystem.cpp \
 	$(SRCDIR)/mclib/mechanism/position_mechanism.cpp \
+	$(SRCDIR)/mclib/mechanism/homing_mechanism.cpp \
 	$(TESTDIR)/support/host_time.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on
