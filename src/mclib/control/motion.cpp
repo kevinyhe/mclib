@@ -6,6 +6,7 @@
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion_math.hpp"
 #include "mclib/control/scaling.hpp"
+#include "mclib/control/swing_math.hpp"
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/math.hpp"
@@ -44,6 +45,9 @@ using mclib::control::planSlew;
 using mclib::control::slipSpeedLimit;
 using mclib::control::SlewConfig;
 using mclib::control::SlewPlan;
+using mclib::control::swingChoice;
+using mclib::control::SwingCommand;
+using mclib::control::swingCommand;
 
 /**
  * @brief Encoder degrees to inches rolled, from the one drive geometry.
@@ -360,6 +364,21 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
   const double half_track_width_in = halfTrackWidthIn();
   in_arc = fabs((fabs(center_radius_in) - half_track_width_in) * result_angle);
   out_arc = fabs((fabs(center_radius_in) + half_track_width_in) * result_angle);
+  // out_arc is zero exactly when the normalised target heading is already the
+  // entry heading, and in_arc is zero with it. Every loop below divides by
+  // out_arc - once for `ratio`, once more per tick for `real_angle` - so the
+  // whole routine would run on NaN, and NaN survives every clamp and
+  // comparison in it. There is no arc to drive, so publish the heading and
+  // leave.
+  if (out_arc == 0)
+  {
+    if (exit == true)
+    {
+      stopChassis(mclib::device::BrakeMode::Hold);
+    }
+    state().setCorrectAngleDeg(settledHeadingDeg(result_angle_deg));
+    return;
+  }
   ratio = in_arc / out_arc;
 
   stopChassis(mclib::device::BrakeMode::Coast);
@@ -569,94 +588,45 @@ void swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, 
   const double min_speed_output = minSpeedOutput(min_speed, min_output);
   const double entry_angle_deg = state().correctAngleDeg();
   double current_heading = entry_angle_deg;
-  int choice = 1;
+  // choice encodes which tread stays locked so swing math can reuse one code
+  // path per quadrant. Both the tread and the sign now come out of
+  // control/swing_math.hpp, so the chaining path and the exit path cannot
+  // disagree about direction the way they used to.
+  const int choice = swingChoice(swing_angle, entry_angle_deg, drive_direction);
+  const bool heading_must_rise = (choice == 2 || choice == 4);
 
-  // choice encodes which tread stays locked so swing math can reuse one code path per quadrant
-  if (swing_angle - entry_angle_deg < 0 && drive_direction == 1)
+  // Drive whichever tread is not held for one tick.
+  auto commandSwing = [&](double out)
   {
-    choice = 1;
-  }
-  else if (swing_angle - entry_angle_deg > 0 && drive_direction == 1)
-  {
-    choice = 2;
-  }
-  else if (swing_angle - entry_angle_deg < 0 && drive_direction == -1)
-  {
-    choice = 3;
-  }
-  else
-  {
-    choice = 4;
-  }
-
-  // Swing logic for each case, chaining (exit == false)
-  if (choice == 1 && exit == false)
-  {
-    // Swing left, forward
-    while (current_heading > swing_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
+    const SwingCommand cmd = swingCommand(choice, out, drive_direction);
+    if (cmd.drive_left)
     {
-      current_heading = getInertialHeading();
-      output = pid.update(current_heading);
-
-      // Clamp output
-      output = applyMinSpeedFloor(output, min_speed_output);
-      output = clampSymmetric(output, max_output);
-
-      holdLeftSide(); // Hold left, swing right
-      right_chassis.setVoltage(output * drive_direction);
-      pros::delay(10);
-    }
-  }
-  else if (choice == 2 && exit == false)
-  {
-    // Swing right, forward
-    while (current_heading < swing_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
-    {
-      current_heading = getInertialHeading();
-      output = pid.update(current_heading);
-
-      // Clamp output
-      output = applyMinSpeedFloor(output, min_speed_output);
-      output = clampSymmetric(output, max_output);
-
-      left_chassis.setVoltage(output * drive_direction);
-      holdRightSide(); // Hold right, swing left
-      pros::delay(10);
-    }
-  }
-  else if (choice == 3 && exit == false)
-  {
-    // Swing left, backward
-    while (current_heading > swing_angle && pros::millis() - start_time <= time_limit_msec && !cancelled())
-    {
-      current_heading = getInertialHeading();
-      output = pid.update(current_heading);
-
-      // Clamp output
-      output = applyMinSpeedFloor(output, min_speed_output);
-      output = clampSymmetric(output, max_output);
-
-      left_chassis.setVoltage(output * drive_direction);
+      left_chassis.setVoltage(cmd.voltage);
       holdRightSide();
-      pros::delay(10);
     }
-  }
-  else
-  {
-    // Swing right, backward
-    while (current_heading < swing_angle && pros::millis() - start_time <= time_limit_msec && exit == false && !cancelled())
+    else
     {
-      current_heading = getInertialHeading();
-      output = pid.update(current_heading);
-
-      // Clamp output
-      output = applyMinSpeedFloor(output, min_speed_output);
-      output = clampSymmetric(output, max_output);
-
       holdLeftSide();
-      right_chassis.setVoltage(output * drive_direction);
-      pros::delay(10);
+      right_chassis.setVoltage(cmd.voltage);
     }
+  };
+
+  // Chaining (exit == false): run until the heading crosses the target and
+  // leave the drive moving for whatever comes next.
+  while (exit == false &&
+         (heading_must_rise ? current_heading < swing_angle
+                            : current_heading > swing_angle) &&
+         pros::millis() - start_time <= time_limit_msec && !cancelled())
+  {
+    current_heading = getInertialHeading();
+    output = pid.update(current_heading);
+
+    // Clamp output
+    output = applyMinSpeedFloor(output, min_speed_output);
+    output = clampSymmetric(output, max_output);
+
+    commandSwing(output);
+    pros::delay(10);
   }
 
   // PID loop for exit == true (stop at end)
@@ -668,26 +638,7 @@ void swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, 
     // Clamp output
     output = clampSymmetric(output, max_output);
 
-    // Apply output to correct side based on swing direction
-    switch (choice)
-    {
-    case 1:
-      holdLeftSide();
-      right_chassis.setVoltage(-output * drive_direction);
-      break;
-    case 2:
-      left_chassis.setVoltage(output * drive_direction);
-      holdRightSide();
-      break;
-    case 3:
-      left_chassis.setVoltage(-output * drive_direction);
-      holdRightSide();
-      break;
-    case 4:
-      holdLeftSide();
-      right_chassis.setVoltage(output * drive_direction);
-      break;
-    }
+    commandSwing(output);
     pros::delay(10);
   }
   if (exit == true)
@@ -744,6 +695,12 @@ void wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
   uint32_t start_time = pros::millis();
   int stall_count = 0;
   constexpr int stall_cycles_needed = 5; // 50 ms of sustained stall
+
+  // Claim the drive for the whole push. correctHeading() runs at 10 ms and
+  // overwrites both sides with (v, -v) whenever this is not set, so without it
+  // the robot never actually pushes into the wall, never stalls, and the
+  // routine times out and stamps reset_x/reset_y onto a pose it never reached.
+  state().setTurning(true);
 
   // Drive into the wall
   driveVolts(drive_power_volts, drive_power_volts);
@@ -805,7 +762,7 @@ void wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
     pros::delay(10);
   }
 
-  // Stop motors
+  // Stop motors.
   stopChassis(mclib::device::BrakeMode::Brake);
 
   // Reset heading first if a valid value was provided, so the pose below is
@@ -826,6 +783,13 @@ void wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
   // leaves the odometry's heading alone.
   mclib::control::resetOdometry(
       mclib::Pose2D{reset_x_in, reset_y_in, degToRad(getInertialHeading())});
+
+  // Released last, after correctAngleDeg is published, exactly like every
+  // other routine here. Clearing it earlier lets correctHeading() tick once
+  // against the stale pre-push target while the IMU has already jumped to
+  // reset_heading, which is a full-voltage counter-rotation that undoes the
+  // squaring this routine just did.
+  state().setTurning(false);
 }
 
 void turnToPoint(QLength x, QLength y, int direction, QTime time_limit, QVoltage min_voltage)
