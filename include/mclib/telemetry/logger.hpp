@@ -301,7 +301,8 @@ class Logger {
    * @brief Commit the staged values as a row, if the period has elapsed.
    *
    * @details Call this every control tick. It is cheap on the ticks that do
-   * not sample: one clock read and a comparison.
+   * not sample: one clock read and a comparison. This is the only call that
+   * moves the periodic schedule forward.
    *
    * @return true when a row was committed.
    */
@@ -309,7 +310,17 @@ class Logger {
     if (!due()) {
       return false;
     }
-    return commit();
+    const std::uint32_t now = time::millis();
+    startClock(now);
+    // Advance by whole periods so sampling does not drift, and clamp forward
+    // when the caller fell behind so a late tick does not fire a burst. Done
+    // even when the ring is full, so a dropped sample does not turn into a
+    // burst once space frees up.
+    m_next_due_ms += m_period_ms;
+    if (static_cast<std::int32_t>(m_next_due_ms - now) <= 0) {
+      m_next_due_ms = now + m_period_ms;
+    }
+    return commitRow(now);
   }
 
   /**
@@ -319,6 +330,12 @@ class Logger {
    * land whether or not the period has elapsed. Still respects max_rows, the
    * stop flag and the overflow policy.
    *
+   * Scheduling is independent of sample(): an event row never moves the
+   * periodic deadline, so committing events faster than the period cannot
+   * starve sampling. The first row of the run starts the periodic clock at
+   * the current time, which leaves the next sample() due immediately - the
+   * same thing that happens when sample() itself commits the first row.
+   *
    * @return true when a row was committed.
    */
   bool commit() {
@@ -326,29 +343,8 @@ class Logger {
       return false;
     }
     const std::uint32_t now = time::millis();
-    if (!m_started) {
-      m_started = true;
-      m_next_due_ms = now;
-    }
-    // Advance by whole periods so sampling does not drift, and clamp forward
-    // when the caller fell behind so a late tick does not fire a burst.
-    m_next_due_ms += m_period_ms;
-    if (static_cast<std::int32_t>(m_next_due_ms - now) <= 0) {
-      m_next_due_ms = now + m_period_ms;
-    }
-
-    const std::size_t head = m_head.load(std::memory_order_relaxed);
-    const std::size_t next = (head + 1) % m_capacity;
-    if (next == m_tail.load(std::memory_order_acquire)) {
-      // Full. kDropNewest: keep the buffered prefix, count the loss.
-      ++m_dropped_rows;
-      return false;
-    }
-    m_pending.timestamp_ms = now;
-    m_rows[head] = m_pending;
-    m_head.store(next, std::memory_order_release);
-    ++m_row_count;
-    return true;
+    startClock(now);
+    return commitRow(now);
   }
 
   /**
@@ -489,6 +485,40 @@ class Logger {
 
  private:
   enum class SinkState { kUnprobed, kAlive, kDead };
+
+  /**
+   * @brief Start the periodic clock on the first row of the run.
+   *
+   * @details Also closes registration. Until the first row lands there is no
+   * meaningful zero for the period to count from, so the clock starts here
+   * rather than at construction.
+   */
+  void startClock(std::uint32_t now) {
+    if (!m_started) {
+      m_started = true;
+      m_next_due_ms = now;
+    }
+  }
+
+  /**
+   * @brief Copy the staged values into the ring. No scheduling, no gating.
+   *
+   * @return true when the row landed, false when the ring was full.
+   */
+  bool commitRow(std::uint32_t now) {
+    const std::size_t head = m_head.load(std::memory_order_relaxed);
+    const std::size_t next = (head + 1) % m_capacity;
+    if (next == m_tail.load(std::memory_order_acquire)) {
+      // Full. kDropNewest: keep the buffered prefix, count the loss.
+      ++m_dropped_rows;
+      return false;
+    }
+    m_pending.timestamp_ms = now;
+    m_rows[head] = m_pending;
+    m_head.store(next, std::memory_order_release);
+    ++m_row_count;
+    return true;
+  }
 
   /**
    * @brief snprintf that tracks an offset and refuses to run off the end.

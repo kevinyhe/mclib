@@ -350,6 +350,75 @@ void testRegistrationLimits() {
   logger.set(late, 1.0);
 }
 
+/**
+ * @brief Event rows do not reschedule the periodic sample.
+ *
+ * @details commit() used to advance the periodic due time, so a 50 ms logger
+ * fed an event row every 10 ms saw its deadline move 50 ms per 10 ms of wall
+ * time and never sampled again after the first row.
+ */
+void testCommitDoesNotStarveSampling() {
+  g_fake_ms = 0;
+  mclib::time::ScopedClock clock(fakeClock);
+
+  MemorySink sink;
+  RowBuffer<256> buffer;
+  Logger logger(sink, buffer, LoggerConfig{.period = 50.0 * mclib::units::millisecond});
+  auto x = logger.addLength("x");
+  auto event = logger.addNumber("event");
+
+  // A 10 ms control loop for one second, with an event row on every tick.
+  int sampled = 0;
+  int committed = 0;
+  for (int tick = 0; tick <= 100; ++tick) {
+    g_fake_ms = static_cast<std::uint32_t>(tick * 10);
+    logger.set(x, static_cast<double>(tick) * mclib::units::inch);
+    logger.set(event, 1.0);
+    if (logger.commit()) {
+      ++committed;
+    }
+    if (logger.sample()) {
+      ++sampled;
+    }
+  }
+
+  // 50 ms period over 0..1000 ms inclusive: 0, 50, ... 1000 = 21 rows.
+  CHECK_EQ(static_cast<double>(sampled), 21.0);
+  CHECK_EQ(static_cast<double>(committed), 101.0);
+  CHECK_EQ(static_cast<double>(logger.rowCount()), 122.0);
+  CHECK_EQ(static_cast<double>(logger.droppedRows()), 0.0);
+}
+
+/** @brief An event row leaves the periodic deadline exactly where it was. */
+void testCommitDoesNotMoveTheDeadline() {
+  g_fake_ms = 100;
+  mclib::time::ScopedClock clock(fakeClock);
+
+  MemorySink sink;
+  RowBuffer<32> buffer;
+  Logger logger(sink, buffer, LoggerConfig{.period = 50.0 * mclib::units::millisecond});
+  auto x = logger.addNumber("x");
+  logger.set(x, 1.0);
+
+  // An event row before the first sample leaves sampling due immediately,
+  // exactly as if the event row had never happened.
+  CHECK(logger.commit());
+  CHECK(logger.due());
+  CHECK(logger.sample());
+  // Now the deadline is 150 ms, and more event rows must not push it out.
+  CHECK(!logger.due());
+  g_fake_ms = 120;
+  CHECK(logger.commit());
+  g_fake_ms = 140;
+  CHECK(logger.commit());
+  CHECK(!logger.sample());
+  g_fake_ms = 150;
+  CHECK(logger.due());
+  CHECK(logger.sample());
+  CHECK(!logger.due());
+  CHECK_EQ(static_cast<double>(logger.rowCount()), 5.0);
+}
+
 }  // namespace
 
 int main() {
@@ -362,5 +431,7 @@ int main() {
   testMissingSinkIsNoOp();
   testSinkDiesMidRun();
   testRegistrationLimits();
+  testCommitDoesNotStarveSampling();
+  testCommitDoesNotMoveTheDeadline();
   return mclib::test::summary("telemetry");
 }
