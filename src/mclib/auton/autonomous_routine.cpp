@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -16,15 +17,178 @@ namespace mclib {
 namespace auton {
 
 namespace {
+/**
+ * @brief A triggered command, scheduled under its Routine's reservation.
+ *
+ * A Routine reserves every subsystem its motion steps need, and every motion
+ * step requires the ChassisController. A triggered command that also wants the
+ * chassis - `.trigger(chassis.makeCorrectHeadingCommand())` - would therefore
+ * be scheduled straight over the top of the Routine: the scheduler finds the
+ * Routine holding that requirement, and with the default CancelRunning it ends
+ * the Routine and erases it, so every remaining step is silently skipped while
+ * runBlocking() returns as if autonomous had finished.
+ *
+ * This wrapper hides from the scheduler exactly those subsystems the command
+ * chain running this trigger already owns. The triggered command runs under
+ * that reservation instead of competing for it, which is what "runs alongside
+ * the steps" already meant. Requirements nothing in the chain holds are passed
+ * through untouched, so `.trigger(intake.spin())` still displaces the intake's
+ * default command the way it always did.
+ *
+ * The holder is CommandScheduler::activeCommand(), not just the parent Routine.
+ * The two are the same only when the Routine was scheduled directly. Nest it,
+ * `outer.add(std::move(inner))`, or wrap it in a `.withTimeout()` or a
+ * ParallelCommandGroup, and the OUTER command is the one holding the chassis;
+ * masking against the parent alone hid nothing, the scheduler cancelled the
+ * outer command, and the original bug was back with the triggered command left
+ * running on a chassis nobody would ever stop.
+ *
+ * The mask is computed once per initialize() and then frozen. The scheduler
+ * reads getRequirements() again on the way out, and a set that moved in between
+ * would leave requirement entries pointing at a command that is no longer
+ * running.
+ */
+class SharedRequirementCommand : public Command {
+public:
+  explicit SharedRequirementCommand(std::unique_ptr<Command> inner)
+      : m_inner(std::move(inner)) {}
+
+  /**
+   * @brief Hide every subsystem the command chain running this trigger holds.
+   *
+   * @param parent The Routine owning the trigger step. Checked as well as the
+   *   scheduler's active command: a Routine reached through another Routine's
+   *   step list is an ancestor the scheduler never saw and never records.
+   * @return The subsystems that were hidden. The scheduler cannot arbitrate
+   *   these any more, so the Routine has to.
+   */
+  std::vector<Subsystem*> maskRequirementsHeldBy(Command* parent) {
+    m_requirements.clear();
+
+    std::vector<Subsystem*> masked;
+
+    if (m_inner == nullptr) {
+      return masked;
+    }
+
+    // Whatever the scheduler drove into to get here. For a Routine scheduled
+    // directly that is the Routine itself; for a nested or wrapped one it is
+    // the outer command, which is the one actually holding the reservation.
+    Command* holder = CommandScheduler::activeCommand();
+
+    for (Subsystem* subsystem : m_inner->getRequirements()) {
+      std::optional<Command*> owner = CommandScheduler::getRequiring(subsystem);
+
+      const bool held_by_chain =
+          owner.has_value() &&
+          ((parent != nullptr && *owner == parent) ||
+           (holder != nullptr && *owner == holder));
+
+      if (held_by_chain) {
+        masked.push_back(subsystem);
+        continue;
+      }
+
+      m_requirements.push_back(subsystem);
+    }
+
+    return masked;
+  }
+
+  /// @brief True when the inner command declares @p subsystem, masked or not.
+  bool innerRequires(Subsystem* subsystem) {
+    if (m_inner == nullptr) {
+      return false;
+    }
+
+    std::vector<Subsystem*> requirements = m_inner->getRequirements();
+
+    return std::find(requirements.begin(), requirements.end(), subsystem) !=
+           requirements.end();
+  }
+
+  void initialize() override {
+    if (m_inner != nullptr) {
+      m_inner->initialize();
+    }
+  }
+
+  void execute() override {
+    if (m_inner != nullptr) {
+      m_inner->execute();
+    }
+  }
+
+  bool isFinished() override {
+    return m_inner == nullptr || m_inner->isFinished();
+  }
+
+  void end(bool interrupted) override {
+    if (m_inner != nullptr) {
+      m_inner->end(interrupted);
+    }
+  }
+
+  std::vector<Subsystem*> getRequirements() override {
+    return m_requirements;
+  }
+
+  CommandCancelBehavior getCancelBehavior() override {
+    return m_inner == nullptr ? CommandCancelBehavior::CancelRunning
+                              : m_inner->getCancelBehavior();
+  }
+
+private:
+  std::unique_ptr<Command> m_inner;
+  std::vector<Subsystem*> m_requirements;
+};
+
 class TriggerCommand : public Command {
 public:
   explicit TriggerCommand(std::unique_ptr<Command> command)
-      : m_command(std::move(command)) {}
+      : m_command(command == nullptr
+                      ? nullptr
+                      : std::make_unique<SharedRequirementCommand>(
+                            std::move(command))) {}
+
+  /**
+   * @brief The Routine running this step, set just before initialize().
+   *
+   * Read from the live routine at run time rather than stored at build time,
+   * so a Routine that was moved after `.trigger()` cannot leave this dangling.
+   */
+  void setParent(Routine* parent) {
+    m_parent = parent;
+  }
 
   void initialize() override {
-    if (m_command != nullptr) {
-      m_command->schedule();
+    if (m_command == nullptr) {
+      return;
     }
+
+    const std::vector<Subsystem*> masked =
+        m_command->maskRequirementsHeldBy(m_parent);
+
+    // The scheduler cannot arbitrate the masked subsystems any more: it never
+    // sees the inner command claim them. Without this, two triggers that both
+    // want the routine-reserved chassis would simply both run and both write
+    // to it. The routine does the arbitration the scheduler would have done,
+    // with the same CancelRunning rule: the newer trigger wins.
+    if (m_parent != nullptr && !masked.empty()) {
+      m_parent->cancelTriggersSharing(this, masked);
+    }
+
+    m_command->schedule();
+  }
+
+  /// @brief True when this trigger's inner command declares @p subsystem.
+  bool innerRequires(Subsystem* subsystem) {
+    return m_command != nullptr && m_command->innerRequires(subsystem);
+  }
+
+  /// @brief True while the inner command is still running.
+  bool innerScheduled() const {
+    return m_command != nullptr && m_command->scheduled();
   }
 
   bool isFinished() override {
@@ -37,10 +201,14 @@ public:
    * A triggered command is fire-and-forget: the step that started it finished
    * on the same tick, so when the routine's budget expires the only handle
    * left to it is this one.
+   *
+   * endAndForget, not cancel(). This runs from inside the scheduler's run loop
+   * and from the destructor, and there cancel() only queues the command; the
+   * destructor would then free it while the scheduler still had it queued.
    */
   void cancelInner() {
-    if (m_command != nullptr && m_command->scheduled()) {
-      m_command->cancel();
+    if (m_command != nullptr) {
+      CommandScheduler::endAndForget(m_command.get());
     }
   }
 
@@ -49,7 +217,8 @@ public:
   }
 
 private:
-  std::unique_ptr<Command> m_command;
+  std::unique_ptr<SharedRequirementCommand> m_command;
+  Routine* m_parent = nullptr;
 };
 }  // namespace
 
@@ -937,6 +1106,12 @@ void Routine::initializeCurrent() {
     }
   }
 
+  if (step.is_trigger) {
+    // Tell the trigger which command holds the reservation it has to run under.
+    // Done here, from the live routine, so nothing is stored across a move.
+    static_cast<TriggerCommand*>(step.command.get())->setParent(this);
+  }
+
   step.command->initialize();
   m_current_initialized = true;
 }
@@ -1004,6 +1179,32 @@ void Routine::noteWaitTimeout(Command& command) {
                "the condition never became true\n",
                static_cast<unsigned>(m_index),
                wait.timeout().ms());
+}
+
+void Routine::cancelTriggersSharing(const Command* requester,
+                                    const std::vector<Subsystem*>& subsystems) {
+  for (std::size_t index = 0; index < m_steps.size() && index <= m_index;
+       ++index) {
+    Step& step = m_steps[index];
+
+    if (!step.is_trigger || step.command == nullptr ||
+        step.command.get() == requester) {
+      continue;
+    }
+
+    auto* other = static_cast<TriggerCommand*>(step.command.get());
+
+    if (!other->innerScheduled()) {
+      continue;
+    }
+
+    for (Subsystem* subsystem : subsystems) {
+      if (other->innerRequires(subsystem)) {
+        other->cancelInner();
+        break;
+      }
+    }
+  }
 }
 
 void Routine::cancelTriggeredCommands(bool keep_must_run) {

@@ -15,7 +15,7 @@ public:
 	 * @param is_finish The conditional to end with. Once it is true the command will finish
 	 */
 	explicit WaitUntilCommand(const std::function<bool()> &is_finish)
-		: FunctionalCommand([]() {}, []() {}, [](bool _) {}, is_finish, {}) {
+		: FunctionalCommand([]() {}, []() {}, [](bool /*interrupted*/) {}, is_finish, {}) {
 	}
 
 	~WaitUntilCommand() override = default;

@@ -1978,14 +1978,28 @@ Rules the type follows:
 - **`debounce_ms` needs an unbroken run.** One false reading restarts the
   window, so a flickering sensor never accumulates enough time.
 
-Autonomous routines use `makeWaitForTriggerCommand(timeout_ms)`, which arms the
-watcher, finishes the moment the action fires (or on timeout), and restores the
-armed state it found unless something changed it while the command ran:
+Autonomous routines use `makeWaitForTriggerCommand(timeout_ms)`, which finishes
+the moment the action fires or on timeout, and restores the armed state it found
+unless something changed it while the command ran:
 
 ```cpp
 // Drive forward until the sensor sees the target and the grabber closes.
 auto grab_it = auto_grab.makeWaitForTriggerCommand(2000.0);
 ```
+
+Two things to know about it:
+
+- **It only arms a mechanism that was disarmed.** One that is already armed is
+  left exactly as it is, latch and edge included, because arming clears the
+  latch and that would reapply the action a driver just overrode with
+  `disarmUntilReset()`.
+- **The fire it waits for is not guaranteed.** Armed and latched, no re-arm
+  condition, trigger condition stuck true: the latch only clears when the
+  condition goes away, so nothing ever fires and the timeout is the only way
+  out. That is why `timeout_ms` defaults to a finite
+  `kDefaultWaitForTriggerTimeoutMs` (5 s) rather than to wait-forever. Pass `0`
+  if you really do want to wait forever, and call `rearm()` first if clearing
+  the latch is what you meant.
 
 `makeArmCommand()` and `makeDisarmCommand()` are one-shot and finish
 immediately. `setArmed()` / `isArmed()` are this mechanism's own switch and are

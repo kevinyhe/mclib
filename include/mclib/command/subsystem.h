@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 class Command;
 
@@ -66,9 +67,17 @@ public:
 	 * @brief Give this subsystem ownership of its default command
 	 *
 	 * @details The subsystem keeps the command alive. Any previously held default
-	 * command is cancelled and scrubbed from the \refitem CommandScheduler before
-	 * it is destroyed, and an existing registration is repointed at the new
-	 * command, so this is safe to call at any time.
+	 * command is ended and scrubbed from the \refitem CommandScheduler, and an
+	 * existing registration is repointed at the new command, so this is safe to
+	 * call at any time.
+	 *
+	 * @details Safe to call from inside the outgoing command's own execute(),
+	 * which is how a default command hands its subsystem over to a different
+	 * one. The outgoing command is NOT destroyed here while the scheduler is
+	 * still inside a callback of it: it is held back and released on a later
+	 * call, so the execute() frame that asked for the swap can finish reading
+	 * its own members. Destroying it immediately, which is what this used to do,
+	 * left that frame running on freed memory.
 	 *
 	 * ```C
 	 * intake.setDefaultCommand(intake.makeDisableCommand());
@@ -150,6 +159,14 @@ public:
 
 private:
 	std::unique_ptr<Command> default_command;
+	/**
+	 * @brief Outgoing default commands not yet safe to destroy.
+	 *
+	 * Holds at most the one command the scheduler is currently running, so a
+	 * command that replaces itself from its own execute() outlives that frame.
+	 * Everything else is released on the next setDefaultCommand call.
+	 */
+	std::vector<std::unique_ptr<Command>> retired_default_commands;
 	std::string name;
 	bool enabled = true;
 };

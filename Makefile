@@ -69,7 +69,8 @@ HOST_LDFLAGS?=-pthread
 # Expected to grow as more of src/ is made PROS-free.
 #
 # tests/support/ holds host-only stand-ins for the PROS-backed parts of the
-# library - currently just systemMillis(). It is not globbed into TEST_SRCS
+# library - systemMillis() and the PROS competition-status calls the
+# CommandScheduler makes. It is not globbed into TEST_SRCS
 # because `make test` only globs tests/*.cpp, so nothing in there is mistaken
 # for a test.
 HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
@@ -91,7 +92,10 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/command/subsystem.cpp \
 	$(SRCDIR)/mclib/mechanism/position_mechanism.cpp \
 	$(SRCDIR)/mclib/mechanism/homing_mechanism.cpp \
-	$(TESTDIR)/support/host_time.cpp
+	$(SRCDIR)/mclib/mechanism/auto_trigger_mechanism.cpp \
+	$(SRCDIR)/mclib/mechanism/mechanism_manager.cpp \
+	$(TESTDIR)/support/host_time.cpp \
+	$(TESTDIR)/support/host_pros.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on
 # success. No registration, no framework.
