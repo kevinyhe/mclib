@@ -58,11 +58,13 @@ double heading_correction_kp = 0.3, heading_correction_ki = 0, heading_correctio
 bool heading_correction = true;
 bool dir_change_start = true;
 bool dir_change_end = true;
-// Units: VOLTS. This is the default floor fed to the min_speed parameter of
-// every motion function, and that value ends up in setVoltage(), so 10 means
-// 10 V out of a 12 V rail - 83% of full power as a MINIMUM. See the audit note
-// in include/mclib/config.hpp.
-double min_output = 10;
+// Units: VOLTS. The default floor fed to the min_speed parameter of every
+// motion function, and that value ends up in setVoltage(). 1.5 V of a 12 V
+// rail is a stiction floor: enough to keep creeping the last inch instead of
+// stalling short of target, not enough to arrive hard. This was 10 - 83% of
+// the rail as a MINIMUM - which reads as a leftover from a 0..127 or 0..100
+// scale. See the doc comment in include/mclib/config.hpp.
+double min_output = 1.5;
 double max_slew_accel_fwd = 1;
 double max_slew_decel_fwd = 1;
 double max_slew_accel_rev = 1;

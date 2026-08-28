@@ -32,11 +32,12 @@
  * ## `min_speed` and the -1 sentinel
  *
  * Every routine takes `min_speed`, a floor on the output voltage, defaulting
- * to `-1_V`. Negative means "use the `min_output` global" - which is **10 V of
- * a 12 V rail**, applied unconditionally in `turnToAngle()`'s chained
- * branches, in `swing()` and in `turnToPoint()`. That is audited, deliberate
- * and unchanged by the move to units; see the note on `min_output` in
- * `mclib/config.hpp` before touching it.
+ * to `-1_V`. Negative means "use the `min_output` global" - the stiction
+ * floor, **1.5 V of a 12 V rail**, applied unconditionally in
+ * `turnToAngle()`'s chained branches, in `swing()` and in `turnToPoint()`, and
+ * gated behind chaining elsewhere. It was 10 V - 83% of the rail as a
+ * *minimum* - which is almost certainly a leftover from a 0..127 output scale;
+ * see the note on `min_output` in `mclib/config.hpp`.
  */
 
 /**

@@ -91,8 +91,9 @@ SlewPlan planSlew(const SlewConfig& config,
  * @brief Resolve the caller's `min_speed` against the `min_output` default.
  *
  * @param min_speed  The caller's request, volts. Negative means "use the default".
- * @param min_output The `min_output` global, volts. **This is 10 V of a 12 V
- *                   rail** - audited and deliberately unchanged, see config.hpp.
+ * @param min_output The `min_output` global, volts - the stiction floor,
+ *                   1.5 V of a 12 V rail by default. It was 10 V, i.e. 83% of
+ *                   the rail as a minimum; see the note in config.hpp.
  * @return The floor to apply, volts, never negative.
  */
 double minSpeedOutput(double min_speed, double min_output);

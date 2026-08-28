@@ -64,25 +64,33 @@ extern bool heading_correction;
 extern bool dir_change_start;
 extern bool dir_change_end;
 /**
- * Minimum drive output, in VOLTS - audited, deliberately unchanged.
+ * Stiction floor for drive output, in VOLTS. Default 1.5 V.
  *
  * Every motion function takes `min_speed` defaulting to -1.0, and every one of
  * them does `min_speed < 0 ? min_output : min_speed`. The result is a floor on
  * the PID output, which goes to driveChassis() -> MotorGroup::setVoltage().
- * So the unit is volts, and 10 is 83% of the 12 V rail as a *minimum* speed.
+ * So the unit is volts.
  *
- * That is only survivable because most call sites gate it off. The floor is
- * applied unconditionally in turnToAngle()'s two chained branches, in swing(),
- * and in turnToPoint(); in driveTo(), curveCircle(), moveToPoint() and
- * boomerang() it is gated behind `apply_min_speed_floor`, which starts as
- * `min_speed >= 0` - false for the default - and is only turned on by the
- * chaining branches. So a plain `turnToAngle(90, 1000, false)` really does
- * turn at no less than 10 V.
+ * What it is for: a drivetrain does not move at all below some voltage. As the
+ * PID converges, its output shrinks toward zero and at some point stops being
+ * enough to break friction, so the robot stalls an inch short of target and
+ * the loop times out there. The floor keeps the last bit of travel moving.
+ * 1.5 V of a 12 V rail is about 12% - enough to creep a geared V5 drive,
+ * little enough that arriving at the target is gentle.
  *
- * 10 reads like a leftover from a 0..127 or 0..100 scale, where it would have
- * been 8% or 10% of full power - a plausible stiction floor. As volts it is
- * not a stiction floor, it is nearly full power. Changing it changes tuned
- * autonomous behaviour, so it is left alone and flagged here.
+ * The floor is applied unconditionally in turnToAngle()'s two chained
+ * branches, in swing(), and in turnToPoint(); in driveTo(), curveCircle(),
+ * moveToPoint() and boomerang() it is gated behind `apply_min_speed_floor`,
+ * which starts as `min_speed >= 0` - false for the default - and is only
+ * turned on by the chaining branches.
+ *
+ * This was 10 for a long time, which as volts is 83% of the rail as a
+ * *minimum*: `turnToAngle(90, 1000, false)` really did turn at no less than
+ * 10 V, and slammed into its target. 10 is almost certainly a leftover from a
+ * 0..127 or 0..100 output scale, where it would have been an 8-10% stiction
+ * floor - the same intent, the right number for a different scale. Lowering
+ * it to 1.5 V restores that intent; turn PID gains tuned against the old
+ * behaviour may want revisiting.
  */
 extern double min_output;
 extern double max_slew_accel_fwd;
