@@ -8,16 +8,16 @@
  * @brief Drivetrain geometry as a type, so diameter and circumference cannot
  *        be swapped.
  *
- * The robot's wheel size is currently described twice, in two places, with two
- * different numbers and one misleading name:
+ * The robot's wheel size used to be described three times, in three places,
+ * with three different numbers and one misleading name:
  *
- * - `config.cpp`: `wheel_distance_in = 9.06`. Despite the name this is a
- *   *circumference*: every use site is `deg * wheel_distance_in / 360.0`.
+ * - `config.cpp`: `wheel_distance_in = 9.06`. Despite the name this was a
+ *   *circumference*: every use site was `deg * wheel_distance_in / 360.0`.
  *   9.06 in of circumference is a 2.884 in diameter.
- * - `config.cpp`: `vertical_tracker_diameter = 2`. This one really is a
- *   diameter: its use site is `deg * d * M_PI / 360.0`.
+ * - `config.cpp`: `vertical_tracker_diameter = 2`. This one really was a
+ *   diameter: its use site was `deg * d * M_PI / 360.0`.
  * - `chassis.hpp`: `ChassisDimensions::wheel_diameter_in = 2.75`, a third
- *   number for the same robot.
+ *   number for the same robot, 4.87% off the first.
  *
  * Three `double`s, three conventions, nothing to stop you feeding one into a
  * formula written for another. Wheel fixes that by having no constructor you
@@ -25,6 +25,11 @@
  * `Wheel::fromCircumference(...)`, and both take a QLength, so the unit is
  * carried too. Once built, all three of diameter(), radius() and
  * circumference() are available and consistent by construction.
+ *
+ * There is now one value of each: `mclib::config::robot_drive_geometry` and
+ * `mclib::config::vertical_tracking_wheel`, which the user states for their
+ * own robot. `ChassisDimensions` is an alias for DriveGeometry and the four
+ * `double` globals are gone.
  *
  * Header-only and entirely constexpr; it pulls in no PROS header, so it is
  * host-testable (see tests/geometry_test.cpp).
@@ -50,7 +55,7 @@ class Wheel {
    *
    * Use this when what you measured is how far the robot moves per wheel
    * revolution - which is what a tape measure around a compressed tread gives
-   * you, and what `wheel_distance_in = 9.06` actually is.
+   * you, and what the old `wheel_distance_in = 9.06` actually was.
    */
   static constexpr Wheel fromCircumference(QLength circumference) {
     return Wheel(circumference / pi);
@@ -82,8 +87,8 @@ class Wheel {
  *
  * One value replaces the `wheel_distance_in` / `distance_between_wheels` /
  * `ChassisDimensions` triple. The encoder-degrees-to-inches conversion lives
- * here as a method rather than being open-coded, as it is today at ten-odd
- * sites across motion.cpp and odometry.cpp, each of which has to remember the
+ * here as a method rather than being open-coded, as it was at ten-odd sites
+ * across motion.cpp and odometry.cpp, each of which had to remember the
  * `/ 360.0` for itself.
  */
 struct DriveGeometry {
@@ -102,9 +107,11 @@ struct DriveGeometry {
   /**
    * @brief Distance rolled for a given encoder rotation.
    *
-   * Replaces `deg * wheel_distance_in / 360.0` and
+   * Replaced `deg * wheel_distance_in / 360.0` and
    * `deg * tracker_diameter * M_PI / 360.0` - both are this same formula
-   * written from a different starting measurement.
+   * written from a different starting measurement. It computes in metres, so
+   * it can differ from the inches-only spelling by up to 2 ulp; see
+   * tests/geometry_test.cpp.
    */
   constexpr QLength encoderToDistance(QAngle encoder_angle) const {
     return arcLength(wheel.radius() * gear_ratio, encoder_angle);
@@ -131,7 +138,7 @@ struct DriveGeometry {
  *        tracking centre.
  *
  * Same conversion as DriveGeometry, without a track width. `offset` is signed
- * and follows the existing `vertical_tracker_dist_from_center` convention.
+ * and follows the old `vertical_tracker_dist_from_center` convention.
  */
 struct TrackingWheel {
   Wheel wheel;

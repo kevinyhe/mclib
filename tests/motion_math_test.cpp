@@ -445,13 +445,15 @@ int main() {
   CHECK_EQ((5.0 * rpm).rpm(), 5.0);
   CHECK_EQ((90.0 * degree).deg(), 90.0);
   CHECK_EQ((180.0 * degree).deg(), 180.0);
-  // ChassisDimensions' defaults survive the round trip exactly. That is what
-  // lets Chassis::degreesToInches() stay bit-identical: it reads
-  // `wheel_diameter.in()` and computes in inches exactly as it did before the
-  // field grew a type, and degreesToDistance() wraps it rather than the other
-  // way round. Computing in metres and converting back would have moved 43% of
-  // sampled headings by up to 3e-14 in - harmless, but not what this file
-  // claims to guarantee.
+  // Two lengths that survive the inch round trip exactly. This is why
+  // Chassis::degreesToInches() computes in inches: it reads
+  // `wheel.diameter().in()` and multiplies there, and degreesToDistance()
+  // wraps it rather than the other way round. Computing in metres and
+  // converting back would have moved 43% of sampled headings by up to 3e-14 in
+  // - harmless, but not what this file claims to guarantee. (The wheel these
+  // numbers came from, ChassisDimensions' old 2.75 in default, is gone; the
+  // shipped wheel is built from a circumference, so its diameter is itself a
+  // lossy round trip. See tests/geometry_test.cpp.)
   CHECK_EQ((2.75 * inch).in(), 2.75);
   CHECK_EQ((11.5 * inch).in(), 11.5);
 

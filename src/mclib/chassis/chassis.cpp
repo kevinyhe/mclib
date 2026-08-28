@@ -13,7 +13,7 @@ namespace mclib {
 Chassis::Chassis(std::initializer_list<std::int8_t> left_ports,
                  std::initializer_list<std::int8_t> right_ports,
                  device::Gearset gearset,
-                 ChassisDimensions dimensions,
+                 const ChassisDimensions& dimensions,
                  std::shared_ptr<device::Inertial> imu)
     : Chassis(std::vector<std::int8_t>(left_ports),
               std::vector<std::int8_t>(right_ports),
@@ -24,7 +24,7 @@ Chassis::Chassis(std::initializer_list<std::int8_t> left_ports,
 Chassis::Chassis(std::vector<std::int8_t> left_ports,
                  std::vector<std::int8_t> right_ports,
                  device::Gearset gearset,
-                 ChassisDimensions dimensions,
+                 const ChassisDimensions& dimensions,
                  std::shared_ptr<device::Inertial> imu)
     : m_left(std::move(left_ports), gearset),
       m_right(std::move(right_ports), gearset),
@@ -158,8 +158,8 @@ int32_t Chassis::percentToMotorPower(double percent) {
 }
 
 double Chassis::degreesToInches(double deg) const {
-  return (deg / 360.0) * m_dimensions.wheel_diameter.in() * kPi *
-         m_dimensions.drive_ratio;
+  return (deg / 360.0) * m_dimensions.wheel.diameter().in() * kPi *
+         m_dimensions.gear_ratio;
 }
 
 QLength Chassis::degreesToDistance(double deg) const {

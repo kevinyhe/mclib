@@ -223,7 +223,8 @@ mclib::Chassis chassis(
     {-11, 13, 14},
     {-16, 17, -18},
     mclib::device::Gearset::Blue,
-    {.wheel_diameter_in = 2.75, .track_width_in = 11.375},
+    mclib::config::robot_drive_geometry,  // or state it inline, e.g.
+    // mclib::ChassisDimensions{mclib::units::Wheel::fromDiameter(2.75_in), 11.375_in, 1.0}
     imu);
 
 mclib::ChassisControllerConfig drive_config{

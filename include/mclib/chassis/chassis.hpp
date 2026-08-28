@@ -4,6 +4,7 @@
 #include "mclib/device/inertial.hpp"
 #include "mclib/device/motor_group.hpp"
 #include "mclib/math.hpp"
+#include "mclib/units/geometry.hpp"
 #include "mclib/units/units.hpp"
 
 #include <cstdint>
@@ -14,38 +15,50 @@
 namespace mclib {
 
 /**
- * @brief This Chassis's idea of the drive base.
+ * @brief This Chassis's idea of the drive base. The same type the motion and
+ *        odometry code runs on.
  *
- * @warning These defaults are the **third** description of this robot's
- *          geometry, and they disagree with the other two. `config.cpp` says
- *          9.06 in of rolling circumference, which implies a 2.8839 in wheel -
- *          4.87% off the 2.75 here - and an 11.375 in track width, 1.1% off
- *          the 11.5 here. `mclib::config::robot_drive_geometry` is what
- *          `motion.cpp` and the odometry actually run on; this struct only
- *          feeds `Chassis::averageDistance()` and the `ChassisController`
- *          loops built on it. Picking a winner needs a tape measure, so both
- *          are left standing and the disagreement is pinned by
- *          `tests/geometry_test.cpp`.
+ * This used to be a separate struct with its own defaults - a 2.75 in wheel
+ * and an 11.5 in track width - which was the **third** description of the same
+ * robot and disagreed with the other two by 4.87% on distance and 1.1% on turn
+ * arc. It is now an alias for `units::DriveGeometry`, so `Chassis` and
+ * `motion.cpp` cannot describe the drive base differently: there is one type
+ * and one value, `mclib::config::robot_drive_geometry`.
+ *
+ * There are deliberately **no defaults**. `units::Wheel` has no default
+ * constructor, so `ChassisDimensions{}` does not compile and neither does a
+ * `Chassis` built without geometry. Describe your robot once, at setup:
+ *
+ * @code
+ * #include "mclib/config.hpp"
+ * mclib::Chassis drive({-11, 13, 14}, {-16, 17, -18},
+ *                      mclib::device::Gearset::Blue,
+ *                      mclib::config::robot_drive_geometry);
+ * @endcode
+ *
+ * or state it inline, saying which measurement you took:
+ *
+ * @code
+ * mclib::ChassisDimensions{mclib::units::Wheel::fromDiameter(2.75_in), 11.5_in, 1.0}
+ * @endcode
+ *
+ * A wrong wheel size is a silent 5% scaling error on every autonomous. A
+ * compile error pointing at the one line that describes the robot is better.
  */
-struct ChassisDimensions {
-  QLength wheel_diameter = 2.75 * units::inch;
-  QLength track_width = 11.5 * units::inch;
-  /// @brief Wheel revolutions per motor revolution. Dimensionless.
-  double drive_ratio = 1.0;
-};
+using ChassisDimensions = units::DriveGeometry;
 
 class Chassis {
 public:
   Chassis(std::initializer_list<std::int8_t> left_ports,
           std::initializer_list<std::int8_t> right_ports,
-          device::Gearset gearset = device::Gearset::Blue,
-          ChassisDimensions dimensions = {},
+          device::Gearset gearset,
+          const ChassisDimensions& dimensions,
           std::shared_ptr<device::Inertial> imu = nullptr);
 
   Chassis(std::vector<std::int8_t> left_ports,
           std::vector<std::int8_t> right_ports,
-          device::Gearset gearset = device::Gearset::Blue,
-          ChassisDimensions dimensions = {},
+          device::Gearset gearset,
+          const ChassisDimensions& dimensions,
           std::shared_ptr<device::Inertial> imu = nullptr);
 
   /// @brief Drive both sides as a fraction of full power, -1..1.
@@ -128,6 +141,8 @@ private:
    * not the other way round: computing in inches and typing the result keeps
    * the double path bit-identical to what it was before the dimensions grew
    * types, which matters because ChassisController's distance loop runs on it.
+   * That is also why this does not call `DriveGeometry::encoderToDistance()`,
+   * which routes the same formula through metres and can land 2 ulp away.
    */
   double degreesToInches(double deg) const;
   QLength degreesToDistance(double deg) const;

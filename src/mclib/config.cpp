@@ -23,31 +23,33 @@ mclib::device::Pneumatic hood('A');
 mclib::device::Pneumatic wing('E');
 mclib::device::Pneumatic tilter('F');
 
-// Legacy geometry globals. motion.cpp and odometry.cpp read these directly
-// (10 reads of wheel_distance_in / distance_between_wheels across the two
-// files, plus one each for the tracker pair), so they stay for now; flipping
-// those call sites over is Phase 3.
+// The four geometry globals that used to live here are gone:
 //
-// They are no longer independent values. Each one is derived from
-// `mclib::config::robot_drive_geometry` / `vertical_tracking_wheel` in
-// config.hpp, which state this geometry once, in units, with diameter and
-// circumference distinguished by type. Edit the constants there; there is
-// nothing to keep in sync here.
+//   distance_between_wheels            -> config::robot_drive_geometry.track_width
+//   wheel_distance_in (a CIRCUMFERENCE) -> config::robot_drive_geometry.wheel
+//   vertical_tracker_diameter          -> config::vertical_tracking_wheel.wheel
+//   vertical_tracker_dist_from_center  -> config::vertical_tracking_wheel.offset
 //
-// The initialisers are constant expressions, so these are constant-initialised
-// before any static constructor runs - no static initialisation order hazard.
+// They were briefly kept as values derived from those constants, which fixed
+// the disagreement but kept the confusion: four bare `double`s in three
+// conventions, one of them (`wheel_distance_in`) named for a convention it did
+// not use, and nothing in the type system to stop a diameter being read as a
+// circumference. `units::Wheel` is what stops that, and it cannot be spelled
+// as a `double`.
 //
-// One caveat: `wheel_distance_in` now comes out as 9.059999999999998721
-// instead of the literal 9.06, because 9.06 in -> metres -> inches is not a
-// bit-exact round trip. That is 1.4e-16 relative, on a number measured with a
-// tape measure to about 1%.
+// Assigning to them at runtime did work - motion.cpp and odometry_task.cpp
+// read them at call time - and that was the only way for a team using mclib as
+// a PROS template to override the geometry, since those files ship precompiled
+// in `mclib.a`. That override is preserved:
+// `mclib::config::robot_drive_geometry` is mutable and read at the same
+// points. See mclib/robot_geometry.hpp.
 //
-// NOTE: `wheel_distance_in` is a CIRCUMFERENCE, not a distance and not a
-// diameter. Every use site is `deg * wheel_distance_in / 360.0`.
-double distance_between_wheels = mclib::config::robot_drive_geometry.track_width.in();
-double wheel_distance_in = mclib::config::robot_drive_geometry.wheel.circumference().in();
-double vertical_tracker_diameter = mclib::config::vertical_tracking_wheel.wheel.diameter().in();
-double vertical_tracker_dist_from_center = mclib::config::vertical_tracking_wheel.offset.in();
+// Deleting them makes every reader name the geometry it wants and turns any
+// stale use into a compile error at the one place that has to change.
+//
+// Note also that `wheel_distance_in` came out as 9.059999999999998721 rather
+// than the literal 9.06 once it was derived, because 9.06 in -> metres ->
+// inches is not a bit-exact round trip. Nothing carries that wart now.
 
 double distance_kp = 0.4, distance_ki = 0, distance_kd = 3;
 double turn_kp = 0.3, turn_ki = 0, turn_kd = 1.5;

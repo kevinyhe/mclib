@@ -44,6 +44,32 @@ using mclib::control::planSlew;
 using mclib::control::SlewConfig;
 using mclib::control::SlewPlan;
 
+/**
+ * @brief Encoder degrees to inches rolled, from the one drive geometry.
+ *
+ * Replaces the seven copies of `deg * wheel_distance_in / 360.0` that used to
+ * be open-coded in the loops below, each remembering the `/ 360.0` for itself
+ * and each reading a mutable global that no longer exists.
+ * `mclib::config::robot_drive_geometry` is now the only description of this
+ * drive base; `DriveGeometry::encoderToDistance()` is the same formula, just
+ * written once and typed.
+ *
+ * It is not bit-identical to what it replaces: the typed path goes through
+ * metres, which costs up to 2 ulp - 4.6e-16 relative, or 4e-15 in over a ten
+ * inch drive. Pinned by tests/geometry_test.cpp.
+ */
+double encoderDegreesToInches(double deg) {
+  return mclib::config::robot_drive_geometry
+      .encoderToDistance(deg * mclib::units::degree)
+      .in();
+}
+
+/// @brief Half the track width in inches - the radius each wheel turns about
+///        when the robot spins in place. Was `distance_between_wheels / 2`.
+double halfTrackWidthIn() {
+  return mclib::config::robot_drive_geometry.turnRadius().in();
+}
+
 /// @brief The tuned slew rates and chaining flags, as they stand in config.cpp.
 SlewConfig slewConfig() {
   const mclib::config::SlewRates rates = mclib::config::slewRates();
@@ -244,7 +270,7 @@ void driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage
   while ((((!pid_distance.targetArrived()) && pros::millis() - start_time <= time_limit_msec && exit) || (exit == false && current_distance < distance_in && pros::millis() - start_time <= time_limit_msec)) && !cancelled())
   {
     // integrate wheel travel by converting encoder degrees into linear inches and averaging both treads
-    current_distance = (fabs(((getLeftRotationDegree() - start_left) / 360.0) * wheel_distance_in) + fabs(((getRightRotationDegree() - start_right) / 360.0) * wheel_distance_in)) / 2;
+    current_distance = (fabs(encoderDegreesToInches(getLeftRotationDegree() - start_left)) + fabs(encoderDegreesToInches(getRightRotationDegree() - start_right))) / 2;
     current_angle = getInertialHeading();
     left_output = pid_distance.update(current_distance) * drive_direction;
     right_output = left_output;
@@ -330,8 +356,9 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
 
   // Calculate arc lengths for inner and outer wheels
   // inner and outer tread travel differ by wheel base offset so compute each arc explicitly
-  in_arc = fabs((fabs(center_radius_in) - (distance_between_wheels / 2)) * result_angle);
-  out_arc = fabs((fabs(center_radius_in) + (distance_between_wheels / 2)) * result_angle);
+  const double half_track_width_in = halfTrackWidthIn();
+  in_arc = fabs((fabs(center_radius_in) - half_track_width_in) * result_angle);
+  out_arc = fabs((fabs(center_radius_in) + half_track_width_in) * result_angle);
   ratio = in_arc / out_arc;
 
   stopChassis(mclib::device::BrakeMode::Coast);
@@ -393,7 +420,7 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
     while (!pid_out.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
-      current_right = fabs(((getRightRotationDegree() - start_right) / 360.0) * wheel_distance_in);
+      current_right = fabs(encoderDegreesToInches(getRightRotationDegree() - start_right));
       // interpolate instantaneous heading by mapping right wheel progress onto desired arc fraction
       real_angle = current_right / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
@@ -424,7 +451,7 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
     while (!pid_out.targetArrived() && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
-      current_left = fabs(((getLeftRotationDegree() - start_left) / 360.0) * wheel_distance_in);
+      current_left = fabs(encoderDegreesToInches(getLeftRotationDegree() - start_left));
       real_angle = current_left / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       left_output = pid_out.update(current_left) * drive_direction;
@@ -451,7 +478,7 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
     while (current_right < out_arc && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
-      current_right = fabs(((getRightRotationDegree() - start_right) / 360.0) * wheel_distance_in);
+      current_right = fabs(encoderDegreesToInches(getRightRotationDegree() - start_right));
       real_angle = current_right / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       right_output = pid_out.update(current_right) * drive_direction;
@@ -478,7 +505,7 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
     while (current_left < out_arc && pros::millis() - start_time <= time_limit_msec && !cancelled())
     {
       current_angle = getInertialHeading();
-      current_left = fabs(((getLeftRotationDegree() - start_left) / 360.0) * wheel_distance_in);
+      current_left = fabs(encoderDegreesToInches(getLeftRotationDegree() - start_left));
       real_angle = current_left / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
       pid_turn.setTarget(normalizeTarget(real_angle));
       left_output = pid_out.update(current_left) * drive_direction;

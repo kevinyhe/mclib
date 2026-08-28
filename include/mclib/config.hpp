@@ -8,6 +8,7 @@
 #include "mclib/device/motor_group.hpp"
 #include "mclib/device/pneumatic.hpp"
 #include "mclib/device/rotation.hpp"
+#include "mclib/robot_geometry.hpp"
 #include "mclib/units/geometry.hpp"
 
 extern mclib::device::Controller master;
@@ -33,84 +34,21 @@ extern mclib::device::Pneumatic wing;
 extern mclib::device::Pneumatic tilter;
 
 // ---------------------------------------------------------------------------
-// Drivetrain geometry, typed.
+// Drivetrain geometry.
 //
-// The four `double` globals further down describe this robot's geometry in
-// three different conventions, and one of them is named for a convention it
-// does not use. The two constants here state it once, in units, with diameter
-// and circumference distinguished by type - and config.cpp now *derives* the
-// globals from them, so there is one source of truth and nothing to keep in
-// sync:
+// `mclib::config::robot_drive_geometry` and
+// `mclib::config::vertical_tracking_wheel` live in mclib/robot_geometry.hpp,
+// included above. That is the one place this robot's drive base is described,
+// and every consumer - motion.cpp, the odometry task, Chassis - reads it at
+// call time. Edit it for your robot, or, if you installed mclib as a PROS
+// template, assign to `robot_drive_geometry` in initialize(): motion.cpp and
+// the odometry task ship precompiled, so editing the header alone would not
+// reach them.
 //
-//   distance_between_wheels           = robot_drive_geometry.track_width.in()
-//   wheel_distance_in                 = robot_drive_geometry.wheel.circumference().in()
-//   vertical_tracker_diameter         = vertical_tracking_wheel.wheel.diameter().in()
-//   vertical_tracker_dist_from_center = vertical_tracking_wheel.offset.in()
-//
-// and the two open-coded conversions in motion.cpp / odometry.cpp are:
-//
-//   deg * wheel_distance_in / 360.0
-//       == robot_drive_geometry.encoderToDistance(deg * degree).in()
-//   deg * vertical_tracker_diameter * M_PI / 360.0
-//       == vertical_tracking_wheel.encoderToDistance(deg * degree).in()
-//
-// The globals are still what motion.cpp and odometry.cpp read; moving those
-// call sites onto these constants is Phase 3, not this change.
-//
-// Note the third, conflicting description of the same robot:
-// `mclib::ChassisDimensions` defaults to wheel_diameter_in = 2.75 and
-// track_width_in = 11.5, while `wheel_distance_in = 9.06` implies a 2.8839 in
-// diameter and the track width here is 11.375. Chassis and motion.cpp will
-// disagree by 4.87% on distance and 1.1% on turn arc until one wins. Picking
-// the winner needs a tape measure, so it is left as-is and flagged.
+// The four `double` geometry globals that used to be declared here
+// (`distance_between_wheels`, `wheel_distance_in`, `vertical_tracker_diameter`,
+// `vertical_tracker_dist_from_center`) are gone. See config.cpp.
 // ---------------------------------------------------------------------------
-
-namespace mclib {
-namespace config {
-
-/// @brief The drive base: 9.06 in of rolling circumference per wheel
-///        revolution, 11.375 in between the wheels, sensor on the wheel shaft.
-inline constexpr units::DriveGeometry robot_drive_geometry{
-    units::Wheel::fromCircumference(9.06 * units::inch),
-    11.375 * units::inch,
-    1.0,
-};
-
-/// @brief The vertical (forward/back) tracking wheel: a 2 in wheel on the
-///        tracking centre.
-inline constexpr units::TrackingWheel vertical_tracking_wheel{
-    units::Wheel::fromDiameter(2.0 * units::inch),
-    0.0 * units::inch,
-    1.0,
-};
-
-// These pin the constants to the numbers this robot was tuned with, so a typo
-// while editing them - a diameter typed into fromCircumference, a decimal
-// point slipped - stops the build instead of quietly re-scaling every
-// autonomous. They cannot catch a drift between these constants and the
-// globals in config.cpp, because those are mutable `extern double`s that no
-// static_assert can see; that drift is prevented instead by deriving them,
-// which config.cpp does.
-static_assert(units::abs(robot_drive_geometry.wheel.circumference() -
-                         9.06 * units::inch) < 1e-9 * units::inch,
-              "robot_drive_geometry no longer matches wheel_distance_in = 9.06");
-static_assert(units::abs(robot_drive_geometry.track_width - 11.375 * units::inch) <
-                  1e-9 * units::inch,
-              "robot_drive_geometry no longer matches distance_between_wheels = 11.375");
-static_assert(units::abs(vertical_tracking_wheel.wheel.diameter() - 2.0 * units::inch) <
-                  1e-9 * units::inch,
-              "vertical_tracking_wheel no longer matches vertical_tracker_diameter = 2");
-static_assert(units::abs(vertical_tracking_wheel.offset) < 1e-9 * units::inch,
-              "vertical_tracking_wheel no longer matches "
-              "vertical_tracker_dist_from_center = 0");
-
-}  // namespace config
-}  // namespace mclib
-
-extern double distance_between_wheels;
-extern double wheel_distance_in;
-extern double vertical_tracker_diameter;
-extern double vertical_tracker_dist_from_center;
 
 extern double distance_kp;
 extern double distance_ki;

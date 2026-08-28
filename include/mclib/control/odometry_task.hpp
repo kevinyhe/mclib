@@ -21,9 +21,9 @@
  * }
  * @endcode
  *
- * With no argument the layout comes from the globals in `config.cpp`
- * (`wheel_distance_in`, `vertical_tracker_diameter`,
- * `vertical_tracker_dist_from_center`) and uses the drive encoders. Pass an
+ * With no argument the layout comes from `mclib::config::robot_drive_geometry`
+ * and `mclib::config::vertical_tracking_wheel` in `config.hpp` - the one place
+ * this robot's drive base is described - and uses the drive encoders. Pass an
  * `OdometryConfig` to use the vertical tracking wheel instead.
  *
  * @warning The task cannot honour `use_horizontal_tracker`: `config.cpp` has
@@ -38,7 +38,13 @@ namespace mclib {
 namespace control {
 
 /**
- * @brief Build an OdometryConfig from the globals in `config.cpp`.
+ * @brief Build an OdometryConfig from `mclib::config::robot_drive_geometry`
+ *        and `mclib::config::vertical_tracking_wheel`.
+ *
+ * The name is historical: it used to read four `double` globals in
+ * `config.cpp`, which are gone. It now reads the one typed geometry in
+ * `mclib/robot_geometry.hpp`, at call time - so an override assigned in
+ * `initialize()` is picked up.
  *
  * Drive encoders only - `use_vertical_tracker` is false - because that is what
  * the shipped robot has wired up. The vertical tracker fields are filled in

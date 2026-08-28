@@ -23,13 +23,19 @@ std::unique_ptr<pros::Task> g_task;
 }  // namespace
 
 OdometryConfig odometryConfigFromGlobals() {
+  // Reads the one geometry in config.hpp. It used to read four mutable
+  // `extern double` globals - `wheel_distance_in` (a circumference despite the
+  // name), `vertical_tracker_diameter` (really a diameter) and
+  // `vertical_tracker_dist_from_center` - and had to remember which convention
+  // each one used. Wheel carries that now: both wheels are asked for their
+  // circumference and neither can be confused for a diameter.
   OdometryConfig config;
-  config.drive_inches_per_revolution = ::wheel_distance_in * units::inch;
+  config.drive_inches_per_revolution =
+      ::mclib::config::robot_drive_geometry.wheel.circumference();
   config.use_vertical_tracker = false;
   config.vertical_circumference =
-      ::vertical_tracker_diameter * units::pi * units::inch;
-  config.vertical_offset_right =
-      ::vertical_tracker_dist_from_center * units::inch;
+      ::mclib::config::vertical_tracking_wheel.wheel.circumference();
+  config.vertical_offset_right = ::mclib::config::vertical_tracking_wheel.offset;
   config.use_horizontal_tracker = false;
   return config;
 }
