@@ -71,16 +71,18 @@ void Subsystem::setDefaultCommand(std::unique_ptr<Command> command) {
 
 	default_command = std::move(command);
 
-	// Release everything retired that is not the command the scheduler is
-	// running right now. On the ordinary path, where the caller is not the
-	// outgoing command, that is the command just retired and it goes
-	// immediately. On the self-replacing path it is held until the next call, by
-	// which time the frame has long returned. At most one is ever kept.
-	Command* active = CommandScheduler::activeCommand();
-
+	// Release everything retired whose callback is no longer on the stack. On
+	// the ordinary path, where the caller is not the outgoing command, that is
+	// the command just retired and it goes immediately. On the self-replacing
+	// path it is held until a later call, by which time the frame has returned.
+	//
+	// isActive, not activeCommand. The chain can nest: retiring A runs A->end(),
+	// which can schedule a replacement whose initialize() lands back here. The
+	// innermost active command is then the replacement, not A, and comparing
+	// against it would free A while A's own end() frame was still running.
 	std::erase_if(retired_default_commands,
-	              [active](const std::unique_ptr<Command>& retired) {
-		              return retired.get() != active;
+	              [](const std::unique_ptr<Command>& retired) {
+		              return !CommandScheduler::isActive(retired.get());
 	              });
 }
 

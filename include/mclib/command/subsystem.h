@@ -73,11 +73,11 @@ public:
 	 *
 	 * @details Safe to call from inside the outgoing command's own execute(),
 	 * which is how a default command hands its subsystem over to a different
-	 * one. The outgoing command is NOT destroyed here while it is the command
-	 * the scheduler is currently running: it is held back and released on the
-	 * next call, so the execute() frame that asked for the swap can finish
-	 * reading its own members. Destroying it immediately, which is what this
-	 * used to do, left that frame running on freed memory.
+	 * one. The outgoing command is NOT destroyed here while the scheduler is
+	 * still inside a callback of it: it is held back and released on a later
+	 * call, so the execute() frame that asked for the swap can finish reading
+	 * its own members. Destroying it immediately, which is what this used to do,
+	 * left that frame running on freed memory.
 	 *
 	 * ```C
 	 * intake.setDefaultCommand(intake.makeDisableCommand());

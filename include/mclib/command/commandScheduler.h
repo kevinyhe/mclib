@@ -27,9 +27,11 @@ private:
 	std::vector<Command *> toSchedule;
 	std::vector<Command *> toCancel;
 
-	// The command the scheduler is currently inside a callback of. See
-	// activeCommand()
-	Command *active = nullptr;
+	// Every command the scheduler is currently inside a callback of, outermost
+	// first. A stack rather than one pointer because the two questions asked of
+	// it are different: activeCommand() wants the innermost, isActive() wants to
+	// know whether a command is anywhere on it
+	std::vector<Command *> activeStack;
 
 	CommandScheduler() = default;
 
@@ -38,20 +40,17 @@ private:
 	class ActiveScope
 	{
 	public:
-		explicit ActiveScope(Command *command) : m_previous(getInstance().active)
+		explicit ActiveScope(Command *command)
 		{
-			getInstance().active = command;
+			getInstance().activeStack.push_back(command);
 		}
 
-		~ActiveScope() { getInstance().active = m_previous; }
+		~ActiveScope() { getInstance().activeStack.pop_back(); }
 
 		ActiveScope(const ActiveScope &) = delete;
 		ActiveScope &operator=(const ActiveScope &) = delete;
 		ActiveScope(ActiveScope &&) = delete;
 		ActiveScope &operator=(ActiveScope &&) = delete;
-
-	private:
-		Command *m_previous;
 	};
 
 	// Snapshot of the registered subsystems, so callbacks can register or
@@ -90,6 +89,18 @@ private:
 	 * replacement scheduled from end() claims its requirements into an entry
 	 * nothing here touches afterwards.
 	 *
+	 * end() runs only if the command was still scheduled on the way in. That
+	 * check belongs HERE and not in the callers, because not every caller can
+	 * make it: schedule() interrupts a list of commands it collected before any
+	 * of them ran, and the first one's end() is free to retire a later one in
+	 * that same list, directly or through Subsystem::setDefaultCommand. Putting
+	 * the guard in the one place they all share covers every path, including the
+	 * next one somebody adds.
+	 *
+	 * The map cleanup runs either way. It is idempotent, and a command somehow
+	 * out of scheduledCommands while still owning a subsystem is exactly the
+	 * state that leaves a dead command holding it forever.
+	 *
 	 * @param command Must be non-null. Need not be scheduled.
 	 * @param interrupted Passed straight to end().
 	 */
@@ -101,9 +112,20 @@ private:
 		// command actually held on the way in
 		auto held = command->getRequirements();
 
+		// Read before the erase below, which is what would make it false
+		const bool was_scheduled = scheduled(command);
+
 		std::erase(instance.scheduledCommands, command);
 
 		releaseRequirements(command, held);
+
+		if (!was_scheduled)
+		{
+			// Already retired by an end() that ran earlier in this same pass.
+			// Ending it again would fire a startEnd()'s on_end twice and stop an
+			// async command's task twice.
+			return;
+		}
 
 		ActiveScope active(command);
 
@@ -278,10 +300,8 @@ public:
 			return;
 		}
 
-		if (scheduled(command))
-		{
-			retire(command, true);
-		}
+		// retire() is a no-op on a command that is not scheduled
+		retire(command, true);
 
 		forgetCommand(command);
 	}
@@ -598,24 +618,86 @@ public:
 	}
 
 	/**
-	 * @brief The command the scheduler is currently inside a callback of
+	 * @brief The INNERMOST command the scheduler is currently inside a callback of
 	 *
-	 * @details Set for the duration of initialize(), execute() and end() calls
-	 * the scheduler makes, and nested, so it names the OUTERMOST command the
-	 * scheduler drove into. A Routine that runs its steps by calling their
-	 * execute() itself does not appear here, its steps are not scheduled.
+	 * @details Set for the duration of the initialize(), execute() and end()
+	 * calls the scheduler itself makes. Those nest - an end() may schedule a
+	 * replacement, whose initialize() runs inside it - and this returns the
+	 * innermost of them, the one whose callback is actually running.
 	 *
-	 * Two things need this. A triggered command has to know which command holds
-	 * the reservation it is running under, which is the outermost one and not
-	 * necessarily its immediate parent. And \refitem Subsystem::setDefaultCommand
-	 * has to know whether the command it is retiring is the one currently on the
-	 * stack, so it can avoid destroying it underneath itself.
+	 * A command the scheduler did not drive into never appears. A Routine runs
+	 * its steps by calling their execute() itself, so inside a step it is still
+	 * the Routine that is active. That is exactly what the triggered commands
+	 * want: the innermost command the SCHEDULER reached is the one holding the
+	 * reservation, however deeply the Routine running the trigger is nested.
 	 *
-	 * @return The active command, or nullptr outside any scheduler callback.
+	 * Use isActive() instead to ask whether a particular command is anywhere in
+	 * the current callback chain. That is a different question, and answering it
+	 * with this would be wrong the moment a callback nests.
+	 *
+	 * @return The innermost active command, or nullptr outside any scheduler
+	 * callback.
 	 */
 	static Command *activeCommand()
 	{
-		return getInstance().active;
+		CommandScheduler &instance = getInstance();
+
+		return instance.activeStack.empty() ? nullptr : instance.activeStack.back();
+	}
+
+	/**
+	 * @brief Is this command anywhere in the callback chain running right now
+	 *
+	 * @details True while any of the scheduler's calls into @p command is still
+	 * on the stack, including when a nested callback is running inside it. That
+	 * is what a caller about to DESTROY a command needs to know, and it is not
+	 * what activeCommand() answers: during
+	 * `retire(A) -> A->end() -> schedule(R) -> R->initialize()` the active
+	 * command is R, but A's frame is still live and freeing A there would leave
+	 * end() running on freed memory.
+	 *
+	 * \refitem Subsystem::setDefaultCommand uses this to decide whether the
+	 * outgoing default command can be destroyed yet.
+	 *
+	 * @param command The command to look for. Null is never active.
+	 * @return true if the scheduler is currently inside a callback of it.
+	 */
+	static bool isActive(const Command *command)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (command == nullptr)
+		{
+			return false;
+		}
+
+		return std::find(instance.activeStack.begin(), instance.activeStack.end(), command) !=
+		       instance.activeStack.end();
+	}
+
+	/**
+	 * @brief The default command a registered subsystem is currently pointed at
+	 *
+	 * @details The raw pointer stored by registerSubsystem or setDefaultCommand,
+	 * which is NOT necessarily what \refitem Subsystem::getDefaultCommand
+	 * returns: the two-argument registerSubsystem takes any command, and a
+	 * registration made by somebody else wins over a later duplicate.
+	 *
+	 * Owners use this to tell "my command is the one registered here" from "the
+	 * subsystem was already registered by someone else and my call did nothing",
+	 * which matters before touching a registration on the way out.
+	 *
+	 * @param subsystem The subsystem to look up.
+	 * @return The registered default command, or nullptr if the subsystem is not
+	 * registered or was registered with no command.
+	 */
+	static Command *getDefaultCommand(Subsystem *subsystem)
+	{
+		CommandScheduler &instance = getInstance();
+
+		auto registration = instance.subsystems.find(subsystem);
+
+		return registration == instance.subsystems.end() ? nullptr : registration->second;
 	}
 
 	static bool scheduled(const Command *command)

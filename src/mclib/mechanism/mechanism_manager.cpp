@@ -17,17 +17,24 @@ MechanismManager::~MechanismManager() {
       continue;
     }
 
-    // The subsystem outlives the manager, so ending the command here is safe
-    // and is what stops whatever it started. endAndForget rather than cancel()
-    // plus forgetCommand(): inside the run loop that pair drops the deferred
-    // cancel on the floor and end(true) never runs.
-    CommandScheduler::endAndForget(entry->default_command.get());
+    Command* command = entry->default_command.get();
 
-    if (entry->registered) {
+    // Null the registration only while it still points at OUR command. The
+    // registration can belong to somebody else: registerSubsystem is a no-op on
+    // an already-registered subsystem, and setDefaultCommand can have repointed
+    // it since. Wiping one the manager never owned leaves whoever does own it
+    // with a subsystem whose default command stops being scheduled for good.
+    if (CommandScheduler::getDefaultCommand(entry->subsystem) == command) {
       // Leave the subsystem registered so it keeps getting runPeriodic(), just
       // with no command attached. The pointer it held is about to dangle.
       CommandScheduler::setDefaultCommand(entry->subsystem, nullptr);
     }
+
+    // The subsystem outlives the manager, so ending the command here is safe
+    // and is what stops whatever it started. endAndForget rather than cancel()
+    // plus forgetCommand(): inside the run loop that pair drops the deferred
+    // cancel on the floor and end(true) never runs.
+    CommandScheduler::endAndForget(command);
   }
 }
 
@@ -76,6 +83,16 @@ std::size_t MechanismManager::registerAll() {
 
     CommandScheduler::registerSubsystem(entry->subsystem,
                                         entry->default_command.get());
+
+    // registerSubsystem is a silent no-op on a subsystem somebody already
+    // registered, so "did it take" is the only honest test. Recording
+    // registered = true unconditionally made isRegistered() claim entries the
+    // manager does not own, and the destructor then acted on that claim.
+    if (CommandScheduler::getDefaultCommand(entry->subsystem) !=
+        entry->default_command.get()) {
+      continue;
+    }
+
     entry->registered = true;
     ++registered_count;
   }

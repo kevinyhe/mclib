@@ -649,6 +649,199 @@ void testSelfReplacingCommandSurvivesItsOwnFrame() {
   CommandScheduler::unregisterSubsystem(&subsystem);
 }
 
+// ---------------------------------------------------------------------------
+// 9. schedule() must not end the same command twice while interrupting
+// ---------------------------------------------------------------------------
+
+/// Retires another command from inside its own end(), the way Routine::end()
+/// reaches the fire-and-forget commands trigger() left running.
+class RetiresAnotherOnEndCommand : public Command {
+public:
+  RetiresAnotherOnEndCommand(Subsystem* subsystem, Command** victim)
+      : m_subsystem(subsystem), m_victim(victim) {}
+
+  int ends = 0;
+
+  bool isFinished() override { return false; }
+
+  void end(bool /*interrupted*/) override {
+    ++ends;
+    // Capped, so a scheduler that does recurse fails the check rather than
+    // running out of stack.
+    if (ends < 10 && m_victim != nullptr && *m_victim != nullptr) {
+      CommandScheduler::endAndForget(*m_victim);
+    }
+  }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_subsystem}; }
+
+private:
+  Subsystem* m_subsystem = nullptr;
+  Command** m_victim = nullptr;
+};
+
+/// Wants both subsystems, so scheduling it interrupts both holders at once.
+class WantsBothCommand : public Command {
+public:
+  WantsBothCommand(Subsystem* first, Subsystem* second)
+      : m_first(first), m_second(second) {}
+
+  bool isFinished() override { return false; }
+
+  std::vector<Subsystem*> getRequirements() override {
+    return {m_first, m_second};
+  }
+
+private:
+  Subsystem* m_first = nullptr;
+  Subsystem* m_second = nullptr;
+};
+
+void testInterruptingTwoCommandsEndsEachOnce() {
+  std::printf("-- interrupting two commands ends each of them once\n");
+
+  CountingSubsystem x;
+  CountingSubsystem y;
+  x.setName("x");
+  y.setName("y");
+
+  // A holds x, B holds y, and each retires the other from its own end(). Both
+  // are in the intersection schedule() collects, so whichever the loop reaches
+  // first retires the other, and the loop then reaches a command that has
+  // already been retired.
+  //
+  // Mutual rather than one-directional on purpose. schedule() walks the
+  // requirements map, whose order over two subsystem pointers is unspecified,
+  // so a one-directional version only reproduces on about half of the runs.
+  // This one does not care which way round the map yields them.
+  Command* a_ptr = nullptr;
+  Command* b_ptr = nullptr;
+
+  RetiresAnotherOnEndCommand a(&x, &b_ptr);
+  RetiresAnotherOnEndCommand b(&y, &a_ptr);
+  a_ptr = &a;
+  b_ptr = &b;
+
+  CommandScheduler::schedule(&a);
+  CommandScheduler::schedule(&b);
+  CHECK(CommandScheduler::scheduled(&a));
+  CHECK(CommandScheduler::scheduled(&b));
+
+  // Wants both, so scheduling it interrupts both holders in one loop.
+  WantsBothCommand incoming(&x, &y);
+  CommandScheduler::schedule(&incoming);
+
+  // The one that mattered: without the guard inside retire(), whichever command
+  // the loop reaches second gets end() twice.
+  CHECK_EQ(static_cast<double>(a.ends), 1.0);
+  CHECK_EQ(static_cast<double>(b.ends), 1.0);
+
+  CHECK(CommandScheduler::scheduled(&incoming));
+  CHECK(!CommandScheduler::scheduled(&a));
+  CHECK(!CommandScheduler::scheduled(&b));
+
+  CommandScheduler::endAndForget(&incoming);
+  CommandScheduler::unregisterSubsystem(&x);
+  CommandScheduler::unregisterSubsystem(&y);
+}
+
+// ---------------------------------------------------------------------------
+// 10. A retired command must survive a callback that nests inside its end()
+// ---------------------------------------------------------------------------
+
+/// Set by the outgoing default command after its own end() has nested.
+int g_nested_reads = 0;
+
+/// Schedules a replacement from its own end(), and keeps reading its members
+/// afterwards. The replacement's initialize() calls setDefaultCommand on the
+/// same subsystem, which is the nesting that made activeCommand() name the
+/// replacement rather than this command.
+class NestingOnEndCommand : public Command {
+public:
+  NestingOnEndCommand(Subsystem* subsystem, Command** replacement)
+      : m_subsystem(subsystem), m_replacement(replacement) {}
+
+  bool isFinished() override { return false; }
+
+  void end(bool /*interrupted*/) override {
+    if (m_replacement != nullptr && *m_replacement != nullptr) {
+      CommandScheduler::schedule(*m_replacement);
+    }
+
+    // Reads of *this* after the nested callback returned. If the nested
+    // setDefaultCommand freed this command, these are freed memory.
+    ++m_touches;
+    g_nested_reads = m_touches;
+  }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_subsystem}; }
+
+private:
+  Subsystem* m_subsystem = nullptr;
+  Command** m_replacement = nullptr;
+  int m_touches = 0;
+};
+
+/// Calls setDefaultCommand on the given subsystem from its own initialize().
+class SwapsDefaultOnInitCommand : public Command {
+public:
+  explicit SwapsDefaultOnInitCommand(Subsystem* subsystem)
+      : m_subsystem(subsystem) {}
+
+  void initialize() override {
+    if (m_done) {
+      return;
+    }
+    m_done = true;
+    m_subsystem->setDefaultCommand(m_subsystem->startEnd([]() {}, []() {}));
+  }
+
+  bool isFinished() override { return false; }
+
+  std::vector<Subsystem*> getRequirements() override { return {}; }
+
+private:
+  Subsystem* m_subsystem = nullptr;
+  bool m_done = false;
+};
+
+void testRetiredCommandSurvivesANestedCallback() {
+  std::printf("-- a retiring command survives a callback nested in its end()\n");
+
+  g_nested_reads = 0;
+
+  CountingSubsystem subsystem;
+  subsystem.setName("nesting");
+
+  SwapsDefaultOnInitCommand replacement(&subsystem);
+  Command* replacement_ptr = &replacement;
+
+  // The subsystem's default command is the one that nests. Retiring it runs its
+  // end(), which schedules the replacement; the replacement's initialize() then
+  // calls setDefaultCommand on this same subsystem. At that moment the
+  // scheduler's innermost active command is the replacement, so a check against
+  // activeCommand() alone would have freed the command still running its end().
+  subsystem.setDefaultCommand(
+      std::make_unique<NestingOnEndCommand>(&subsystem, &replacement_ptr));
+  subsystem.registerSelf();
+
+  CommandScheduler::run();  // schedules the nesting default command
+
+  Command* nesting = subsystem.getDefaultCommand();
+  CHECK(nesting != nullptr);
+  CHECK(CommandScheduler::scheduled(nesting));
+
+  // Retire it. Everything above happens inside this call.
+  CommandScheduler::endAndForget(nesting);
+
+  // Under ASan this is where the use-after-free fired. The value proves the
+  // post-nesting read happened and landed in live memory.
+  CHECK_EQ(static_cast<double>(g_nested_reads), 1.0);
+
+  CommandScheduler::endAndForget(&replacement);
+  CommandScheduler::unregisterSubsystem(&subsystem);
+}
+
 }  // namespace
 
 int main() {
@@ -661,5 +854,7 @@ int main() {
   testEndSchedulingAReplacementDoesNotRecurse();
   testEndAndForgetSchedulingAReplacementDoesNotRecurse();
   testSelfReplacingCommandSurvivesItsOwnFrame();
+  testInterruptingTwoCommandsEndsEachOnce();
+  testRetiredCommandSurvivesANestedCallback();
   return mclib::test::summary("scheduler_lifetime");
 }

@@ -31,10 +31,22 @@ namespace mechanism {
  *
  * It does move the ordering requirement rather than remove it. The destructor
  * runs end(true) on each owned command, and those commands hold the mechanism,
- * so every registered Subsystem must still outlive the manager. Declare the
- * mechanisms BEFORE the manager, so they are destroyed after it.
+ * so every registered Subsystem must still outlive the manager. See the
+ * declaration order below.
+ *
+ * Declare the mechanisms BEFORE the manager. Destruction runs in reverse, so
+ * that order is what keeps them alive through the manager's destructor, which
+ * calls end() on commands that write to them. Getting it backwards is only
+ * visible at shutdown, and across two translation units it is not even ordered:
+ * globals in different TUs are destroyed in an unspecified order, so keep the
+ * manager and its mechanisms in the same TU.
  *
  * @code
+ * // Same TU, mechanisms first: they outlive the manager that ends their
+ * // commands.
+ * Arm   arm{...};
+ * Wings wings{...};
+ *
  * mclib::mechanism::MechanismManager mechanisms;
  *
  * void initialize() {
@@ -104,7 +116,12 @@ public:
    * the scheduler never sees a duplicate. (Its own duplicate check is an
    * `assert`, which does nothing in a release build.)
    *
-   * @return How many entries were registered by this call.
+   * An entry whose subsystem somebody else had already registered does NOT
+   * count and is not marked registered. The scheduler keeps the first
+   * registration, so the manager's call did nothing and claiming otherwise
+   * would have the destructor tearing down a registration it does not own.
+   *
+   * @return How many entries this call actually registered.
    */
   std::size_t registerAll();
 

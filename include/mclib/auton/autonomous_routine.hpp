@@ -180,8 +180,11 @@ public:
    * @brief Start a command alongside the routine and move straight on.
    *
    * The step finishes on the tick it starts, so the triggered command keeps
-   * running while the steps behind it run. It is stopped when the routine ends,
-   * unless it is marked mustRun(), which also carries it past the time budget.
+   * running while the steps behind it run. The routine stops it when the
+   * routine itself ends, whether or not it is marked mustRun(): mustRun() only
+   * exempts it from the sweep the time budget's deadline policy makes, so it
+   * keeps running through the remaining steps rather than past the end of the
+   * routine. Nothing outlives runBlocking().
    *
    * A triggered command runs under the routine's reservation. The routine
    * reserves every subsystem its motion steps need, so a triggered command that
