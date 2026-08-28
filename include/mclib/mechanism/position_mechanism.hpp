@@ -24,6 +24,31 @@ struct PositionMechanismConfig {
   double small_duration_ms = 50.0;
   double big_duration_ms = 250.0;
   double derivative_tolerance = 5.0;
+
+  /**
+   * @brief Keep driving the loop after it has arrived. Defaults to true.
+   *
+   * PID::update() normally returns a hard 0 on every tick once it latches
+   * `arrived`, so a settled mechanism has no holding torque and sags under
+   * gravity. With this true the PID keeps computing P + I + D after arrival.
+   * atTarget() latches on exactly the same tick either way, so this never
+   * moves the settle point of a move; it only decides whether the motors stay
+   * energized afterwards.
+   *
+   * The consequence of the default: a settled mechanism holds a steady
+   * voltage instead of falling to 0 V, and the motors draw current for as
+   * long as the loop is engaged. Set it to false for the historical
+   * settle-then-release behaviour, e.g. for a mechanism that must go slack at
+   * the end of a move or a caller that waits for the output to reach 0.
+   *
+   * @note This is a P (plus D) hold, not a zero-error hold. Arrival needs
+   * |error| <= small_error, and PID::update() zeroes its accumulated error
+   * over that same band, so the integral is 0 on every held tick. A loaded
+   * mechanism settles wherever kp * error balances the load, up to small_error
+   * of steady droop. Lower small_error to shrink that, at the cost of a
+   * tighter arrival test.
+   */
+  bool hold_output = true;
 };
 
 /**
@@ -81,6 +106,9 @@ public:
    * This is a brake, not a coast: the present position becomes the target and
    * the loop holds it, so a loaded arm does not fall. Use
    * setManualVoltage(0.0) if you want the mechanism to go limp instead.
+   *
+   * With PositionMechanismConfig::hold_output false the loop stops driving
+   * once it settles, so the brake only lasts until arrival.
    */
   void stop();
 

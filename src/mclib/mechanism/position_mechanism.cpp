@@ -22,6 +22,7 @@ PositionMechanism::PositionMechanism(PositionSource position_source,
   m_pid.setSmallBigErrorDuration(config.small_duration_ms,
                                  config.big_duration_ms);
   m_pid.setDerivativeTolerance(config.derivative_tolerance);
+  m_pid.setHoldOutput(config.hold_output);
 }
 
 void PositionMechanism::moveTo(double target) {
@@ -159,13 +160,20 @@ void PositionMechanism::applyState(const double& target) {
 
   const double current = position();
 
-  // PID latches its arrived flag and then outputs a hard 0 until it is reset,
-  // so a settled mechanism has no holding torque. Re-arm the loop once the
-  // mechanism has drifted back outside the small-error band. atTarget() stays
-  // true across the re-arm so an already-finished move does not restart.
   if (m_pid.targetArrived()) {
     m_arrived = true;
-    if (std::fabs(target - current) > m_config.small_error) {
+    // Without hold_output, PID::update() returns a hard 0 on every tick once
+    // it has latched, so a settled mechanism has no holding torque. Re-arm the
+    // loop once the mechanism has drifted back outside the small-error band.
+    // atTarget() stays true across the re-arm so an already-finished move does
+    // not restart.
+    //
+    // With hold_output the PID keeps driving after arrival, so this re-arm is
+    // both redundant and harmful: the reset would drop the stored previous
+    // error and spike the derivative term for one tick every time the drift
+    // crossed the band. Exactly one of the two mechanisms is active.
+    if (!m_config.hold_output &&
+        std::fabs(target - current) > m_config.small_error) {
       m_pid.reset();
     }
   }
