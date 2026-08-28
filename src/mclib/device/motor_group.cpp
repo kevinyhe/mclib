@@ -92,7 +92,9 @@ void MotorGroup::setBrakeMode(BrakeMode mode) {
 }
 
 void MotorGroup::tarePosition() {
-  m_motors.tare_position();
+  // tare_position() without _all zeroes a single motor (index 0 by default),
+  // which would leave the rest of the group reading their pre-tare positions.
+  m_motors.tare_position_all();
 }
 
 std::vector<double> MotorGroup::getPositionsDeg() const {
