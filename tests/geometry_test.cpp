@@ -17,6 +17,7 @@
  * real constant, and check they all agree.
  */
 
+#include "mclib/control/odometry_task.hpp"
 #include "mclib/robot_geometry.hpp"
 #include "mclib/units/geometry.hpp"
 #include "test_assert.hpp"
@@ -102,14 +103,22 @@ double motionHalfTrackWidthIn() {
   return kDrive.turnRadius().in();
 }
 
-/// @brief `odometry_task.cpp`: inches of travel per drive wheel revolution.
+/// @brief `odometry_task.cpp`: inches of travel per drive encoder revolution.
+///
+/// Calls the real thing rather than restating it. It used to restate it as
+/// `kDrive.wheel.circumference().in()`, which is the `gear_ratio`-dropping bug
+/// `odometryConfigFrom()` was fixed to remove - so this file would have kept
+/// passing if the bug came back, and the 36:48 block at the bottom asserted
+/// the wrong number outright.
 double odometryDriveInchesPerRevolution() {
-  return kDrive.wheel.circumference().in();
+  return mclib::control::odometryConfigFrom(kDrive, kTracker)
+      .drive_inches_per_revolution.in();
 }
 
 /// @brief `odometry_task.cpp`: circumference of the vertical tracking wheel.
 double odometryVerticalCircumferenceIn() {
-  return kTracker.wheel.circumference().in();
+  return mclib::control::odometryConfigFrom(kDrive, kTracker)
+      .vertical_circumference.in();
 }
 
 /// @brief `Chassis::degreesToInches()`, which stays in inches on purpose.
@@ -272,7 +281,12 @@ int main() {
   // revolution, not 9.06.
   CHECK_NEAR(motionEncoderDegreesToInches(360.0), 3.25 * pi * 0.75, 1e-12);
   CHECK_NEAR(motionEncoderDegreesToInches(360.0), 7.6576321, 1e-7);
-  CHECK_NEAR(odometryDriveInchesPerRevolution(), 3.25 * pi, 1e-12);
+  // Odometry has to measure the same 7.6576 in, not the ungeared 10.21 in it
+  // used to: that 4/3 disagreement with driveTo() is the bug this line was
+  // pinning as expected behaviour.
+  CHECK_NEAR(odometryDriveInchesPerRevolution(), 3.25 * pi * 0.75, 1e-12);
+  CHECK_NEAR(odometryDriveInchesPerRevolution(), motionEncoderDegreesToInches(360.0),
+             1e-12);
   CHECK_NEAR(chassisDegreesToInches(360.0), 3.25 * pi * 0.75, 1e-12);
   CHECK_NEAR(motionHalfTrackWidthIn(), 6.25, 1e-12);
 

@@ -159,6 +159,21 @@ Vec2 robotPointToField(const Vec2& robot_point, const Pose2D& robot_pose);
  *         negative to its left. `+infinity` when `target` is straight ahead
  *         or straight behind, which is a straight line, not an arc.
  *
+ * @note The straight-line test is a tolerance, not `lateral == 0.0`. An exact
+ *       test split two identical cases: a target 10 in dead ahead of a robot
+ *       at heading 0 has a lateral offset of exactly 0 and gave `+infinity`,
+ *       but the same target dead behind (heading pi) has a lateral offset of
+ *       1.2e-15 from `sin(pi)` and gave -4.08e16 - a finite negative "radius"
+ *       whose `sqrt()` is NaN. `+infinity` is now returned whenever
+ *       `|lateral| <= 1e-12 * |target - from|^2`, i.e. whenever the radius
+ *       would exceed 5e11 inches in magnitude; the derivation is in
+ *       `math.cpp`. Note the sentinel is `+infinity` on both sides, including
+ *       where the finite result would have been negative: a straight line has
+ *       no turn direction to report.
+ *
+ * @note `target` equal to `from` is the same straight-line answer, not a
+ *       `0 / 0` NaN.
+ *
  * @note This is the correct compass-frame version of `getRadius()` in
  *       `utils.hpp`. Prefer this one; see that function's warning.
  */

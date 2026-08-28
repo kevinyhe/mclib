@@ -95,13 +95,43 @@ Vec2 robotPointToField(const Vec2& robot_point, const Pose2D& robot_pose) {
   return Vec2{robot_pose.x + field_offset.x(), robot_pose.y + field_offset.y()};
 }
 
+namespace {
+
+/**
+ * @brief How small the lateral offset may get, relative to the squared chord,
+ *        before the arc is called a straight line.
+ *
+ * `radius = chord_sq / (2 * lateral)`, so the test
+ * `|lateral| <= kLateralFloor * chord_sq` fires exactly when `|radius|` would
+ * reach `1 / (2 * kLateralFloor)` - 5e11 inches at this value. A VEX field is
+ * 144 inches across, so anything past that is a straight line by any measure a
+ * caller cares about. Because the bound is relative to `chord_sq` it scales
+ * with the target distance, and it subsumes the `0 / 0` case where `target`
+ * sits on `from` (0 <= 0).
+ *
+ * An exact `lateral == 0.0` test used to be the whole check, and it split two
+ * geometrically identical cases: a target dead ahead of a robot at heading 0
+ * gives `sin(0) == 0` exactly and returned infinity, while the same target
+ * dead behind gives `sin(pi) == 1.22e-16` and returned +/-4.08e16 - a finite
+ * number a caller would happily `sqrt()`, or `sqrt()` of a negative and get
+ * NaN. Same defect as the one fixed in `getRadius()` in `utils.cpp`, and the
+ * same fix; the constant is derived for this formula, which has no trig factor
+ * of its own to floor.
+ */
+constexpr double kLateralFloor = 1e-12;
+
+}  // namespace
+
 double arcRadius(const Pose2D& from, const Vec2& target) {
   const Vec2 local = fieldPointToRobot(target, from);
   const double lateral = local.x();
-  if (lateral == 0.0) {
+  const double chord_sq = local.squaredNorm();
+  if (std::fabs(lateral) <= kLateralFloor * chord_sq) {
+    // +infinity for both dead ahead and dead behind: the sentinel means "no
+    // arc", and there is no meaningful sign to give a straight line.
     return std::numeric_limits<double>::infinity();
   }
-  return local.squaredNorm() / (2.0 * lateral);
+  return chord_sq / (2.0 * lateral);
 }
 
 Mat2 rotationMatrix(double rad) {

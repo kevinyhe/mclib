@@ -158,6 +158,14 @@ void applySlewClamp(double& left_output,
  * one that gives way, so a sharp turn still turns instead of saturating into a
  * straight line. Identical in `moveToPoint` and `boomerang`.
  *
+ * The drive term is floored at zero: it gives up all of its forward voltage
+ * and stops there, leaving a point turn. It used to be reduced without a
+ * floor, so once `|correction| > max_output` it crossed zero and the robot
+ * drove **backwards**. `boomerang()` passes the uncapped heading-PID output,
+ * so that was reachable: drive 50 V, correction 37.5 V, cap 12 V gave a drive
+ * term of -25.5 V and, after the mix and `scaleToMax`, roughly (+2.3, -12) -
+ * a backwards point turn. It is now (+12, -12).
+ *
  * @param left_output  In: the common drive term, volts. Out: the left voltage.
  * @param right_output Out only; whatever comes in is overwritten.
  * @param correction   Heading PID output, volts.

@@ -120,11 +120,15 @@ void applyOverturnAndMix(double& left_output,
   const double overturn_value =
       fabs(left_output) + fabs(correction) - max_output;
   if (overturn_value > 0 && overturn) {
-    if (left_output > 0) {
-      left_output -= overturn_value;
-    } else {
-      left_output += overturn_value;
-    }
+    // Give the drive term up, but only down to zero. Subtracting unbounded let
+    // it cross zero and come out reversed whenever |correction| > max_output,
+    // which boomerang() reaches: it passes the uncapped heading-PID output.
+    // Drive 50, correction 37.5, cap 12 gave overturn_value 75.5, so the drive
+    // term went +50 -> -25.5 and the pair came out (+2.3, -12) after
+    // scaleToMax - a point turn backwards, where the intent is "give up the
+    // forward drive, keep the turn". Flooring at zero gives (+12, -12).
+    const double kept = fmax(fabs(left_output) - overturn_value, 0.0);
+    left_output = left_output < 0.0 ? -kept : kept;
   }
   right_output = left_output;
   left_output = left_output + correction;
