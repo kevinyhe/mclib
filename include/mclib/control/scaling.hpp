@@ -22,8 +22,11 @@
  *
  * @param left_output  Left voltage, in and out.
  * @param right_output Right voltage, in and out.
- * @param min_output   The floor, volts. See the audit note on the `min_output`
- *                     global in `config.hpp`: the default is 10 V of a 12 V rail.
+ * @param min_output   The floor, volts - the stiction floor, i.e. the smallest
+ *                     voltage that actually turns the wheels. The default and
+ *                     its audit note live on the `min_output` global in
+ *                     `config.hpp`; read the value there rather than assuming
+ *                     one, and check it before enabling the floor.
  */
 void scaleToMin(double& left_output, double& right_output, double min_output);
 
@@ -35,12 +38,11 @@ void scaleToMin(double& left_output, double& right_output, double min_output);
  * @param right_output Right voltage, in and out.
  * @param max_output   The cap, volts.
  *
- * @warning Does not cap a pair whose magnitudes are **equal and negative**:
- *          every branch below tests one side strictly greater than the other,
- *          and the two that would catch the negative case use `>` where the
- *          positive ones use `>=`. `(-13, -13)` comes back unchanged. Left as
- *          it is deliberately - `tests/scaling_test.cpp` pins the behaviour
- *          with `knownBug()` - because the drive clamps to the rail anyway and
- *          changing it moves tuned autonomous numbers.
+ * @note Equal magnitudes are capped, in every sign combination. Ties go to the
+ *       left side. This used to be wrong: the negative-overflow branches tested
+ *       one side strictly greater than the other where the positive ones used
+ *       `>=`, so a tie fell through all four branches and nothing was capped -
+ *       `(-13, -13)` came back unchanged, which is exactly straight backwards
+ *       at full command.
  */
 void scaleToMax(double& left_output, double& right_output, double max_output);

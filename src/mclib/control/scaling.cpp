@@ -40,7 +40,9 @@ void scaleToMax(double &left_output, double &right_output, double max_output)
     left_output = left_output / right_output * max_output;
     right_output = max_output;
   }
-  else if (fabs(left_output) > fabs(right_output) && left_output < -max_output)
+  // ties go to the left branch, same as the positive case above, so an equal
+  // pair (straight backwards at full command) is still capped
+  else if (fabs(left_output) >= fabs(right_output) && left_output < -max_output)
   {
     right_output = right_output / left_output * -max_output;
     left_output = -max_output;
