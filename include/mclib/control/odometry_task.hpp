@@ -2,6 +2,7 @@
 #pragma once
 
 #include "mclib/control/odometry.hpp"
+#include "mclib/units/geometry.hpp"
 #include "mclib/units/units.hpp"
 
 /**
@@ -51,6 +52,36 @@ namespace control {
  * from config anyway, so turning it on is a one-line change.
  */
 OdometryConfig odometryConfigFromGlobals();
+
+/**
+ * @brief Build an OdometryConfig from an explicit geometry pair.
+ *
+ * The body of `odometryConfigFromGlobals()`, split out so a host test can link
+ * it: `odometry_task.cpp` pulls in PROS and `config.hpp` and cannot be built
+ * on a host. The globals version passes the two geometries in
+ * `mclib/robot_geometry.hpp`.
+ *
+ * Both lengths go through `encoderToDistance(360 deg)`, which is
+ * `2 * pi * radius * gear_ratio` - the same formula `motion.cpp`'s
+ * `encoderDegreesToInches()` uses. The bare `wheel.circumference()` that used
+ * to be here dropped `gear_ratio`: on a 36:48 drive odometry integrated 4/3 of
+ * the distance `driveTo()` measured, and nothing said which one was right.
+ *
+ * @param drive    Drive base geometry, for the drive-encoder path.
+ * @param vertical Vertical tracking wheel, for its circumference and offset.
+ */
+inline OdometryConfig odometryConfigFrom(const units::DriveGeometry& drive,
+                                         const units::TrackingWheel& vertical) {
+  OdometryConfig config;
+  config.drive_inches_per_revolution =
+      drive.encoderToDistance(360.0 * units::degree);
+  config.use_vertical_tracker = false;
+  config.vertical_circumference =
+      vertical.encoderToDistance(360.0 * units::degree);
+  config.vertical_offset_right = vertical.offset;
+  config.use_horizontal_tracker = false;
+  return config;
+}
 
 /**
  * @brief Read every sensor once, into a sample for `odometryTick()`.

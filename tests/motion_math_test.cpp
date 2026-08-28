@@ -16,8 +16,11 @@
 #include "mclib/control/motion_math.hpp"
 
 #include "mclib/control/motion.hpp"
+#include "mclib/control/scaling.hpp"
 #include "mclib/units/units.hpp"
 #include "test_assert.hpp"
+
+#include <cmath>
 
 using mclib::control::applyMinSpeedFloor;
 using mclib::control::applyOverturnAndMix;
@@ -422,6 +425,104 @@ int main() {
   CHECK_EQ(exitDecel(1.0, 1.0, 12.0), 1.0);
   CHECK_EQ(exitDecel(0.1, 0.2, 12.0), 0.4);
   CHECK_EQ(exitDecel(24.0, 24.0, 12.0), 24.0);
+
+  // -------------------------------------------------------------------------
+  // applyOverturnAndMix() floors the drive term at zero.
+  //
+  // The golden table above never reaches this: its largest |correction| is
+  // 9 V against a 12 V cap, so `overturn_value` never exceeds |drive| and the
+  // drive term never crossed zero. Every row of it is unchanged by the floor.
+  // `boomerang()` passes the *uncapped* heading-PID output, so |correction|
+  // larger than the cap is reachable there, and unbounded subtraction turned
+  // the drive term negative - the robot pointed the right way and drove
+  // backwards.
+  //
+  // The review's case: drive 50 V, correction 37.5 V, cap 12 V.
+  // overturn_value = 50 + 37.5 - 12 = 75.5. Unfloored that gave a drive term
+  // of -25.5, so left = -25.5 + 37.5 = 12 and right = -25.5 - 37.5 = -63,
+  // which scaleToMax() shrank to about (+2.3, -12): a backwards point turn.
+  // Floored, the drive term is 0 and the pair is (+37.5, -37.5) - a clean
+  // point turn that scales to (+12, -12).
+  // -------------------------------------------------------------------------
+  {
+    double left = 50.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, 37.5, 12.0, true);
+    CHECK_EQ(left, 37.5);
+    CHECK_EQ(right, -37.5);
+    scaleToMax(left, right, 12.0);
+    CHECK_EQ(left, 12.0);
+    CHECK_EQ(right, -12.0);
+  }
+
+  // Mirror image: driving backwards, correction the other way. The drive term
+  // is floored at zero from below, so it never becomes positive.
+  {
+    double left = -50.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, -37.5, 12.0, true);
+    CHECK_EQ(left, -37.5);
+    CHECK_EQ(right, 37.5);
+  }
+
+  // The boundary, one volt either side. With drive 8 and cap 12 the floor
+  // starts to bite at correction 12, where overturn_value is exactly 8 and the
+  // drive term lands on 0 on its own.
+  {
+    double left = 8.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, 12.0, 12.0, true);  // overturn_value == 8
+    CHECK_EQ(left, 12.0);   // drive term 0, so left is just +correction
+    CHECK_EQ(right, -12.0);
+  }
+  {
+    double left = 8.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, 11.0, 12.0, true);  // overturn_value == 7
+    CHECK_EQ(left, 12.0);   // drive term 1, so 1 + 11
+    CHECK_EQ(right, -10.0);
+  }
+  {
+    double left = 8.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, 13.0, 12.0, true);  // overturn_value == 9
+    CHECK_EQ(left, 13.0);   // floored: drive term 0, not -1
+    CHECK_EQ(right, -13.0);
+  }
+
+  // The drive term never crosses zero, over a sweep that includes every case
+  // the old code reversed. left + right is twice the drive term, so its sign
+  // must match the sign of the drive that went in.
+  for (double drive = -60.0; drive <= 60.0; drive += 3.0) {
+    for (double correction = -60.0; correction <= 60.0; correction += 3.0) {
+      double left = drive;
+      double right = 0.0;
+      applyOverturnAndMix(left, right, correction, 12.0, true);
+      const double drive_out = (left + right) * 0.5;
+      CHECK(std::fabs(drive_out) <= std::fabs(drive) + 1e-12);
+      CHECK(drive_out * drive >= 0.0);
+    }
+  }
+
+  // A zero drive term stays at zero rather than being pushed off it. The old
+  // `left_output > 0` test sent 0 down the `+=` arm, so a large correction
+  // invented forward drive out of nothing.
+  {
+    double left = 0.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, 30.0, 12.0, true);  // overturn_value == 18
+    CHECK_EQ(left, 30.0);
+    CHECK_EQ(right, -30.0);
+  }
+
+  // overturn == false still disables the trade entirely, floor included.
+  {
+    double left = 50.0;
+    double right = 0.0;
+    applyOverturnAndMix(left, right, 37.5, 12.0, false);
+    CHECK_EQ(left, 87.5);
+    CHECK_EQ(right, 12.5);
+  }
 
   // -------------------------------------------------------------------------
   // What the typed boundary costs.

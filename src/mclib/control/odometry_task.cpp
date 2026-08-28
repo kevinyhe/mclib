@@ -27,17 +27,12 @@ OdometryConfig odometryConfigFromGlobals() {
   // `extern double` globals - `wheel_distance_in` (a circumference despite the
   // name), `vertical_tracker_diameter` (really a diameter) and
   // `vertical_tracker_dist_from_center` - and had to remember which convention
-  // each one used. Wheel carries that now: both wheels are asked for their
-  // circumference and neither can be confused for a diameter.
-  OdometryConfig config;
-  config.drive_inches_per_revolution =
-      ::mclib::config::robot_drive_geometry.wheel.circumference();
-  config.use_vertical_tracker = false;
-  config.vertical_circumference =
-      ::mclib::config::vertical_tracking_wheel.wheel.circumference();
-  config.vertical_offset_right = ::mclib::config::vertical_tracking_wheel.offset;
-  config.use_horizontal_tracker = false;
-  return config;
+  // each one used. Wheel carries that now, and the conversion goes through
+  // `encoderToDistance()`, so it cannot drop `gear_ratio` the way a bare
+  // `wheel.circumference()` did. The math is in the header so a host test can
+  // link it; this file cannot be built on a host.
+  return odometryConfigFrom(::mclib::config::robot_drive_geometry,
+                            ::mclib::config::vertical_tracking_wheel);
 }
 
 OdometrySample sampleOdometrySensors() {
