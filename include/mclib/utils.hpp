@@ -18,8 +18,9 @@ double degToRad(double deg);
 double radToDeg(double rad);
 
 /**
- * @brief Legacy curvature helper used by `boomerang`. **Frame-buggy -- prefer
- *        `mclib::arcRadius()`.**
+ * @brief Deprecated curvature helper. **Frame-buggy -- it does not compute a
+ *        turning radius. Every caller should use `mclib::arcRadius()`; this
+ *        exists only so `boomerang`'s old tuning keeps its old numbers.**
  *
  * Literally computes `((x1-x)^2 + (y1-y)^2) / (2 * (y1-y) * sin(90 - angle))`.
  *
@@ -45,10 +46,18 @@ double radToDeg(double rad);
  *          behavior, so it is left alone here.
  *
  * @note The denominator vanishes when the target is level with the robot in Y
- *       (`y1 == y`) or the heading is exactly +/-90 deg. That is a degenerate
- *       case of a wrong formula, not a real straight line. It previously
- *       returned a magic `999`, which silently became a finite speed limit;
- *       infinity means "do not limit" instead.
+ *       (`y1 == y`) or the heading is +/-90 deg (mod 360). That is a
+ *       degenerate case of a wrong formula, not a real straight line. It
+ *       previously returned a magic `999`, which silently became a finite
+ *       speed limit; infinity means "do not limit" instead. The check is a
+ *       tolerance, not `== 0.0`: `sin(degToRad(90 - angle))` is exactly 0 at
+ *       `angle == 90` but 1.22e-16 at `angle == -90`, so an exact test
+ *       returned infinity for one and 4.08e15 for the other. `+infinity` is
+ *       now returned whenever `|sin(90 - angle)| <= 1e-9` (5.7e-8 deg either
+ *       side of +/-90) or the result would exceed 1e12 inches in magnitude;
+ *       both thresholds and their derivations are in `utils.cpp`. Note the
+ *       sentinel is `+infinity` even on the branch where the finite result
+ *       would have been negative.
  * @note The one caller, `control/motion.cpp:1074`, computes
  *       `sqrt(chase_power * getRadius(...) * 9.8)` as a slip-speed limit.
  *       That expression is dimensionally incoherent -- it mixes a voltage-ish
