@@ -247,6 +247,25 @@ Vec2 PurePursuit::findLookaheadPoint(const Vec2& position, const Projection& clo
   return m_path.back().point();
 }
 
+bool PurePursuit::beyondEnd(const Vec2& position) const {
+  const std::size_t count = m_path.size();
+  if (count < 2) {
+    return false;
+  }
+  const Vec2 end = m_path.at(count - 1).point();
+  // Direction of the final leg, taken from the geometry so it does not depend
+  // on how the path was baked. Coincident last samples fall back to the stored
+  // heading.
+  Vec2 tangent = end - m_path.at(count - 2).point();
+  const double norm = tangent.norm();
+  if (norm > 1e-9) {
+    tangent /= norm;
+  } else {
+    tangent = headingVector(m_path.at(count - 1).heading.rad());
+  }
+  return (position - end).dot(tangent) >= 0.0;
+}
+
 PurePursuitOutput PurePursuit::update(const Pose2D& pose) {
   PurePursuitOutput output;
   if (!m_path.valid()) {
@@ -267,6 +286,12 @@ PurePursuitOutput PurePursuit::update(const Pose2D& pose) {
   output.remaining = m_path.length() - closest.distance;
   output.path_error = closest.error;
   output.off_path = closest.error > m_config.lookahead;
+  // beyondEnd() is a half-plane test on the final leg alone, so on a path whose
+  // last leg runs back toward the start it is true from the first tick. Gate it
+  // on the cursor actually being within a lookahead of the end, so past_end
+  // means what it says.
+  output.past_end =
+      output.remaining <= m_config.lookahead && beyondEnd(position);
 
   // Signed cross-track error in the *path's* frame: rotate the offset from the
   // path to the robot by the path's heading, and read the "right" component.
@@ -331,12 +356,28 @@ PurePursuitOutput PurePursuit::update(const Pose2D& pose) {
   if (!goal_behind && cap > 0.0 && std::fabs(curvature.raw()) > cap) {
     curvature = units::QCurvature::fromBase(std::copysign(cap, curvature.raw()));
   }
-  output.curvature = curvature;
 
   // Finished means "arrived", not "ran out of path": a robot that has been
   // shoved off the route still has work to do even when its projection is at
   // the end, so off_path vetoes the finish.
-  output.finished = !output.off_path && output.remaining <= m_config.finish_tolerance;
+  //
+  // Unless the robot is past the end. There is nothing to rejoin there: the
+  // rejoin goal clamps to the endpoint, which is now behind the robot, so
+  // goal_behind fires and the follower commands max curvature at the
+  // min_velocity floor. That is a lap around the end of the path, not a stop -
+  // measured at 627 ticks and a 14.8 in excursion for a robot 16 in past the
+  // end of a 24 in path. Overshooting the end is a finish.
+  output.finished = output.remaining <= m_config.finish_tolerance &&
+                    (!output.off_path || output.past_end);
+
+  if (output.finished) {
+    // Stop, do not spin. A goal behind the robot was just given the tightest
+    // turn available, and reporting that alongside a zero speed invites a
+    // caller that scales the speeds itself to turn on the spot at the end of
+    // every path.
+    curvature = units::QCurvature{};
+  }
+  output.curvature = curvature;
 
   // Speed: the tightest of the three limits. The curvature limit reads the
   // whole next lookahead of path, not just the point underfoot, so the robot

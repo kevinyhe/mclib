@@ -9,6 +9,30 @@
 
 namespace snapshot {
 
+/**
+ * @brief How many configured sensors are actually reporting on their port.
+ *
+ * @details The one call that tells a wrong port apart from a wall that is out
+ * of range. A distance sensor on an empty or mistyped port makes PROS return
+ * PROS_ERR (INT32_MAX), which the millimetre and inch accessors hand back as
+ * ~84 million inches - a number no range check catches, and `get_confidence()`
+ * fails the same way, so the confidence gate does not save you either. This
+ * goes through `Distance::distance()`, which reports the bad port instead.
+ *
+ * A snapshot needs `SnapshotConfig::min_sensors` live sensors to solve at all.
+ * If this returns fewer than that, `snapshot_setpose_quadrant()` will answer
+ * `TOO_FEW_SENSORS` on every call and the ports are the reason. Check it once
+ * at initialise, not inside the autonomous.
+ *
+ * @return Count of sensors whose port is reporting a distance sensor. Sensors
+ *         with a null `dev` never count.
+ */
+std::size_t snapshot_config_live_sensor_count();
+
+/// @brief How many sensors are configured, live or not. Pairs with
+///        `snapshot_config_live_sensor_count()`.
+std::size_t snapshot_config_sensor_count();
+
 bool snapshot_config_set_runtime(const SnapshotPoseRuntime& runtime);
 
 /**

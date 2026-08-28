@@ -33,6 +33,13 @@
  *   the path point one lookahead **beyond the closest point**, which is a
  *   smooth rejoin rather than a lunge at the endpoint, and reports
  *   `off_path = true`.
+ * - **Past the end.** Overshooting the endpoint by more than a lookahead used
+ *   to be unrecoverable: `off_path` vetoed `finished`, the rejoin goal clamped
+ *   to an endpoint that was now *behind* the robot, and the follower answered
+ *   with max curvature at the `min_velocity` floor - a lap around the end of
+ *   the path instead of a stop. A robot at or beyond the endpoint, measured
+ *   along the final leg, reports `past_end`, and `past_end` lets `finished`
+ *   through regardless of `off_path`.
  * - **End of path.** When the search runs off the end without an
  *   intersection, the goal is the final path point and `at_end` is true. The
  *   effective lookahead then shrinks as the robot arrives, so curvature is
@@ -190,7 +197,31 @@ struct PurePursuitOutput {
   /// @brief True when the lookahead ran off the end and the goal is the endpoint.
   bool at_end = false;
 
-  /// @brief True when `remaining` is inside `finish_tolerance`; speeds are zero.
+  /**
+   * @brief True when the robot has driven past the end of the path.
+   * @details Measured along the final leg's direction: `remaining` is inside
+   *          one lookahead **and** the robot is at or beyond the plane through
+   *          the last path point, perpendicular to the last segment. Sideways
+   *          offset is not part of it - the question is whether any path is
+   *          left ahead, and past the last point there is none. That is what
+   *          lets `finished` survive `off_path`.
+   */
+  bool past_end = false;
+
+  /**
+   * @brief True when the path is done; speeds and curvature are zero.
+   *
+   * @details `remaining` inside `finish_tolerance`, and either the robot is on
+   * the path (`!off_path`) or it is `past_end`.
+   *
+   * **This is "the follower has nothing left to do", not "the robot is on the
+   * endpoint".** A robot that is `past_end` while `off_path` finishes where it
+   * stands, which can be a long way from the last path point. `path_error` is
+   * exactly how far, and `off_path` says it happened; a caller that chains
+   * paths and cares should gate on those rather than on `finished` alone. The
+   * alternative is worse: the follower has no path left to steer along, so it
+   * would circle the end of the route until something else stopped it.
+   */
   bool finished = false;
 };
 
@@ -286,6 +317,15 @@ class PurePursuit {
 
   /// @brief Forward-only, window-bounded closest-point search.
   Projection closestPoint(const Vec2& position) const;
+
+  /**
+   * @brief Has @p position driven past the end of the path?
+   * @details True when the along-track component of `position - endpoint`,
+   *          measured along the final leg, is non-negative. Sideways offset
+   *          does not matter: what is being asked is whether any path is left
+   *          ahead, and past the last point there is none.
+   */
+  bool beyondEnd(const Vec2& position) const;
 
   /**
    * @brief First lookahead-circle intersection at or after the cursor.

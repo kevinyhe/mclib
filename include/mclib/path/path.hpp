@@ -96,10 +96,12 @@ class Path {
    * point has no direction, and `headingToward()` answers 0 for coincident
    * points, which is a real heading pointing along +Y and wrong.
    *
-   * A polyline's heading is only defined per segment, so `atDistance()`
-   * interpolates it across a corner rather than stepping. Code that needs the
-   * exact segment direction - `PurePursuit` signing its cross-track error, for
-   * one - should take the bearing between the bracketing samples instead.
+   * A polyline's heading is only defined per segment, and `atDistance()`
+   * reports exactly that: the bearing of the segment the query lands on, with
+   * the change stepping at the vertex. Code that wants the segment direction
+   * without an `atDistance()` call - `PurePursuit` signing its cross-track
+   * error, for one - can take the bearing between the bracketing samples
+   * instead.
    *
    * Use this when the route really is a polyline, or in tests where an exactly
    * known geometry matters more than smoothness. For a smooth route use
@@ -137,9 +139,18 @@ class Path {
   /**
    * @brief The sample at arc length @p distance from the start.
    * @details Linearly interpolates position and curvature between the two
-   *          bracketing samples; heading is interpolated the short way round.
-   *          Clamped to the ends, so running off either end returns an
-   *          endpoint rather than extrapolating.
+   *          bracketing samples. Clamped to the ends, so running off either
+   *          end returns an endpoint rather than extrapolating.
+   *
+   *          Heading is interpolated the short way round, but **paced by the
+   *          curvature, not by the arc length**: curvature is dtheta/ds, so
+   *          integrating it across the segment says where inside the segment
+   *          the turn happens. On a spline that is the plain lerp. On a
+   *          polyline the curvature is zero, so the heading holds at the
+   *          segment's own bearing and steps at the vertex, which is where the
+   *          corner is. A hand-built `Path` that carries per-sample headings
+   *          but leaves `curvature` at zero gets the stepped behaviour too;
+   *          fill in curvature if you want the headings blended.
    */
   PathPoint atDistance(QLength distance) const;
 
