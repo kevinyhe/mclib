@@ -1,6 +1,8 @@
 // mclib
 #pragma once
 
+#include <cmath>
+
 /**
  * @file motion_math.hpp
  * @brief The pure arithmetic of the motion routines, lifted out of the loops.
@@ -178,6 +180,49 @@ void applyOverturnAndMix(double& left_output,
  * @return Volts per nominal tick.
  */
 double exitDecel(double max_slew_fwd, double max_slew_rev, double max_output);
+
+/**
+ * @brief `boomerang()`'s slip-speed cap: how fast it may drive round an arc of
+ *        the given radius before the wheels are expected to break traction.
+ *
+ * @param chase_power_gain The `chase_power` global. Unitless, empirical.
+ * @param radius_in        Arc radius in inches, from `mclib::arcRadius()`.
+ *                         **Signed** input is fine - only the magnitude
+ *                         matters, since a left-hand arc slips at the same
+ *                         speed as the mirror-image right-hand one.
+ *                         `+/-infinity` means a straight line.
+ * @return A cap in volts, to compare against the drive output. `+infinity`
+ *         means "do not limit".
+ *
+ * ## Units
+ *
+ * `sqrt(chase_power * radius_in * 9.8)` mixes four systems: `chase_power` is a
+ * unitless fudge factor, the radius is inches, 9.8 is g in m/s^2, and the
+ * result is compared against volts. That is not fixed here and should not be:
+ * the whole expression is an empirical constant that happens to be written
+ * like a physical one, and the boomerang tuning was fitted to its shape. Only
+ * the radius source changed - from the frame-transposed `getRadius()` to
+ * `mclib::arcRadius()`.
+ *
+ * ## The two degenerate cases this exists to handle
+ *
+ * 1. **Straight line.** `arcRadius()` returns `+infinity` for a target dead
+ *    ahead or dead behind, which is right: no turn, so nothing to slip. That
+ *    flows through to `+infinity` here and no comparison against it is ever
+ *    true, so the caller's clamp correctly does not fire.
+ * 2. **`chase_power <= 0`.** `0 * infinity` is NaN, and *every* comparison
+ *    against NaN is false, so on a straight line the limiter would silently
+ *    vanish instead of clamping - the exact opposite of what a zero gain asks
+ *    for. A non-positive gain means "allow no speed at all", and that is what
+ *    it returns, at every radius including infinite. It stops the robot, which
+ *    is loud; the NaN was silent.
+ */
+inline double slipSpeedLimit(double chase_power_gain, double radius_in) {
+  if (!(chase_power_gain > 0.0)) {
+    return 0.0;
+  }
+  return std::sqrt(chase_power_gain * std::fabs(radius_in) * 9.8);
+}
 
 }  // namespace control
 }  // namespace mclib

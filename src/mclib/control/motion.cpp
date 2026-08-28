@@ -41,6 +41,7 @@ using mclib::control::clampSymmetric;
 using mclib::control::exitDecel;
 using mclib::control::minSpeedOutput;
 using mclib::control::planSlew;
+using mclib::control::slipSpeedLimit;
 using mclib::control::SlewConfig;
 using mclib::control::SlewPlan;
 
@@ -1132,13 +1133,31 @@ void boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead
 
     // Limit slip speed for smoother curves.
     //
+    // The radius comes from mclib::arcRadius(), the compass-frame arc through
+    // the carrot. It used to come from getRadius() in utils.hpp, which is
+    // frame-transposed: it puts the target's Y offset where its robot-frame
+    // lateral offset belongs, so for a robot at the origin heading 0 with the
+    // carrot 10 in dead ahead it returns 5 instead of infinity - a hard speed
+    // cap on a straight line. arcRadius() returns infinity there, and the
+    // clamp below correctly does not fire.
+    //
+    // Both are signed - positive curves right, negative left - and the old
+    // expression took sqrt() of that directly, so every left-hand arc produced
+    // NaN and dropped the limiter. slipSpeedLimit() takes the magnitude: a
+    // left arc slips at the same speed as its mirror image.
+    //
     // Raw doubles on purpose, and inexpressible in units: chase_power is a
-    // unitless fudge factor, getRadius() returns inches, 9.8 is g in m/s^2,
-    // and the result is compared against volts. Four unit systems in one
-    // expression. The arithmetic is preserved bit for bit because the
-    // boomerang tuning was fitted to it; see the notes on chase_power in
-    // config.hpp and on getRadius() in utils.hpp.
-    slip_speed = sqrt(chase_power * getRadius(pose.x, pose.y, carrot_x, carrot_y, current_angle) * 9.8);
+    // unitless fudge factor, the radius is inches, 9.8 is g in m/s^2, and the
+    // result is compared against volts. Four unit systems in one expression,
+    // deliberately preserved - see slipSpeedLimit() in motion_math.hpp and the
+    // note on chase_power in config.hpp.
+    //
+    // current_angle, not pose.theta: motion.cpp steers on raw IMU degrees and
+    // this has to be the same frame as the heading PID above it.
+    slip_speed = slipSpeedLimit(
+        chase_power,
+        mclib::arcRadius(mclib::Pose2D{pose.x, pose.y, degToRad(current_angle)},
+                         mclib::Vec2{carrot_x, carrot_y}));
     if (left_output > slip_speed)
     {
       left_output = slip_speed;

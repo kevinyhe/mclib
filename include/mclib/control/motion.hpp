@@ -237,10 +237,15 @@ void moveToPoint(QLength x,
  * @param overturn       True lets heading correction eat into the forward drive.
  * @param min_speed      Voltage floor; negative selects the `min_output` default.
  *
- * @warning The slip-speed limiter inside uses `getRadius()`, which is
- *          frame-transposed (`utils.hpp` documents how), and the tuning was
- *          fitted around that. Do not swap it for `mclib::arcRadius()` without
- *          re-tuning.
+ * @warning The slip-speed limiter inside now uses `mclib::arcRadius()`, the
+ *          correct compass-frame arc radius. It used to use `getRadius()`,
+ *          which is frame-transposed, and **the existing `chase_power` tuning
+ *          was fitted around that wrong formula**. Expect boomerang paths to
+ *          behave differently and re-tune `chase_power`. Two changes in
+ *          particular: a straight-line carrot is no longer capped at a finite
+ *          speed, and left-hand arcs are limited at all (the old expression
+ *          took `sqrt()` of a negative radius and produced NaN, which silently
+ *          disabled the clamp).
  */
 void boomerang(QLength x,
                QLength y,
