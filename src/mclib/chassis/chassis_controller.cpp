@@ -1,6 +1,7 @@
 // mclib
 #include "mclib/chassis/chassis_controller.hpp"
 
+#include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion.hpp"
 #include "mclib/control/robot_state.hpp"
@@ -214,8 +215,27 @@ void ChassisController::turnToHeading(QAngle heading,
   const double heading_deg = heading.deg();
   const double max_voltage_volts = max_voltage.volts();
 
+  // With an IMU, headingDeg() is getRotationDeg(): accumulated rotation, not a
+  // wrapped heading. After two clockwise turns it reads 720, so an absolute
+  // target of 0 would be an error of -720 to be unwound the long way round.
+  // Shift the target by whole turns onto the branch the robot is actually on,
+  // exactly as control::normalizeTarget() does for motion.cpp's turnToAngle().
+  //
+  // Without one it is the odometry pose angle, which Odometry wraps to
+  // [-180, 180]. Normalising against a wrapped measurement can put the target
+  // outside the range that measurement can ever report -- at theta = 170 deg,
+  // a target of -170 would normalise to 190, an error that bottoms out at
+  // 10 deg and never clears the exit tolerance. Since turnToHeading()'s
+  // default timeout is zero (no timeout), that hangs. A wrapped source is
+  // already on the only branch there is, so leave the target alone.
+  const double target_deg =
+      m_chassis.imu() != nullptr
+          ? chassis_math::normalizeHeadingTarget(heading_deg,
+                                                 m_chassis.headingDeg())
+          : heading_deg;
+
   m_mode = Mode::TurnToHeading;
-  m_goal = heading_deg;
+  m_goal = target_deg;
   m_start_time_ms = mclib::time::millis();
   m_timeout_ms = timeout.ms();
   m_goal_max_voltage = max_voltage_volts > 0.0 ? max_voltage_volts
@@ -224,11 +244,22 @@ void ChassisController::turnToHeading(QAngle heading,
   m_settled = false;
 
   m_turn_pid.reset();
-  m_turn_pid.setTarget(heading_deg);
+  m_turn_pid.setTarget(target_deg);
 }
 
 void ChassisController::cancel() {
-  finishGoal();
+  // Nothing to cancel, and nothing to grab. ParallelCommandGroup::end(true)
+  // calls end(true) on children that already finished, so a settled goal's
+  // command reaches here routinely -- and by then an async motion.cpp routine
+  // on another task may own the motors. Braking them from under it is not this
+  // controller's business.
+  if (m_mode == Mode::Idle) {
+    return;
+  }
+
+  // An abort, not a hand-off: a cancelled goal stops the drive whatever the
+  // caller asked for at the start.
+  finishGoal(true);
 }
 
 bool ChassisController::isSettled() const {
@@ -495,12 +526,20 @@ void ChassisController::runDriveDistance() {
     correction = m_heading_pid.update(m_chassis.headingDeg());
   }
 
-  const double left = clampVoltage(output + correction, m_goal_max_voltage);
-  const double right = clampVoltage(output - correction, m_goal_max_voltage);
-  m_chassis.tankVoltage(left * units::volt, right * units::volt);
+  // Clamp the drive term first -- PIDController does not bound its own output,
+  // and at the default kp any move past 30 in starts above the rail. Clamping
+  // the two sides independently instead returned the cap on both and left a
+  // differential of exactly zero: no heading authority at all for the whole
+  // first half of a long move.
+  const double drive = clampVoltage(output, m_goal_max_voltage);
+  const auto pair =
+      chassis_math::mixDriveCorrection(drive, correction, m_goal_max_voltage);
+  m_chassis.tankVoltage(pair.left * units::volt, pair.right * units::volt);
 
-  if (m_distance_pid.targetArrived() || timedOut()) {
-    finishGoal();
+  if (m_distance_pid.targetArrived()) {
+    finishGoal(false);
+  } else if (timedOut()) {
+    finishGoal(true);
   }
 }
 
@@ -509,14 +548,34 @@ void ChassisController::runTurnToHeading() {
                                      m_goal_max_voltage);
   m_chassis.tankVoltage(output * units::volt, -output * units::volt);
 
-  if (m_turn_pid.targetArrived() || timedOut()) {
-    finishGoal();
+  if (m_turn_pid.targetArrived()) {
+    finishGoal(false);
+  } else if (timedOut()) {
+    finishGoal(true);
   }
 }
 
-void ChassisController::finishGoal() {
-  if (m_stop_at_end) {
+void ChassisController::finishGoal(bool force_stop) {
+  // The drive must end in a state the caller chose, on every exit path.
+  // Returning without writing the motors left the last PID voltage latched:
+  // periodic() stops calling runDriveDistance() the moment the mode goes Idle,
+  // so nothing ever overwrote it. On the timeout path that voltage is whatever
+  // the loop was commanding when the clock ran out -- several volts -- and the
+  // robot drove on for the rest of the match.
+  if (m_stop_at_end || force_stop) {
     m_chassis.stop(device::BrakeMode::Hold);
+  } else {
+    // stop_at_end == false means "do not stop between chained moves", so the
+    // next command is entitled to a robot that is still rolling. It is not
+    // entitled to one still being driven by a controller that has stopped
+    // running. Command zero volts: momentum carries into the next move, and if
+    // no next move comes the robot rolls to a halt instead of driving away.
+    //
+    // Not setBrakeMode(Coast). A zero voltage already freewheels -- the brake
+    // mode only applies to motor_brake(), which stop() calls and this does not
+    // -- and the mode is drive-wide state nothing here restores, so setting it
+    // would leave teleop coasting after any chained move.
+    m_chassis.tankVoltage(0.0 * units::volt, 0.0 * units::volt);
   }
   m_mode = Mode::Idle;
   m_settled = true;

@@ -1,6 +1,7 @@
 // mclib
 #include "mclib/chassis/chassis.hpp"
 
+#include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
 
@@ -44,7 +45,12 @@ void Chassis::tankVoltage(QVoltage left, QVoltage right) {
 }
 
 void Chassis::arcade(double forward_percent, double turn_percent) {
-  tank(forward_percent - turn_percent, forward_percent + turn_percent);
+  // Left leads on a positive turn. The mix used to be the other way round,
+  // which made this the one primitive in the library that turned the opposite
+  // way to tank(+x, -x) and to a positive turnToHeading() delta -- the right
+  // stick steered the robot left.
+  const auto pair = chassis_math::arcadeMix(forward_percent, turn_percent);
+  tank(pair.left, pair.right);
 }
 
 void Chassis::stop(device::BrakeMode mode) {

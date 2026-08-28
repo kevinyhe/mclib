@@ -75,6 +75,7 @@ HOST_LDFLAGS?=-pthread
 HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
+	$(SRCDIR)/mclib/chassis/chassis_math.cpp \
 	$(SRCDIR)/mclib/control/scaling.cpp \
 	$(SRCDIR)/mclib/control/motion_math.cpp \
 	$(SRCDIR)/mclib/control/robot_state.cpp \

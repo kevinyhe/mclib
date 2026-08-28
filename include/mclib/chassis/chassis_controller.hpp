@@ -208,7 +208,14 @@ private:
 
   void runDriveDistance();
   void runTurnToHeading();
-  void finishGoal();
+  /**
+   * @brief End the current goal, leaving the drive in a defined state.
+   *
+   * @param force_stop Brake and hold regardless of `stop_at_end`. True for a
+   *                   timeout or a cancel: a goal that did not reach its
+   *                   target does not hand momentum to the next one.
+   */
+  void finishGoal(bool force_stop);
   bool timedOut() const;
   std::unique_ptr<Command> makeAsyncControlCommand(
       std::function<void()> action,
