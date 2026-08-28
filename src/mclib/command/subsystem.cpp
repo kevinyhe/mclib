@@ -45,12 +45,16 @@ std::unique_ptr<Command> Subsystem::idleCommand() {
 void Subsystem::setDefaultCommand(std::unique_ptr<Command> command) {
 	Command* previous = default_command.get();
 
-	// The old default command is about to be destroyed. End it cleanly if the
-	// scheduler is not mid-run, then scrub every remaining reference to it so the
-	// scheduler is never left holding a dangling pointer.
+	// The old default command is about to be destroyed. End it cleanly and then
+	// scrub every remaining reference to it, so the scheduler is never left
+	// holding a dangling pointer.
+	//
+	// endAndForget, not cancel() plus forgetCommand(). Called from inside a
+	// command's execute(), cancel() only queues the command and forgetCommand()
+	// erases that queue entry again, so end(true) would never run: a startEnd()
+	// default would never fire its on_end.
 	if (previous != nullptr) {
-		CommandScheduler::cancel(previous);
-		CommandScheduler::forgetCommand(previous);
+		CommandScheduler::endAndForget(previous);
 	}
 
 	// Point an existing registration at the new command. A no-op if this

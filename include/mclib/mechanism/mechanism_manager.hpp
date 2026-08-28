@@ -23,8 +23,10 @@ namespace mechanism {
  * those pointers instead: it takes ownership in add() and keeps them until the
  * manager itself is destroyed.
  *
- * Because the manager owns the commands the scheduler points at, it must
- * outlive the scheduler's use of them. Give it static or program-long storage.
+ * The manager owns the commands the scheduler points at, so its destructor
+ * ends them and scrubs them out of the scheduler. Program-long storage is still
+ * the usual shape, but a manager held as a class member or a local is safe: a
+ * CommandScheduler::run() after it dies no longer reaches freed commands.
  *
  * @code
  * mclib::mechanism::MechanismManager mechanisms;
@@ -52,15 +54,25 @@ public:
 
   MechanismManager() = default;
 
-  // Owns the commands the scheduler holds raw pointers to, and the scheduler
-  // has no unregister call. Copying and moving would both put those commands
-  // somewhere the scheduler cannot see, so neither is allowed.
+  // Owns the commands the scheduler holds raw pointers to. Copying and moving
+  // would both put those commands somewhere the scheduler cannot see, so
+  // neither is allowed.
   MechanismManager(const MechanismManager&) = delete;
   MechanismManager& operator=(const MechanismManager&) = delete;
   MechanismManager(MechanismManager&&) = delete;
   MechanismManager& operator=(MechanismManager&&) = delete;
 
-  ~MechanismManager() = default;
+  /**
+   * @brief End every owned command and drop the scheduler's references to it.
+   *
+   * The commands are about to be destroyed while CommandScheduler still holds
+   * raw pointers to them, so a manager that went out of scope used to hand the
+   * next CommandScheduler::run() a call into freed memory. Each entry is ended
+   * and forgotten first, and the subsystem's registration is repointed at null,
+   * so the subsystem itself keeps getting runPeriodic() with no command
+   * attached.
+   */
+  ~MechanismManager();
 
   /**
    * @brief Take ownership of a mechanism's default command.
@@ -127,9 +139,10 @@ public:
   /**
    * @brief Enable or disable one entry.
    *
-   * Disabling only stops registerAll() from registering the entry later. The
-   * scheduler has no way to drop a subsystem once registered, so disabling an
+   * Disabling only stops registerAll() from registering the entry later. It
+   * does not undo a registration that already happened, so disabling an
    * already-registered entry changes nothing but the record and describe().
+   * Call CommandScheduler::unregisterSubsystem yourself if you mean to drop it.
    *
    * @return false if there is no entry with that name.
    */

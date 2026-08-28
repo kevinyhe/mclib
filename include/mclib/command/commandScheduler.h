@@ -177,6 +177,54 @@ public:
 	}
 
 	/**
+	 * @brief End a command NOW and then drop every reference the scheduler holds
+	 * to it
+	 *
+	 * @details The safe way to retire a command that is about to be destroyed
+	 * while it is still fully alive, for example the old default command inside
+	 * \refitem Subsystem::setDefaultCommand.
+	 *
+	 * cancel() followed by forgetCommand() looks like it does this but does not.
+	 * Inside \refitem CommandScheduler::run, cancel() only queues the command on
+	 * the deferred cancel list, and the forgetCommand() call right after erases
+	 * that queue entry again, so end(true) never runs at all: a startEnd()
+	 * default never fires its on_end, an async command never stops its task.
+	 * This runs end(true) immediately instead, which is safe inside the run loop
+	 * because run() iterates a copy of the scheduled list and re-checks
+	 * scheduled() before executing each entry.
+	 *
+	 * Use forgetCommand() on its own when running end() would be unsafe, such as
+	 * from a subsystem destructor.
+	 *
+	 * @param command The command to end and forget. Null, or a command that is
+	 * not scheduled, still has every reference to it dropped.
+	 */
+	static void endAndForget(Command *command)
+	{
+		CommandScheduler &instance = getInstance();
+
+		if (command == nullptr)
+		{
+			return;
+		}
+
+		if (scheduled(command))
+		{
+			// Same ordering rule as cancel(): read the requirements before
+			// end(true), which may schedule a replacement that claims some of them
+			auto held = command->getRequirements();
+
+			command->end(true);
+
+			std::erase(instance.scheduledCommands, command);
+
+			releaseRequirements(command, held);
+		}
+
+		forgetCommand(command);
+	}
+
+	/**
 	 * @brief Drop every reference the scheduler holds to a subsystem WITHOUT
 	 * cancelling anything
 	 *
@@ -252,11 +300,13 @@ public:
 
 		if (requiring != instance.requirements.end())
 		{
-			// Copy the pointer, cancel() erases the map entry we are looking at
+			// Copy the pointer, ending the command erases the map entry we are
+			// looking at. endAndForget rather than cancel() plus forgetCommand():
+			// called from inside run(), that pair queues the cancel and then erases
+			// the queue entry, so end(true) never runs.
 			Command *command = requiring->second;
 
-			cancel(command);
-			forgetCommand(command);
+			endAndForget(command);
 		}
 
 		auto registration = instance.subsystems.find(subsystem);
@@ -267,8 +317,7 @@ public:
 			// the requirements map, so cancel it explicitly
 			Command *default_command = registration->second;
 
-			cancel(default_command);
-			forgetCommand(default_command);
+			endAndForget(default_command);
 		}
 
 		forgetSubsystem(subsystem);
@@ -427,18 +476,27 @@ public:
 
 		instance.inRunLoop = false;
 
-		for (const auto command : instance.toCancel)
+		// Drain into locals before running anything. With inRunLoop false again
+		// these cancel() and schedule() calls run user callbacks, and a callback
+		// that cancels, schedules or forgets a command writes to the very vectors
+		// a range-for would be walking. Swapping first leaves the callbacks a
+		// fresh, empty queue to append to, which is picked up on the next pass.
+		std::vector<Command *> pending_cancel;
+		std::vector<Command *> pending_schedule;
+
+		pending_cancel.swap(instance.toCancel);
+		pending_schedule.swap(instance.toSchedule);
+
+		for (const auto command : pending_cancel)
 		{
+			// cancel() is a no-op on a command an earlier cancel already forgot
 			cancel(command);
 		}
 
-		for (const auto command : instance.toSchedule)
+		for (const auto command : pending_schedule)
 		{
 			schedule(command);
 		}
-
-		instance.toCancel.clear();
-		instance.toSchedule.clear();
 
 		// Copy again, schedule() runs command callbacks that may unregister a
 		// subsystem and invalidate this iteration

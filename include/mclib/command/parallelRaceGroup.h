@@ -70,9 +70,10 @@ public:
 	/**
 	 * @brief Ends all commands with the ones that should be interrupted being interrupted
 	 *
-	 * @param interrupted Ends all commands based on if they are done or not
+	 * @param interrupted Ignored. Each member command is told whether IT was
+	 * interrupted, which is what isFinished() answers, not whether the group was.
 	 */
-	void end(bool interrupted) override {
+	void end(bool /*interrupted*/) override {
 		for (auto command : this->commands) {
 			command->end(!command->isFinished());
 		}

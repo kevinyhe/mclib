@@ -176,6 +176,27 @@ public:
 
   Routine& add(std::unique_ptr<Command> command);
   Routine& then(std::unique_ptr<Command> command);
+  /**
+   * @brief Start a command alongside the routine and move straight on.
+   *
+   * The step finishes on the tick it starts, so the triggered command keeps
+   * running while the steps behind it run. It is stopped when the routine ends,
+   * unless it is marked mustRun(), which also carries it past the time budget.
+   *
+   * A triggered command runs under the routine's reservation. The routine
+   * reserves every subsystem its motion steps need, so a triggered command that
+   * wants one of them - the chassis, most of all - shares it instead of
+   * fighting for it:
+   *
+   * @code
+   * routine.driveTo(24_in, 1_s)
+   *        .trigger(chassis.makeCorrectHeadingCommand())
+   *        .turnToAngle(90_deg, 800_ms);
+   * @endcode
+   *
+   * Subsystems the routine does not hold are claimed the usual way, so
+   * `.trigger(intake.spin())` still displaces the intake's default command.
+   */
   Routine& trigger(std::unique_ptr<Command> command);
   Routine& runOnce(std::function<void()> action);
   Routine& wait(QTime duration);

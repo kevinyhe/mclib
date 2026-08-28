@@ -11,6 +11,26 @@
 namespace mclib {
 namespace mechanism {
 
+MechanismManager::~MechanismManager() {
+  for (const std::unique_ptr<Entry>& entry : m_entries) {
+    if (entry == nullptr || entry->default_command == nullptr) {
+      continue;
+    }
+
+    // The subsystem outlives the manager, so ending the command here is safe
+    // and is what stops whatever it started. endAndForget rather than cancel()
+    // plus forgetCommand(): inside the run loop that pair drops the deferred
+    // cancel on the floor and end(true) never runs.
+    CommandScheduler::endAndForget(entry->default_command.get());
+
+    if (entry->registered) {
+      // Leave the subsystem registered so it keeps getting runPeriodic(), just
+      // with no command attached. The pointer it held is about to dangle.
+      CommandScheduler::setDefaultCommand(entry->subsystem, nullptr);
+    }
+  }
+}
+
 bool MechanismManager::add(Subsystem* subsystem,
                            std::unique_ptr<Command> default_command,
                            std::string name) {

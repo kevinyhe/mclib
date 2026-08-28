@@ -15,6 +15,6 @@ public:
 	 * @param onRun Function to run every frame
 	 * @param requirements Requirements that this function will need
 	 */
-	RunCommand(const std::function<void()>& onRun, const std::initializer_list<Subsystem*> requirements): FunctionalCommand([] {}, onRun, [](bool _) { }, [] () {return false; }, requirements) {
+	RunCommand(const std::function<void()>& onRun, const std::initializer_list<Subsystem*> requirements): FunctionalCommand([] {}, onRun, [](bool /*interrupted*/) { }, [] () {return false; }, requirements) {
 	}
 };

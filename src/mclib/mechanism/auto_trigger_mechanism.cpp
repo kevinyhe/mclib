@@ -219,7 +219,15 @@ std::unique_ptr<Command> AutoTriggerMechanism::makeWaitForTriggerCommand(
         *start_ms = nowMs();
         *start_count = m_fire_serial;
         *was_armed = isArmed();
-        setArmed(true);
+        // Only arm what is not already armed. setArmed(true) clears m_latched
+        // and m_edge_ready, so calling it on an already-armed mechanism
+        // destroys a latch that disarmUntilReset() deliberately set after a
+        // driver override, and the still-true condition fires again with no
+        // false->true edge. Same reason the end lambda below refuses to call
+        // setArmed(true).
+        if (!*was_armed) {
+          setArmed(true);
+        }
       },
       // Poll here as well as from periodic(), so the command works whether or
       // not the mechanism is registered. A second poll in the same millisecond

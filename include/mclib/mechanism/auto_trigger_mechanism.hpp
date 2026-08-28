@@ -183,6 +183,12 @@ public:
   /**
    * @brief Command that arms the watcher and finishes when the action fires.
    *
+   * It only arms a mechanism that was disarmed. One that was already armed is
+   * left exactly as it was, latch and edge included, so this command waits for
+   * the next real fire instead of manufacturing one: arming clears the latch,
+   * and clearing a latch that disarmUntilReset() set would reapply the action
+   * the driver just overrode, with no false->true edge behind it.
+   *
    * If it found the mechanism disarmed, it disarms it again on the way out,
    * but only if the mechanism is still armed at that point. Anything that
    * disarmed it mid-command (a setArmed(false), or AutoTriggerConfig::fire_once)
