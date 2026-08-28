@@ -167,6 +167,33 @@ int main() {
   std::printf("held output past the clamp: %.4f V\n", clamped.volts);
   CHECK_NEAR(clamped.volts, 12.0, 1e-12);
 
+  // --- Integral windup is bounded -------------------------------------------
+  // The hazard hold_output introduces: nothing clears the accumulator while
+  // the mechanism sits outside small_error, because PID::update() only throws
+  // it away once |error| falls back inside that band. A stuck mechanism would
+  // walk the command to max_voltage and park a motor there. integral_max_volts
+  // is what stops it.
+  {
+    Rig capped(true);
+    capped.mechanism.moveTo(10.0);
+    capped.position = 10.0;
+    CHECK(settle(capped, 50) > 0);
+
+    // Hold it at 5: error 5, inside big_error, outside small_error. 3 s at
+    // 10 ms/tick is 300 ticks of uncleared accumulation.
+    capped.position = 5.0;
+    for (int i = 0; i < 300; ++i) {
+      capped.tick();
+    }
+    std::printf("stuck outside the band for 3 s: %.4f V (max_voltage = %.1f, "
+                "integral_max_volts = %.1f)\n",
+                capped.volts, 12.0, PositionMechanismConfig{}.integral_max_volts);
+    // kp * 5 = 2.5, plus the integral pinned at its 2.0 V cap.
+    CHECK_NEAR(capped.volts, 0.5 * 5.0 + 2.0, 1e-9);
+    // The point of the assertion: nowhere near the rail.
+    CHECK(capped.volts < 12.0);
+  }
+
   // --- A manual override still wins -----------------------------------------
   on.mechanism.setManualVoltage(0.0);
   on.tick();

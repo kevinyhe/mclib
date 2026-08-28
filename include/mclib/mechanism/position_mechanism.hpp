@@ -26,6 +26,25 @@ struct PositionMechanismConfig {
   double derivative_tolerance = 5.0;
 
   /**
+   * @brief Cap on the integral term's contribution, in volts. 0 means no cap.
+   *
+   * A position loop that cannot reach its target - a stalled arm, a mechanism
+   * holding against more load than it can lift - accumulates error forever.
+   * Without a cap the integral alone walks the command up to max_voltage and
+   * parks a motor there. PID::update() only throws the accumulator away once
+   * |error| falls back inside small_error, which is exactly what a stuck
+   * mechanism never does, so the cap is the only thing bounding it.
+   *
+   * The default matches VelocityMechanismConfig::integral_max_volts: enough to
+   * trim out a steady-state offset, not enough to be the whole command. Raise
+   * it if the mechanism genuinely needs more authority to hold, and check the
+   * motor temperature when you do.
+   *
+   * Only matters when ki is non-zero, and ki defaults to 0.
+   */
+  double integral_max_volts = 2.0;
+
+  /**
    * @brief Keep driving the loop after it has arrived. Defaults to true.
    *
    * PID::update() normally returns a hard 0 on every tick once it latches
@@ -107,8 +126,12 @@ public:
    * the loop holds it, so a loaded arm does not fall. Use
    * setManualVoltage(0.0) if you want the mechanism to go limp instead.
    *
-   * With PositionMechanismConfig::hold_output false the loop stops driving
-   * once it settles, so the brake only lasts until arrival.
+   * The brake holds under either PositionMechanismConfig::hold_output setting,
+   * with a different shape. True: the loop keeps driving after arrival and
+   * holds continuously. False: the loop drops to 0 V on arrival and only picks
+   * up again once the mechanism has sagged past small_error, so the hold has a
+   * small_error deadband and catches the arm rather than never letting it
+   * move.
    */
   void stop();
 
