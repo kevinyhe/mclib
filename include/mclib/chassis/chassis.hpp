@@ -61,11 +61,21 @@ public:
           const ChassisDimensions& dimensions,
           std::shared_ptr<device::Inertial> imu = nullptr);
 
-  /// @brief Drive both sides as a fraction of full power, -1..1.
+  /**
+   * @brief Drive both sides as a fraction of full power, -1..1.
+   *
+   * Positive is forward on both sides, so `tank(+x, -x)` turns **clockwise**.
+   * That is the sign convention for every drive primitive in the library.
+   */
   void tank(double left_percent, double right_percent);
-  /// @brief Drive both sides at a commanded voltage.
+  /// @brief Drive both sides at a commanded voltage. Same signs as tank().
   void tankVoltage(QVoltage left, QVoltage right);
-  /// @brief Forward and turn as fractions of full power, -1..1.
+  /**
+   * @brief Forward and turn as fractions of full power, -1..1.
+   *
+   * Positive @p turn_percent turns **clockwise**, matching `tank(+x, -x)` and
+   * a positive `ChassisController::turnToHeading()` delta.
+   */
   void arcade(double forward_percent, double turn_percent);
   void stop(device::BrakeMode mode = device::BrakeMode::Brake);
   void setBrakeMode(device::BrakeMode mode);
