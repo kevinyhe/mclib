@@ -957,9 +957,12 @@ Two behaviour changes to know about:
 
 - `stop()` now brakes instead of coasting, as described above.
 - `Arm` inherited the `PID` arrival latch, so once it settled it output a hard
-  0 V and a loaded arm sagged. `PositionMechanism` re-arms the loop when the
-  position drifts back outside `small_error`, and `atTarget()` stays true across
-  that re-arm, so a finished move does not restart.
+  0 V and a loaded arm sagged. `PositionMechanismConfig::hold_output` defaults
+  to true, so the loop keeps driving after it arrives and holds the setpoint.
+  `atTarget()` latches on the same tick either way, so a finished move still
+  finishes. Set `hold_output = false` for the old settle-then-release
+  behaviour; the loop then re-arms only once the position drifts back outside
+  `small_error`.
 
 `PositionMechanism` is not tied to a rotation sensor. The position source is any
 `std::function<double()>`, so a motor encoder or a potentiometer works the same
@@ -1012,10 +1015,21 @@ lift.makeStopCommand();                  // hold where it is
 `makeMoveToCommand` is the only factory that ends on its own; the others run
 until interrupted.
 
-`PID` stops driving once it flags arrival, so a settled mechanism has no
-holding torque. `PositionMechanism` re-arms the loop when the position drifts
-back outside `small_error`, and `atTarget()` stays true across that re-arm so a
-finished move does not restart.
+`PID` stops driving once it flags arrival, so a settled mechanism would have no
+holding torque. `PositionMechanismConfig::hold_output` defaults to true, which
+keeps the loop driving after arrival so a loaded mechanism holds instead of
+sagging. `atTarget()` latches on the same tick either way, so a finished move
+still finishes.
+
+This is a P (plus D) hold, not a zero-error hold: arrival needs `|error| <=
+small_error` and the PID zeroes its integral over that same band, so a loaded
+mechanism droops up to `small_error`. Lower `small_error` to shrink that, at
+the cost of a tighter arrival test.
+
+Set `hold_output = false` for the historical behaviour - 0 V on arrival, with
+the loop re-arming only once the position drifts back outside `small_error`, so
+the hold has a `small_error` deadband. `atTarget()` stays true across that
+re-arm.
 ## VelocityMechanism
 
 A closed-loop velocity mechanism whose state is the target RPM. The velocity

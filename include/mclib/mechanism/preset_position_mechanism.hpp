@@ -73,11 +73,17 @@ namespace mechanism {
  *
  * ### Holding torque
  *
- * PositionMechanism already re-arms its PID when the position drifts outside
- * the small-error band, which is what stops a settled mechanism from sagging.
- * Nothing is added here. For a mechanism that can back-drive, also put the
- * motors in BrakeMode::Hold and route the voltage sink through the motor group
- * so stop() brakes rather than coasts.
+ * The whole PositionMechanismConfig, PositionMechanismConfig::hold_output
+ * included, is forwarded to the inner PositionMechanism, so the preset layer
+ * changes nothing about how the mechanism holds. With the default
+ * hold_output true the inner PID keeps driving after arrival, which is what
+ * stops a settled mechanism from sagging; it holds within
+ * PositionMechanismConfig::small_error of the setpoint, not exactly on it.
+ * With hold_output false the inner loop instead falls to 0 V on arrival and
+ * only re-arms once the position has drifted outside that band. For a
+ * mechanism that can back-drive, also put the motors in BrakeMode::Hold and
+ * route the voltage sink through the motor group so stop() brakes rather than
+ * coasts.
  *
  * ```cpp
  * enum class ArmPreset { Down, Load, Score };
