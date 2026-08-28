@@ -25,8 +25,14 @@ namespace mechanism {
  *
  * The manager owns the commands the scheduler points at, so its destructor
  * ends them and scrubs them out of the scheduler. Program-long storage is still
- * the usual shape, but a manager held as a class member or a local is safe: a
- * CommandScheduler::run() after it dies no longer reaches freed commands.
+ * the usual shape, but a manager held as a class member or a local is safe from
+ * the scheduler's side: a CommandScheduler::run() after it dies no longer
+ * reaches freed commands.
+ *
+ * It does move the ordering requirement rather than remove it. The destructor
+ * runs end(true) on each owned command, and those commands hold the mechanism,
+ * so every registered Subsystem must still outlive the manager. Declare the
+ * mechanisms BEFORE the manager, so they are destroyed after it.
  *
  * @code
  * mclib::mechanism::MechanismManager mechanisms;

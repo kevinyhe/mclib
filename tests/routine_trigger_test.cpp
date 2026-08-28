@@ -89,15 +89,47 @@ public:
   ForeverCommand(Subsystem* requirement, int* ran_flag, int* end_flag)
       : m_requirement(requirement), m_ran_flag(ran_flag), m_end_flag(end_flag) {}
 
+  int executes = 0;
+  /// Anything counted here means the command kept running after it was ended.
+  int executes_after_end = 0;
+
+  /**
+   * @brief Count how many of these are live at once on the same subsystem.
+   *
+   * Shared counters, so a test can assert that starting one command really
+   * stopped another rather than just that both were stopped by the end.
+   */
+  void countConcurrencyIn(int* live, int* peak_live) {
+    m_live = live;
+    m_peak_live = peak_live;
+  }
+
   void initialize() override {
     if (m_ran_flag != nullptr) {
       ++*m_ran_flag;
+    }
+    if (m_live != nullptr) {
+      ++*m_live;
+      if (m_peak_live != nullptr && *m_live > *m_peak_live) {
+        *m_peak_live = *m_live;
+      }
+    }
+  }
+
+  void execute() override {
+    ++executes;
+    if (m_ended) {
+      ++executes_after_end;
     }
   }
 
   bool isFinished() override { return false; }
 
   void end(bool /*interrupted*/) override {
+    if (!m_ended && m_live != nullptr) {
+      --*m_live;
+    }
+    m_ended = true;
     if (m_end_flag != nullptr) {
       ++*m_end_flag;
     }
@@ -111,6 +143,9 @@ private:
   Subsystem* m_requirement = nullptr;
   int* m_ran_flag = nullptr;
   int* m_end_flag = nullptr;
+  bool m_ended = false;
+  int* m_live = nullptr;
+  int* m_peak_live = nullptr;
 };
 
 /// Run the scheduler until the routine finishes, with a hard tick cap so a
@@ -205,6 +240,59 @@ void testTriggerOnAnUnreservedSubsystem() {
   CommandScheduler::forgetCommand(&routine);
 }
 
+// ---------------------------------------------------------------------------
+void testTwoTriggersOnTheSameSubsystem() {
+  std::printf("-- two trigger()s that both want the reserved subsystem\n");
+
+  SharedSubsystem chassis;
+  chassis.setName("chassis");
+
+  int step_ran = 0;
+  int first_ran = 0;
+  int first_ended = 0;
+  int second_ran = 0;
+  int second_ended = 0;
+
+  int live = 0;
+  int peak_live = 0;
+
+  auto first = std::make_unique<ForeverCommand>(&chassis, &first_ran, &first_ended);
+  auto second = std::make_unique<ForeverCommand>(&chassis, &second_ran, &second_ended);
+  ForeverCommand* first_raw = first.get();
+  ForeverCommand* second_raw = second.get();
+  first_raw->countConcurrencyIn(&live, &peak_live);
+  second_raw->countConcurrencyIn(&live, &peak_live);
+
+  Routine routine;
+  routine.add(std::make_unique<CountedCommand>(&chassis, 2, &step_ran));
+  routine.trigger(std::move(first));
+  routine.add(std::make_unique<CountedCommand>(&chassis, 2, nullptr));
+  routine.trigger(std::move(second));
+  routine.add(std::make_unique<CountedCommand>(&chassis, 2, nullptr));
+
+  runToCompletion(routine, 200);
+
+  CHECK_EQ(static_cast<double>(step_ran), 1.0);
+  CHECK_EQ(static_cast<double>(first_ran), 1.0);
+  CHECK_EQ(static_cast<double>(second_ran), 1.0);
+
+  // The scheduler cannot arbitrate the chassis here: it never saw either inner
+  // command claim it. The routine does it instead, on the scheduler's own
+  // CancelRunning rule, so starting the second trigger stopped the first. Never
+  // two commands writing to the same chassis at once.
+  CHECK_EQ(static_cast<double>(peak_live), 1.0);
+  CHECK_EQ(static_cast<double>(live), 0.0);
+
+  CHECK_EQ(static_cast<double>(first_ended), 1.0);
+  CHECK_EQ(static_cast<double>(first_raw->executes_after_end), 0.0);
+
+  // And the second one really did run, and outlived the first.
+  CHECK(second_raw->executes > 0);
+  CHECK_EQ(static_cast<double>(second_ended), 1.0);
+
+  CommandScheduler::forgetCommand(&routine);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -274,6 +362,7 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLengt
 int main() {
   testTriggerSharingTheReservation();
   testTriggerOnAnUnreservedSubsystem();
+  testTwoTriggersOnTheSameSubsystem();
 
   return mclib::test::summary("routine_trigger");
 }

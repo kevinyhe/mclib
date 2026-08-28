@@ -45,12 +45,18 @@ public:
   explicit SharedRequirementCommand(std::unique_ptr<Command> inner)
       : m_inner(std::move(inner)) {}
 
-  /// @brief Hide every subsystem @p parent currently holds in the scheduler.
-  void maskRequirementsHeldBy(Command* parent) {
+  /**
+   * @brief Hide every subsystem @p parent currently holds in the scheduler.
+   * @return The subsystems that were hidden. The scheduler cannot arbitrate
+   *   these any more, so the Routine has to.
+   */
+  std::vector<Subsystem*> maskRequirementsHeldBy(Command* parent) {
     m_requirements.clear();
 
+    std::vector<Subsystem*> masked;
+
     if (m_inner == nullptr) {
-      return;
+      return masked;
     }
 
     for (Subsystem* subsystem : m_inner->getRequirements()) {
@@ -58,12 +64,27 @@ public:
         std::optional<Command*> owner = CommandScheduler::getRequiring(subsystem);
 
         if (owner.has_value() && *owner == parent) {
+          masked.push_back(subsystem);
           continue;
         }
       }
 
       m_requirements.push_back(subsystem);
     }
+
+    return masked;
+  }
+
+  /// @brief True when the inner command declares @p subsystem, masked or not.
+  bool innerRequires(Subsystem* subsystem) {
+    if (m_inner == nullptr) {
+      return false;
+    }
+
+    std::vector<Subsystem*> requirements = m_inner->getRequirements();
+
+    return std::find(requirements.begin(), requirements.end(), subsystem) !=
+           requirements.end();
   }
 
   void initialize() override {
@@ -116,15 +137,38 @@ public:
    * Read from the live routine at run time rather than stored at build time,
    * so a Routine that was moved after `.trigger()` cannot leave this dangling.
    */
-  void setParent(Command* parent) {
+  void setParent(Routine* parent) {
     m_parent = parent;
   }
 
   void initialize() override {
-    if (m_command != nullptr) {
-      m_command->maskRequirementsHeldBy(m_parent);
-      m_command->schedule();
+    if (m_command == nullptr) {
+      return;
     }
+
+    const std::vector<Subsystem*> masked =
+        m_command->maskRequirementsHeldBy(m_parent);
+
+    // The scheduler cannot arbitrate the masked subsystems any more: it never
+    // sees the inner command claim them. Without this, two triggers that both
+    // want the routine-reserved chassis would simply both run and both write
+    // to it. The routine does the arbitration the scheduler would have done,
+    // with the same CancelRunning rule: the newer trigger wins.
+    if (m_parent != nullptr && !masked.empty()) {
+      m_parent->cancelTriggersSharing(this, masked);
+    }
+
+    m_command->schedule();
+  }
+
+  /// @brief True when this trigger's inner command declares @p subsystem.
+  bool innerRequires(Subsystem* subsystem) {
+    return m_command != nullptr && m_command->innerRequires(subsystem);
+  }
+
+  /// @brief True while the inner command is still running.
+  bool innerScheduled() const {
+    return m_command != nullptr && m_command->scheduled();
   }
 
   bool isFinished() override {
@@ -154,7 +198,7 @@ public:
 
 private:
   std::unique_ptr<SharedRequirementCommand> m_command;
-  Command* m_parent = nullptr;
+  Routine* m_parent = nullptr;
 };
 }  // namespace
 
@@ -1115,6 +1159,32 @@ void Routine::noteWaitTimeout(Command& command) {
                "the condition never became true\n",
                static_cast<unsigned>(m_index),
                wait.timeout().ms());
+}
+
+void Routine::cancelTriggersSharing(const Command* requester,
+                                    const std::vector<Subsystem*>& subsystems) {
+  for (std::size_t index = 0; index < m_steps.size() && index <= m_index;
+       ++index) {
+    Step& step = m_steps[index];
+
+    if (!step.is_trigger || step.command == nullptr ||
+        step.command.get() == requester) {
+      continue;
+    }
+
+    auto* other = static_cast<TriggerCommand*>(step.command.get());
+
+    if (!other->innerScheduled()) {
+      continue;
+    }
+
+    for (Subsystem* subsystem : subsystems) {
+      if (other->innerRequires(subsystem)) {
+        other->cancelInner();
+        break;
+      }
+    }
+  }
 }
 
 void Routine::cancelTriggeredCommands(bool keep_must_run) {

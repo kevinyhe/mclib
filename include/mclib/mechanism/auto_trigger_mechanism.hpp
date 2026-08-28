@@ -189,6 +189,15 @@ public:
    * and clearing a latch that disarmUntilReset() set would reapply the action
    * the driver just overrode, with no false->true edge behind it.
    *
+   * @warning Because of that, this command can legitimately never finish. A
+   * mechanism that is armed AND latched, with no re-arm condition and a trigger
+   * condition that stays true, never clears its latch (the trigger going away
+   * is what clears it) and so never fires. With the default timeout_ms of 0,
+   * which means wait forever, the command has no other way out and will hang a
+   * routine step for the rest of the match. Pass a real timeout whenever the
+   * mechanism might already be latched, or call rearm() first if clearing the
+   * latch is what you actually want.
+   *
    * If it found the mechanism disarmed, it disarms it again on the way out,
    * but only if the mechanism is still armed at that point. Anything that
    * disarmed it mid-command (a setArmed(false), or AutoTriggerConfig::fire_once)

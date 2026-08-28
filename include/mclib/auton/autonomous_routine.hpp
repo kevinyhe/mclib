@@ -398,6 +398,21 @@ public:
   void clear();
   bool empty() const;
   std::size_t size() const;
+
+  /**
+   * @brief Stop earlier trigger()s that share a subsystem with a starting one.
+   *
+   * An internal hook the trigger() steps call, not part of the building API.
+   * A triggered command runs under this routine's reservation, which means the
+   * CommandScheduler never sees it claim the subsystems the routine holds and
+   * so cannot arbitrate them. This does that arbitration instead, with the
+   * scheduler's own CancelRunning rule: the trigger starting now wins.
+   *
+   * @param requester The trigger step that is starting. Left alone.
+   * @param subsystems The subsystems hidden from the scheduler for it.
+   */
+  void cancelTriggersSharing(const Command* requester,
+                             const std::vector<Subsystem*>& subsystems);
   void runBlocking(std::uint32_t period_ms = 10);
 
   void initialize() override;
@@ -486,6 +501,7 @@ private:
    * @param keep_must_run Leave the triggers marked mustRun() running.
    */
   void cancelTriggeredCommands(bool keep_must_run = false);
+
   /// @brief Add the steps between the cursor and @p next to the skipped count.
   void countSkipped(std::size_t next);
   /// @brief Record and report a waitUntil() step that gave up.

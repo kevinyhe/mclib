@@ -144,6 +144,49 @@ void testDisarmedMechanismIsStillArmedAndRestored() {
   CHECK(!rig.mechanism.isArmed());
 }
 
+// ---------------------------------------------------------------------------
+void testLatchedWithNoTimeoutNeverFinishes() {
+  std::printf("-- a latched mechanism with no timeout never finishes\n");
+
+  AutoTriggerConfig config;
+  config.debounce_ms = 0.0;
+  Rig rig(config);
+
+  rig.condition = true;
+  g_fake_ms += 10;
+  rig.mechanism.poll();
+  CHECK_EQ(static_cast<double>(rig.fires), 1.0);
+
+  rig.mechanism.disarmUntilReset();
+
+  // The documented trap, asserted so the warning on
+  // makeWaitForTriggerCommand() cannot go stale. Armed and latched, no re-arm
+  // condition, condition stuck true: the latch only clears when the condition
+  // goes away, so nothing ever fires. timeout_ms defaults to 0, which means
+  // wait forever, and the command has no other way out.
+  auto command = rig.mechanism.makeWaitForTriggerCommand();
+  command->initialize();
+
+  bool finished = false;
+  for (int i = 0; i < 200 && !finished; ++i) {
+    finished = tick(*command);
+  }
+
+  CHECK(!finished);
+  CHECK(rig.mechanism.isLatched());
+  CHECK_EQ(static_cast<double>(rig.fires), 1.0);
+
+  // rearm() is the documented way out, and it works.
+  rig.mechanism.rearm();
+  rig.condition = false;
+  CHECK(!tick(*command));
+  rig.condition = true;
+  CHECK(tick(*command));
+  CHECK_EQ(static_cast<double>(rig.fires), 2.0);
+
+  command->end(false);
+}
+
 }  // namespace
 
 int main() {
@@ -152,6 +195,7 @@ int main() {
   testLatchSurvivesWaitCommand();
   testFreshEdgeStillFires();
   testDisarmedMechanismIsStillArmedAndRestored();
+  testLatchedWithNoTimeoutNeverFinishes();
 
   return mclib::test::summary("auto_trigger");
 }

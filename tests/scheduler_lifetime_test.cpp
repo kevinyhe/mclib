@@ -272,11 +272,237 @@ void testUnregisterInsideRunLoop() {
   CommandScheduler::unregisterSubsystem(&target);
 }
 
+// ---------------------------------------------------------------------------
+// 4. A command forgotten while the deferred queues are draining
+// ---------------------------------------------------------------------------
+
+/// Cancels `victim` from inside the run loop, so the cancel is deferred.
+class DeferredCancelCommand : public Command {
+public:
+  DeferredCancelCommand(Subsystem* self, Command* victim)
+      : m_self(self), m_victim(victim) {}
+
+  void execute() override {
+    if (!m_done) {
+      m_done = true;
+      CommandScheduler::cancel(m_victim);
+    }
+  }
+
+  bool isFinished() override { return false; }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_self}; }
+
+private:
+  Subsystem* m_self = nullptr;
+  Command* m_victim = nullptr;
+  bool m_done = false;
+};
+
+/// Schedules `passenger` from execute() (so it lands in the deferred schedule
+/// queue) and forgets it again from end(), the way Routine::end() drops the
+/// fire-and-forget commands trigger() left running.
+class PassengerOwnerCommand : public Command {
+public:
+  PassengerOwnerCommand(Subsystem* self, Command* passenger)
+      : m_self(self), m_passenger(passenger) {}
+
+  void execute() override { m_passenger->schedule(); }
+
+  bool isFinished() override { return false; }
+
+  void end(bool /*interrupted*/) override {
+    CommandScheduler::endAndForget(m_passenger);
+  }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_self}; }
+
+private:
+  Subsystem* m_self = nullptr;
+  Command* m_passenger = nullptr;
+};
+
+void testForgetDuringDeferredDrain() {
+  std::printf("-- a command forgotten while the deferred queues drain\n");
+
+  CountingSubsystem owner_subsystem;
+  CountingSubsystem driver;
+  CountingSubsystem passenger_subsystem;
+  owner_subsystem.setName("owner");
+  driver.setName("driver");
+  passenger_subsystem.setName("passenger");
+
+  TracerCommand passenger(&passenger_subsystem);
+
+  PassengerOwnerCommand owner(&owner_subsystem, &passenger);
+  DeferredCancelCommand canceller(&driver, &owner);
+
+  owner_subsystem.registerSelf();
+  driver.registerSelf();
+  passenger_subsystem.registerSelf();
+
+  CommandScheduler::schedule(&owner);
+  CommandScheduler::schedule(&canceller);
+
+  // In this one pass: owner->execute() queues the passenger onto toSchedule and
+  // canceller->execute() queues the owner onto toCancel. Draining toCancel runs
+  // owner->end(), which forgets the passenger. The passenger must not then be
+  // scheduled anyway out of a stale copy of toSchedule.
+  CommandScheduler::run();
+
+  CHECK_EQ(static_cast<double>(passenger.initializes), 0.0);
+  CHECK(!CommandScheduler::scheduled(&passenger));
+
+  const int executes_before = passenger.executes;
+  CommandScheduler::run();
+  CHECK_EQ(static_cast<double>(passenger.executes),
+           static_cast<double>(executes_before));
+
+  CommandScheduler::endAndForget(&canceller);
+  CommandScheduler::endAndForget(&owner);
+  CommandScheduler::unregisterSubsystem(&owner_subsystem);
+  CommandScheduler::unregisterSubsystem(&driver);
+  CommandScheduler::unregisterSubsystem(&passenger_subsystem);
+}
+
+// ---------------------------------------------------------------------------
+// 5. A default command that replaces itself from its own execute()
+// ---------------------------------------------------------------------------
+
+/// Set by the replaced default command's on_end lambda.
+int g_self_replace_ends = 0;
+
+void testDefaultCommandReplacesItself() {
+  std::printf("-- a default command that replaces itself from execute()\n");
+
+  g_self_replace_ends = 0;
+
+  CountingSubsystem subsystem;
+  subsystem.setName("self-replacer");
+
+  bool swapped = false;
+
+  // The command hands its own subsystem a new default command from inside its
+  // own execute(), which frees the command mid-run. run() must not go on to ask
+  // the freed object isFinished().
+  subsystem.setDefaultCommand(std::make_unique<FunctionalCommand>(
+      []() {},
+      [&subsystem, &swapped]() {
+        if (!swapped) {
+          swapped = true;
+          subsystem.setDefaultCommand(subsystem.startEnd([]() {}, []() {}));
+        }
+      },
+      [](bool) { ++g_self_replace_ends; },
+      []() { return false; },
+      std::initializer_list<Subsystem*>{&subsystem}));
+  subsystem.registerSelf();
+
+  CommandScheduler::run();  // schedules the first default command
+  CommandScheduler::run();  // it replaces itself from inside execute()
+
+  CHECK(swapped);
+  CHECK_EQ(static_cast<double>(g_self_replace_ends), 1.0);
+
+  // The scheduler survived and carries on with the replacement.
+  CommandScheduler::run();
+  CHECK_EQ(static_cast<double>(g_self_replace_ends), 1.0);
+  CHECK(CommandScheduler::getRequiring(&subsystem).has_value());
+
+  CommandScheduler::unregisterSubsystem(&subsystem);
+}
+
+// ---------------------------------------------------------------------------
+// 6. A finished command must not have end() run a second time
+// ---------------------------------------------------------------------------
+
+/// Finishes on its first execute(). Counts every end() it is given.
+class FinishesImmediatelyCommand : public Command {
+public:
+  explicit FinishesImmediatelyCommand(Subsystem* subsystem)
+      : m_subsystem(subsystem) {}
+
+  int ends = 0;
+
+  void execute() override { m_finished = true; }
+  bool isFinished() override { return m_finished; }
+  void end(bool /*interrupted*/) override { ++ends; }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_subsystem}; }
+
+private:
+  Subsystem* m_subsystem = nullptr;
+  bool m_finished = false;
+};
+
+/// Unregisters `target` from its own execute(), which reaches the target's
+/// default command through endAndForget.
+class LateUnregisterCommand : public Command {
+public:
+  LateUnregisterCommand(Subsystem* self, Subsystem* target)
+      : m_self(self), m_target(target) {}
+
+  void execute() override {
+    if (!m_done) {
+      m_done = true;
+      CommandScheduler::unregisterSubsystem(m_target);
+    }
+  }
+
+  bool isFinished() override { return false; }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_self}; }
+
+private:
+  Subsystem* m_self = nullptr;
+  Subsystem* m_target = nullptr;
+  bool m_done = false;
+};
+
+void testFinishedCommandEndsOnce() {
+  std::printf("-- a finished command is not ended twice in one pass\n");
+
+  CountingSubsystem target;
+  CountingSubsystem driver;
+  target.setName("target");
+  driver.setName("driver");
+
+  // Registered directly, so the command outlives the scheduler's raw pointer.
+  FinishesImmediatelyCommand finisher(&target);
+  CommandScheduler::registerSubsystem(&target, &finisher);
+
+  driver.registerSelf();
+
+  // Pass 1 only schedules the finisher, via the default-command pass.
+  CommandScheduler::run();
+  CHECK(CommandScheduler::scheduled(&finisher));
+  CHECK_EQ(static_cast<double>(finisher.ends), 0.0);
+
+  // Scheduled after the finisher, so it executes after it in the next pass.
+  LateUnregisterCommand late(&driver, &target);
+  CommandScheduler::schedule(&late);
+
+  // In pass 2 the finisher finishes and gets end(false); later in that same
+  // pass `late` unregisters the target and reaches the finisher again through
+  // endAndForget. It must not get a second end().
+  CommandScheduler::run();
+
+  CHECK_EQ(static_cast<double>(finisher.ends), 1.0);
+
+  CommandScheduler::endAndForget(&late);
+  CommandScheduler::endAndForget(&finisher);
+  CommandScheduler::unregisterSubsystem(&driver);
+  CommandScheduler::unregisterSubsystem(&target);
+}
+
 }  // namespace
 
 int main() {
   testScopedManager();
   testDefaultCommandSwapInsideRunLoop();
   testUnregisterInsideRunLoop();
+  testForgetDuringDeferredDrain();
+  testDefaultCommandReplacesItself();
+  testFinishedCommandEndsOnce();
   return mclib::test::summary("scheduler_lifetime");
 }

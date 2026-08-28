@@ -189,9 +189,10 @@ public:
 	 * the deferred cancel list, and the forgetCommand() call right after erases
 	 * that queue entry again, so end(true) never runs at all: a startEnd()
 	 * default never fires its on_end, an async command never stops its task.
-	 * This runs end(true) immediately instead, which is safe inside the run loop
-	 * because run() iterates a copy of the scheduled list and re-checks
-	 * scheduled() before executing each entry.
+	 * This runs end(true) immediately instead. That is safe inside the run loop:
+	 * run() iterates a copy of the scheduled list and re-checks scheduled() both
+	 * before and after execute(), so a command retired here is skipped rather
+	 * than executed or asked isFinished() after the caller has freed it.
 	 *
 	 * Use forgetCommand() on its own when running end() would be unsafe, such as
 	 * from a subsystem destructor.
@@ -214,9 +215,12 @@ public:
 			// end(true), which may schedule a replacement that claims some of them
 			auto held = command->getRequirements();
 
-			command->end(true);
-
+			// Erase before end(), so anything end(true) reaches that asks the
+			// scheduler about this command sees it as already gone and cannot run
+			// end() on it a second time
 			std::erase(instance.scheduledCommands, command);
+
+			command->end(true);
 
 			releaseRequirements(command, held);
 		}
@@ -439,8 +443,6 @@ public:
 		// mutating the vector we are ranging over is undefined behavior
 		std::vector<Command *> running = instance.scheduledCommands;
 
-		std::vector<Command *> finished;
-
 		for (auto command : running)
 		{
 			// A command may have been cancelled or forgotten by an earlier command
@@ -455,46 +457,65 @@ public:
 
 			command->execute();
 
+			// execute() may have retired this command and freed it. A default
+			// command that replaces itself, intake.setDefaultCommand(...) from
+			// inside its own execute(), is the shape: endAndForget runs its end()
+			// and the unique_ptr assignment right after destroys it. Re-check
+			// before touching the pointer again. scheduled() only compares
+			// pointer values, so it is safe on a command that is already gone.
+			if (!scheduled(command))
+			{
+				continue;
+			}
+
 			if (command->isFinished())
 			{
 				// Same ordering rule as the interrupt path, read the requirements
 				// before end() gets a chance to hand them to another command
 				auto held = command->getRequirements();
 
+				// Drop it from the scheduled list BEFORE end(), not after the loop.
+				// A later command in this same pass can reach a finished command
+				// through endAndForget, and a command still listed as scheduled
+				// would have end() run on it a second time: a startEnd() on_end
+				// firing twice, an async command stopped twice.
+				std::erase(instance.scheduledCommands, command);
+
 				command->end(false);
 
 				releaseRequirements(command, held);
-
-				finished.push_back(command);
 			}
-		}
-
-		for (auto command : finished)
-		{
-			std::erase(instance.scheduledCommands, command);
 		}
 
 		instance.inRunLoop = false;
 
-		// Drain into locals before running anything. With inRunLoop false again
+		// Drain destructively, one entry at a time. With inRunLoop false again
 		// these cancel() and schedule() calls run user callbacks, and a callback
-		// that cancels, schedules or forgets a command writes to the very vectors
-		// a range-for would be walking. Swapping first leaves the callbacks a
-		// fresh, empty queue to append to, which is picked up on the next pass.
-		std::vector<Command *> pending_cancel;
-		std::vector<Command *> pending_schedule;
-
-		pending_cancel.swap(instance.toCancel);
-		pending_schedule.swap(instance.toSchedule);
-
-		for (const auto command : pending_cancel)
+		// is allowed to cancel, schedule or forget a command. Popping the front
+		// keeps forgetCommand() able to scrub entries that have not run yet:
+		// copying the queue aside would leave this loop acting on commands that
+		// were forgotten, or destroyed, part-way through the drain. It also never
+		// walks a vector that is being written.
+		//
+		// Neither queue can grow here. With inRunLoop false, schedule() and
+		// cancel() act immediately instead of queueing, so each pop shrinks the
+		// queue for good and the loops terminate.
+		while (!instance.toCancel.empty())
 		{
-			// cancel() is a no-op on a command an earlier cancel already forgot
+			Command *command = instance.toCancel.front();
+
+			instance.toCancel.erase(instance.toCancel.begin());
+
+			// A no-op on a command an earlier cancel already forgot
 			cancel(command);
 		}
 
-		for (const auto command : pending_schedule)
+		while (!instance.toSchedule.empty())
 		{
+			Command *command = instance.toSchedule.front();
+
+			instance.toSchedule.erase(instance.toSchedule.begin());
+
 			schedule(command);
 		}
 
