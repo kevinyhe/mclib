@@ -182,26 +182,139 @@ void testScaleToMaxLeavesSmallInputsAlone() {
 }
 
 void testScaleToMaxEqualMagnitudes() {
-  // Equal positive magnitudes are capped: branch 1 uses >=.
+  // Equal positive magnitudes are capped.
   double left = 6.0;
   double right = 6.0;
   scaleToMax(left, right, 4.0);
   CHECK_NEAR(left, 4.0, kEps);
   CHECK_NEAR(right, 4.0, kEps);
+  checkRatioPreserved(6.0, 6.0, left, right);
 
-  // BUG (report only, control/ is owned by Phase 2): equal *negative*
-  // magnitudes are NOT capped. The positive-overflow branch uses
-  // `fabs(left) >= fabs(right)` but the negative-overflow branch uses a
-  // strict `fabs(left) > fabs(right)`, so a tie falls through every branch.
-  // Driving straight backwards at full command is exactly this case.
-  // Reported, not asserted: fixing the branch must not turn this test red.
+  // Equal negative magnitudes are capped too: driving straight backwards at
+  // full command. This used to fall through all four branches unchanged,
+  // because the negative-overflow branch tested `>` where the positive one
+  // tested `>=`.
   left = -6.0;
   right = -6.0;
   scaleToMax(left, right, 4.0);
-  mclib::test::knownBug(
-      left < -4.0 - kEps || right < -4.0 - kEps,
-      "scaleToMax leaves equal negative magnitudes above max_output "
-      "(scaling.cpp negative branch uses > where the positive branch uses >=)");
+  CHECK_NEAR(left, -4.0, kEps);
+  CHECK_NEAR(right, -4.0, kEps);
+  checkRatioPreserved(-6.0, -6.0, left, right);
+
+  // Mixed-sign ties - a point turn at full command - are the same hole.
+  left = 6.0;
+  right = -6.0;
+  scaleToMax(left, right, 4.0);
+  CHECK_NEAR(left, 4.0, kEps);
+  CHECK_NEAR(right, -4.0, kEps);
+  checkRatioPreserved(6.0, -6.0, left, right);
+
+  left = -6.0;
+  right = 6.0;
+  scaleToMax(left, right, 4.0);
+  CHECK_NEAR(left, -4.0, kEps);
+  CHECK_NEAR(right, 4.0, kEps);
+  checkRatioPreserved(-6.0, 6.0, left, right);
+}
+
+/**
+ * @brief Every sign combination of an over-cap pair, ratio checked each time.
+ *
+ * The tie bug was a boundary nobody had enumerated, so enumerate the lot.
+ */
+void testScaleToMaxSignMatrix() {
+  struct Case {
+    double left_in, right_in, left_out, right_out;
+  };
+  const Case cases[] = {
+      // both positive, either side larger
+      {6.0, 3.0, 4.0, 2.0},
+      {3.0, 6.0, 2.0, 4.0},
+      // both negative, either side larger
+      {-6.0, -3.0, -4.0, -2.0},
+      {-3.0, -6.0, -2.0, -4.0},
+      // mixed signs, either side larger
+      {6.0, -3.0, 4.0, -2.0},
+      {-6.0, 3.0, -4.0, 2.0},
+      {3.0, -6.0, 2.0, -4.0},
+      {-3.0, 6.0, -2.0, 4.0},
+      // ties, all four sign pairs
+      {6.0, 6.0, 4.0, 4.0},
+      {-6.0, -6.0, -4.0, -4.0},
+      {6.0, -6.0, 4.0, -4.0},
+      {-6.0, 6.0, -4.0, 4.0},
+      // one side zero, the other over the cap in either direction
+      {6.0, 0.0, 4.0, 0.0},
+      {0.0, 6.0, 0.0, 4.0},
+      {-6.0, 0.0, -4.0, 0.0},
+      {0.0, -6.0, 0.0, -4.0},
+      // both zero, and pairs already inside the cap
+      {0.0, 0.0, 0.0, 0.0},
+      {4.0, 4.0, 4.0, 4.0},
+      {-4.0, -4.0, -4.0, -4.0},
+      {3.0, 2.0, 3.0, 2.0},
+      {-3.0, -2.0, -3.0, -2.0},
+      {2.0, -3.0, 2.0, -3.0},
+  };
+  for (const Case& c : cases) {
+    double left = c.left_in;
+    double right = c.right_in;
+    scaleToMax(left, right, 4.0);
+    CHECK_NEAR(left, c.left_out, kEps);
+    CHECK_NEAR(right, c.right_out, kEps);
+    CHECK(std::isfinite(left) && std::isfinite(right));
+    // Nothing comes back over the cap.
+    CHECK(fabs(left) <= 4.0 + kEps);
+    CHECK(fabs(right) <= 4.0 + kEps);
+    checkRatioPreserved(c.left_in, c.right_in, left, right);
+  }
+}
+
+/**
+ * @brief The sibling function has no tie hole - both of its "left side" branches
+ *        already use `<=`, so a tie goes to the left in every sign pair.
+ */
+void testScaleToMinSignMatrix() {
+  struct Case {
+    double left_in, right_in, left_out, right_out;
+  };
+  const Case cases[] = {
+      // both positive, either side smaller
+      {0.5, 1.0, 2.0, 4.0},
+      {1.0, 0.5, 4.0, 2.0},
+      // both negative, either side smaller
+      {-0.5, -1.0, -2.0, -4.0},
+      {-1.0, -0.5, -4.0, -2.0},
+      // mixed signs, either side smaller
+      {-0.5, 1.0, -2.0, 4.0},
+      {1.0, -0.5, 4.0, -2.0},
+      {0.5, -1.0, 2.0, -4.0},
+      {-1.0, 0.5, -4.0, 2.0},
+      // ties, all four sign pairs
+      {0.5, 0.5, 2.0, 2.0},
+      {-0.5, -0.5, -2.0, -2.0},
+      {0.5, -0.5, 2.0, -2.0},
+      {-0.5, 0.5, -2.0, 2.0},
+      // A zero side is never divided by. Only the both-zero case is asserted
+      // here: a zero paired with a below-floor value is the known limitation
+      // that testScaleToMinZeroSideIsNotDividedBy documents, and pinning it
+      // twice would just mean two tests to delete when it is fixed.
+      {0.0, 0.0, 0.0, 0.0},
+      // already at or above the floor
+      {2.0, 2.0, 2.0, 2.0},
+      {-2.0, -2.0, -2.0, -2.0},
+      {3.0, 6.0, 3.0, 6.0},
+      {-3.0, -6.0, -3.0, -6.0},
+  };
+  for (const Case& c : cases) {
+    double left = c.left_in;
+    double right = c.right_in;
+    scaleToMin(left, right, 2.0);
+    CHECK_NEAR(left, c.left_out, kEps);
+    CHECK_NEAR(right, c.right_out, kEps);
+    CHECK(std::isfinite(left) && std::isfinite(right));
+    checkRatioPreserved(c.left_in, c.right_in, left, right);
+  }
 }
 
 void testScaleToMaxZero() {
@@ -241,5 +354,7 @@ int main() {
   testScaleToMaxLeavesSmallInputsAlone();
   testScaleToMaxEqualMagnitudes();
   testScaleToMaxZero();
+  testScaleToMaxSignMatrix();
+  testScaleToMinSignMatrix();
   return mclib::test::summary("scaling");
 }

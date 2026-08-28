@@ -160,10 +160,11 @@ either `KNOWN BUG (still present)` or `KNOWN BUG (appears FIXED, update this
 test)` and never touches the exit code.
 
 ```cpp
-double left = -6.0;
-double right = -6.0;
-scaleToMax(left, right, 4.0);
-mclib::test::knownBug(left < -4.0, "scaleToMax does not cap equal negatives");
+const double near_degenerate = getRadius(0.0, 0.0, 0.0, 1.0, -90.0);
+mclib::test::knownBug(
+    std::isfinite(near_degenerate),
+    "getRadius compares the denominator to exactly 0, so angle == -90 returns "
+    "~1e15 instead of +infinity");
 ```
 
 ### What can be tested
