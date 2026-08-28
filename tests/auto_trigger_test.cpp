@@ -145,30 +145,70 @@ void testDisarmedMechanismIsStillArmedAndRestored() {
 }
 
 // ---------------------------------------------------------------------------
-void testLatchedWithNoTimeoutNeverFinishes() {
-  std::printf("-- a latched mechanism with no timeout never finishes\n");
-
-  AutoTriggerConfig config;
-  config.debounce_ms = 0.0;
-  Rig rig(config);
-
+/// Put the mechanism in the state a driver override leaves: armed, latched, no
+/// re-arm condition, and a trigger condition that is still true. Nothing can
+/// fire from here until the condition goes away.
+void latchWhileConditionHolds(Rig& rig) {
   rig.condition = true;
   g_fake_ms += 10;
   rig.mechanism.poll();
   CHECK_EQ(static_cast<double>(rig.fires), 1.0);
 
   rig.mechanism.disarmUntilReset();
+  CHECK(rig.mechanism.isLatched());
+  CHECK(rig.mechanism.isArmed());
+}
 
-  // The documented trap, asserted so the warning on
-  // makeWaitForTriggerCommand() cannot go stale. Armed and latched, no re-arm
-  // condition, condition stuck true: the latch only clears when the condition
-  // goes away, so nothing ever fires. timeout_ms defaults to 0, which means
-  // wait forever, and the command has no other way out.
+void testLatchedCommandEndsOnTheDefaultTimeout() {
+  std::printf("-- a latched mechanism gives up on the default timeout\n");
+
+  AutoTriggerConfig config;
+  config.debounce_ms = 0.0;
+  Rig rig(config);
+
+  latchWhileConditionHolds(rig);
+
+  // The no-argument overload. Its default used to be "wait forever", which in
+  // this state meant a routine step hung for the rest of the match. It is now a
+  // finite kDefaultWaitForTriggerTimeoutMs, so the step gives up and moves on.
   auto command = rig.mechanism.makeWaitForTriggerCommand();
   command->initialize();
 
+  const std::uint32_t start_ms = g_fake_ms;
+
   bool finished = false;
-  for (int i = 0; i < 200 && !finished; ++i) {
+  int ticks = 0;
+  for (; ticks < 2000 && !finished; ++ticks) {
+    finished = tick(*command);
+  }
+
+  CHECK(finished);
+  // It ended by timing out, not by firing: the latch is untouched.
+  CHECK(rig.mechanism.isLatched());
+  CHECK_EQ(static_cast<double>(rig.fires), 1.0);
+
+  const double elapsed_ms = static_cast<double>(g_fake_ms - start_ms);
+  CHECK(elapsed_ms >= mclib::mechanism::kDefaultWaitForTriggerTimeoutMs);
+  CHECK(elapsed_ms < mclib::mechanism::kDefaultWaitForTriggerTimeoutMs + 100.0);
+
+  command->end(false);
+}
+
+void testWaitForeverIsStillAvailable() {
+  std::printf("-- passing 0 still waits forever, and rearm() releases it\n");
+
+  AutoTriggerConfig config;
+  config.debounce_ms = 0.0;
+  Rig rig(config);
+
+  latchWhileConditionHolds(rig);
+
+  // Explicit 0 is the old behaviour, kept for callers that mean it.
+  auto command = rig.mechanism.makeWaitForTriggerCommand(0.0);
+  command->initialize();
+
+  bool finished = false;
+  for (int i = 0; i < 2000 && !finished; ++i) {
     finished = tick(*command);
   }
 
@@ -195,7 +235,8 @@ int main() {
   testLatchSurvivesWaitCommand();
   testFreshEdgeStillFires();
   testDisarmedMechanismIsStillArmedAndRestored();
-  testLatchedWithNoTimeoutNeverFinishes();
+  testLatchedCommandEndsOnTheDefaultTimeout();
+  testWaitForeverIsStillAvailable();
 
   return mclib::test::summary("auto_trigger");
 }

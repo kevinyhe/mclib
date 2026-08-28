@@ -28,12 +28,20 @@ namespace {
  * the Routine and erases it, so every remaining step is silently skipped while
  * runBlocking() returns as if autonomous had finished.
  *
- * This wrapper hides from the scheduler exactly those subsystems the parent
- * Routine already owns. The triggered command runs under the Routine's
- * reservation instead of competing for it, which is what "runs alongside the
- * steps" already meant. Requirements the Routine does not hold are passed
+ * This wrapper hides from the scheduler exactly those subsystems the command
+ * chain running this trigger already owns. The triggered command runs under
+ * that reservation instead of competing for it, which is what "runs alongside
+ * the steps" already meant. Requirements nothing in the chain holds are passed
  * through untouched, so `.trigger(intake.spin())` still displaces the intake's
  * default command the way it always did.
+ *
+ * The holder is CommandScheduler::activeCommand(), not just the parent Routine.
+ * The two are the same only when the Routine was scheduled directly. Nest it,
+ * `outer.add(std::move(inner))`, or wrap it in a `.withTimeout()` or a
+ * ParallelCommandGroup, and the OUTER command is the one holding the chassis;
+ * masking against the parent alone hid nothing, the scheduler cancelled the
+ * outer command, and the original bug was back with the triggered command left
+ * running on a chassis nobody would ever stop.
  *
  * The mask is computed once per initialize() and then frozen. The scheduler
  * reads getRequirements() again on the way out, and a set that moved in between
@@ -46,7 +54,11 @@ public:
       : m_inner(std::move(inner)) {}
 
   /**
-   * @brief Hide every subsystem @p parent currently holds in the scheduler.
+   * @brief Hide every subsystem the command chain running this trigger holds.
+   *
+   * @param parent The Routine owning the trigger step. Checked as well as the
+   *   scheduler's active command: a Routine reached through another Routine's
+   *   step list is an ancestor the scheduler never saw and never records.
    * @return The subsystems that were hidden. The scheduler cannot arbitrate
    *   these any more, so the Routine has to.
    */
@@ -59,14 +71,22 @@ public:
       return masked;
     }
 
-    for (Subsystem* subsystem : m_inner->getRequirements()) {
-      if (parent != nullptr) {
-        std::optional<Command*> owner = CommandScheduler::getRequiring(subsystem);
+    // Whatever the scheduler drove into to get here. For a Routine scheduled
+    // directly that is the Routine itself; for a nested or wrapped one it is
+    // the outer command, which is the one actually holding the reservation.
+    Command* holder = CommandScheduler::activeCommand();
 
-        if (owner.has_value() && *owner == parent) {
-          masked.push_back(subsystem);
-          continue;
-        }
+    for (Subsystem* subsystem : m_inner->getRequirements()) {
+      std::optional<Command*> owner = CommandScheduler::getRequiring(subsystem);
+
+      const bool held_by_chain =
+          owner.has_value() &&
+          ((parent != nullptr && *owner == parent) ||
+           (holder != nullptr && *owner == holder));
+
+      if (held_by_chain) {
+        masked.push_back(subsystem);
+        continue;
       }
 
       m_requirements.push_back(subsystem);

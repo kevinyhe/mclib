@@ -293,6 +293,112 @@ void testTwoTriggersOnTheSameSubsystem() {
   CommandScheduler::forgetCommand(&routine);
 }
 
+// ---------------------------------------------------------------------------
+void testTriggerInsideANestedRoutine() {
+  std::printf("-- trigger() inside a routine nested in another routine\n");
+
+  SharedSubsystem chassis;
+  chassis.setName("chassis");
+
+  int a = 0;
+  int b = 0;
+  int c = 0;
+  int trigger_ran = 0;
+  int trigger_ended = 0;
+
+  auto inner = std::make_unique<Routine>();
+  inner->add(std::make_unique<CountedCommand>(&chassis, 2, &a));
+  inner->trigger(
+      std::make_unique<ForeverCommand>(&chassis, &trigger_ran, &trigger_ended));
+  inner->add(std::make_unique<CountedCommand>(&chassis, 2, &b));
+  inner->add(std::make_unique<CountedCommand>(&chassis, 2, &c));
+
+  // The outer routine is now the command the scheduler holds the chassis for.
+  // Masking against the inner routine alone hid nothing, the triggered command
+  // claimed the chassis normally, and CancelRunning erased the OUTER routine
+  // after two ticks with the triggered command left running on the chassis.
+  Routine outer;
+  outer.add(std::move(inner));
+
+  const int ticks = runToCompletion(outer, 200);
+
+  CHECK(!outer.scheduled());
+  CHECK(ticks < 200);
+
+  CHECK_EQ(static_cast<double>(trigger_ran), 1.0);
+  CHECK_EQ(static_cast<double>(a), 1.0);
+  CHECK_EQ(static_cast<double>(b), 1.0);
+  CHECK_EQ(static_cast<double>(c), 1.0);
+
+  // And the fire-and-forget command was stopped rather than left driving.
+  CHECK_EQ(static_cast<double>(trigger_ended), 1.0);
+  CHECK(!CommandScheduler::getRequiring(&chassis).has_value());
+
+  CommandScheduler::forgetCommand(&outer);
+}
+
+// ---------------------------------------------------------------------------
+/// Wraps one command and claims its requirements, the way a ParallelCommandGroup
+/// or a .withTimeout() wrapper does. The wrapper becomes the requirement holder.
+class WrapperCommand : public Command {
+public:
+  WrapperCommand(std::unique_ptr<Command> inner, Subsystem* requirement)
+      : m_inner(std::move(inner)), m_requirement(requirement) {}
+
+  void initialize() override { m_inner->initialize(); }
+  void execute() override { m_inner->execute(); }
+  bool isFinished() override { return m_inner->isFinished(); }
+  void end(bool interrupted) override { m_inner->end(interrupted); }
+
+  std::vector<Subsystem*> getRequirements() override {
+    return {m_requirement};
+  }
+
+private:
+  std::unique_ptr<Command> m_inner;
+  Subsystem* m_requirement = nullptr;
+};
+
+void testTriggerInsideAWrappedRoutine() {
+  std::printf("-- trigger() inside a routine wrapped by another command\n");
+
+  SharedSubsystem chassis;
+  chassis.setName("chassis");
+
+  int a = 0;
+  int b = 0;
+  int trigger_ran = 0;
+  int trigger_ended = 0;
+
+  auto routine = std::make_unique<Routine>();
+  routine->add(std::make_unique<CountedCommand>(&chassis, 2, &a));
+  routine->trigger(
+      std::make_unique<ForeverCommand>(&chassis, &trigger_ran, &trigger_ended));
+  routine->add(std::make_unique<CountedCommand>(&chassis, 2, &b));
+
+  Routine* routine_raw = routine.get();
+  WrapperCommand wrapper(std::move(routine), &chassis);
+
+  CommandScheduler::schedule(&wrapper);
+
+  int ticks = 0;
+  while (CommandScheduler::scheduled(&wrapper) && ticks < 200) {
+    CommandScheduler::run();
+    ++ticks;
+  }
+
+  CHECK(ticks < 200);
+  CHECK(routine_raw->isFinished());
+
+  CHECK_EQ(static_cast<double>(trigger_ran), 1.0);
+  CHECK_EQ(static_cast<double>(a), 1.0);
+  CHECK_EQ(static_cast<double>(b), 1.0);
+  CHECK_EQ(static_cast<double>(trigger_ended), 1.0);
+
+  CommandScheduler::forgetCommand(&wrapper);
+  CHECK(!CommandScheduler::getRequiring(&chassis).has_value());
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -363,6 +469,8 @@ int main() {
   testTriggerSharingTheReservation();
   testTriggerOnAnUnreservedSubsystem();
   testTwoTriggersOnTheSameSubsystem();
+  testTriggerInsideANestedRoutine();
+  testTriggerInsideAWrappedRoutine();
 
   return mclib::test::summary("routine_trigger");
 }

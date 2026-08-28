@@ -6,6 +6,7 @@
 #include "mclib/command/instantCommand.h"
 #include "mclib/command/runCommand.h"
 
+#include <algorithm>
 #include <utility>
 
 std::unique_ptr<Command> Subsystem::run(std::function<void()> on_execute) {
@@ -45,9 +46,9 @@ std::unique_ptr<Command> Subsystem::idleCommand() {
 void Subsystem::setDefaultCommand(std::unique_ptr<Command> command) {
 	Command* previous = default_command.get();
 
-	// The old default command is about to be destroyed. End it cleanly and then
-	// scrub every remaining reference to it, so the scheduler is never left
-	// holding a dangling pointer.
+	// The old default command is on its way out. End it cleanly and then scrub
+	// every remaining reference to it, so the scheduler is never left holding a
+	// dangling pointer.
 	//
 	// endAndForget, not cancel() plus forgetCommand(). Called from inside a
 	// command's execute(), cancel() only queues the command and forgetCommand()
@@ -61,7 +62,26 @@ void Subsystem::setDefaultCommand(std::unique_ptr<Command> command) {
 	// subsystem was never registered.
 	CommandScheduler::setDefaultCommand(this, command.get());
 
+	// Retire rather than destroy. A default command is allowed to call this from
+	// inside its own execute(), and destroying it here would leave that frame
+	// reading freed memory the moment it touched a member after the call.
+	if (default_command != nullptr) {
+		retired_default_commands.push_back(std::move(default_command));
+	}
+
 	default_command = std::move(command);
+
+	// Release everything retired that is not the command the scheduler is
+	// running right now. On the ordinary path, where the caller is not the
+	// outgoing command, that is the command just retired and it goes
+	// immediately. On the self-replacing path it is held until the next call, by
+	// which time the frame has long returned. At most one is ever kept.
+	Command* active = CommandScheduler::activeCommand();
+
+	std::erase_if(retired_default_commands,
+	              [active](const std::unique_ptr<Command>& retired) {
+		              return retired.get() != active;
+	              });
 }
 
 Command* Subsystem::getDefaultCommand() const {
@@ -78,4 +98,10 @@ Subsystem::~Subsystem() {
 	// user code against a half destroyed subsystem would be worse than skipping it.
 	CommandScheduler::forgetSubsystem(this);
 	CommandScheduler::forgetCommand(default_command.get());
+
+	// Retired commands were already ended and forgotten on the way out, but a
+	// caller can have re-scheduled one since. Cheap to be certain.
+	for (const std::unique_ptr<Command>& retired : retired_default_commands) {
+		CommandScheduler::forgetCommand(retired.get());
+	}
 }

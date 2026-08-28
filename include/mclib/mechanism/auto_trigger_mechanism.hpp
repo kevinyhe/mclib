@@ -30,6 +30,21 @@ struct AutoTriggerConfig {
 };
 
 /**
+ * @brief How long makeWaitForTriggerCommand() waits when the caller does not say.
+ *
+ * The command used to default to "wait forever", which is only safe while
+ * arming was guaranteed to clear the latch. It is not: an armed and latched
+ * mechanism with no re-arm condition and a trigger condition that stays true
+ * never fires, so a routine step built from the no-argument overload hung for
+ * the rest of the match. Five seconds is long enough for any honest wait on a
+ * mechanism and short enough that a stuck one still leaves time for the steps
+ * behind it, which is the same reasoning as auton::kDefaultWaitUntilTimeout.
+ *
+ * Pass 0 explicitly to get the old wait-forever behaviour.
+ */
+inline constexpr double kDefaultWaitForTriggerTimeoutMs = 5000.0;
+
+/**
  * @brief Watches a sensor condition and fires an action on the false->true
  *        edge, with a latch so a manual override is not undone on the next tick.
  *
@@ -189,14 +204,15 @@ public:
    * and clearing a latch that disarmUntilReset() set would reapply the action
    * the driver just overrode, with no false->true edge behind it.
    *
-   * @warning Because of that, this command can legitimately never finish. A
-   * mechanism that is armed AND latched, with no re-arm condition and a trigger
-   * condition that stays true, never clears its latch (the trigger going away
-   * is what clears it) and so never fires. With the default timeout_ms of 0,
-   * which means wait forever, the command has no other way out and will hang a
-   * routine step for the rest of the match. Pass a real timeout whenever the
-   * mechanism might already be latched, or call rearm() first if clearing the
-   * latch is what you actually want.
+   * @warning Because of that, this command has no guaranteed fire to wait for.
+   * A mechanism that is armed AND latched, with no re-arm condition and a
+   * trigger condition that stays true, never clears its latch (the trigger
+   * going away is what clears it) and so never fires. The timeout is what ends
+   * the command in that case, which is why the default is a finite
+   * kDefaultWaitForTriggerTimeoutMs rather than the wait-forever it used to be:
+   * a routine step that hangs for the rest of the match is not an acceptable
+   * outcome for a mechanism the driver overrode. Call rearm() first if clearing
+   * the latch is what you actually want.
    *
    * If it found the mechanism disarmed, it disarms it again on the way out,
    * but only if the mechanism is still armed at that point. Anything that
@@ -205,9 +221,11 @@ public:
    * from the command's own arming and is undone with it, so drive the armed
    * state from one place while this command is running.
    *
-   * @param timeout_ms Give up after this long. <= 0 waits forever.
+   * @param timeout_ms Give up after this long. <= 0 waits forever, which is
+   *   now something you have to ask for on purpose.
    */
-  std::unique_ptr<Command> makeWaitForTriggerCommand(double timeout_ms = 0.0);
+  std::unique_ptr<Command> makeWaitForTriggerCommand(
+      double timeout_ms = kDefaultWaitForTriggerTimeoutMs);
 
 protected:
   /// Polls the condition. The state is "armed", so a false state means the

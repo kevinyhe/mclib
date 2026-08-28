@@ -27,7 +27,32 @@ private:
 	std::vector<Command *> toSchedule;
 	std::vector<Command *> toCancel;
 
+	// The command the scheduler is currently inside a callback of. See
+	// activeCommand()
+	Command *active = nullptr;
+
 	CommandScheduler() = default;
+
+	// Marks a command active for the duration of one callback into it. Nests,
+	// because a callback is allowed to schedule or cancel other commands
+	class ActiveScope
+	{
+	public:
+		explicit ActiveScope(Command *command) : m_previous(getInstance().active)
+		{
+			getInstance().active = command;
+		}
+
+		~ActiveScope() { getInstance().active = m_previous; }
+
+		ActiveScope(const ActiveScope &) = delete;
+		ActiveScope &operator=(const ActiveScope &) = delete;
+		ActiveScope(ActiveScope &&) = delete;
+		ActiveScope &operator=(ActiveScope &&) = delete;
+
+	private:
+		Command *m_previous;
+	};
 
 	// Snapshot of the registered subsystems, so callbacks can register or
 	// unregister subsystems without invalidating an in-flight iteration
@@ -44,6 +69,45 @@ private:
 		}
 
 		return subsystems;
+	}
+
+	/**
+	 * @brief Take a command out of the scheduler and then run its end()
+	 *
+	 * @details The one ordering every retirement path uses. Both maps are
+	 * cleared BEFORE end() is called, and that order is the whole point:
+	 *
+	 * - scheduledCommands first, so anything end() reaches that asks whether
+	 *   this command is scheduled sees it as already gone and cannot give it a
+	 *   second end().
+	 * - requirements second, so schedule() cannot find the dying command as the
+	 *   owner of a subsystem. It picks who to interrupt out of the requirements
+	 *   map, not out of scheduledCommands, so a replacement scheduled from
+	 *   inside end() used to find the command that was still ending, call
+	 *   end(true) on it again, and recurse until the stack ran out.
+	 *
+	 * Releasing first also removes the reason the release was deferred: a
+	 * replacement scheduled from end() claims its requirements into an entry
+	 * nothing here touches afterwards.
+	 *
+	 * @param command Must be non-null. Need not be scheduled.
+	 * @param interrupted Passed straight to end().
+	 */
+	static void retire(Command *command, bool interrupted)
+	{
+		CommandScheduler &instance = getInstance();
+
+		// Read before anything is released, so the release covers what the
+		// command actually held on the way in
+		auto held = command->getRequirements();
+
+		std::erase(instance.scheduledCommands, command);
+
+		releaseRequirements(command, held);
+
+		ActiveScope active(command);
+
+		command->end(interrupted);
 	}
 
 	// Give back only the subsystems still owned by command. An entry that some
@@ -189,10 +253,17 @@ public:
 	 * the deferred cancel list, and the forgetCommand() call right after erases
 	 * that queue entry again, so end(true) never runs at all: a startEnd()
 	 * default never fires its on_end, an async command never stops its task.
-	 * This runs end(true) immediately instead. That is safe inside the run loop:
-	 * run() iterates a copy of the scheduled list and re-checks scheduled() both
-	 * before and after execute(), so a command retired here is skipped rather
-	 * than executed or asked isFinished() after the caller has freed it.
+	 * This runs end(true) immediately instead. That is safe inside the run loop
+	 * as far as the SCHEDULER is concerned: run() iterates a copy of the
+	 * scheduled list and re-checks scheduled() both before and after execute(),
+	 * so a command retired here is skipped rather than executed or asked
+	 * isFinished() afterwards.
+	 *
+	 * It says nothing about the command OBJECT. If the caller destroys it, that
+	 * is the caller's problem to sequence - see \refitem
+	 * Subsystem::setDefaultCommand, which keeps the outgoing command alive
+	 * precisely because it can be called from inside that command's own
+	 * execute().
 	 *
 	 * Use forgetCommand() on its own when running end() would be unsafe, such as
 	 * from a subsystem destructor.
@@ -202,8 +273,6 @@ public:
 	 */
 	static void endAndForget(Command *command)
 	{
-		CommandScheduler &instance = getInstance();
-
 		if (command == nullptr)
 		{
 			return;
@@ -211,18 +280,7 @@ public:
 
 		if (scheduled(command))
 		{
-			// Same ordering rule as cancel(): read the requirements before
-			// end(true), which may schedule a replacement that claims some of them
-			auto held = command->getRequirements();
-
-			// Erase before end(), so anything end(true) reaches that asks the
-			// scheduler about this command sees it as already gone and cannot run
-			// end() on it a second time
-			std::erase(instance.scheduledCommands, command);
-
-			command->end(true);
-
-			releaseRequirements(command, held);
+			retire(command, true);
 		}
 
 		forgetCommand(command);
@@ -377,20 +435,13 @@ public:
 		{
 			for (auto intersect : intersection)
 			{
-				// Read the requirements BEFORE end(true). end() can schedule a
-				// replacement command that claims some of them, and we must not
-				// erase the entries that replacement just took.
-				auto held = intersect->getRequirements();
-
-				intersect->end(true);
-
-				std::erase(instance.scheduledCommands, intersect);
-
-				// Release EVERY subsystem the interrupted command held, not just
-				// the ones the incoming command wants. Otherwise a subsystem it
-				// held alone stays owned by a dead command forever and its
-				// default command never restarts.
-				releaseRequirements(intersect, held);
+				// retire() releases EVERY subsystem the interrupted command held,
+				// not just the ones the incoming command wants. Otherwise a
+				// subsystem it held alone stays owned by a dead command forever
+				// and its default command never restarts. It also clears both maps
+				// before end(true), so a replacement scheduled from inside that
+				// end() cannot find this command and interrupt it again.
+				retire(intersect, true);
 			}
 
 			for (auto requirement : requirements)
@@ -398,7 +449,11 @@ public:
 				instance.requirements[requirement] = command;
 			}
 
-			command->initialize();
+			{
+				ActiveScope active(command);
+
+				command->initialize();
+			}
 
 			instance.scheduledCommands.push_back(command);
 		}
@@ -455,7 +510,11 @@ public:
 				continue;
 			}
 
-			command->execute();
+			{
+				ActiveScope active(command);
+
+				command->execute();
+			}
 
 			// execute() may have retired this command and freed it. A default
 			// command that replaces itself, intake.setDefaultCommand(...) from
@@ -470,20 +529,12 @@ public:
 
 			if (command->isFinished())
 			{
-				// Same ordering rule as the interrupt path, read the requirements
-				// before end() gets a chance to hand them to another command
-				auto held = command->getRequirements();
-
-				// Drop it from the scheduled list BEFORE end(), not after the loop.
-				// A later command in this same pass can reach a finished command
-				// through endAndForget, and a command still listed as scheduled
-				// would have end() run on it a second time: a startEnd() on_end
+				// retire() drops it from both maps before end(false) runs. Doing
+				// that inside the loop rather than after it is what stops a later
+				// command in this same pass reaching a finished command through
+				// endAndForget and giving it a second end(): a startEnd() on_end
 				// firing twice, an async command stopped twice.
-				std::erase(instance.scheduledCommands, command);
-
-				command->end(false);
-
-				releaseRequirements(command, held);
+				retire(command, false);
 			}
 		}
 
@@ -546,6 +597,27 @@ public:
 		}
 	}
 
+	/**
+	 * @brief The command the scheduler is currently inside a callback of
+	 *
+	 * @details Set for the duration of initialize(), execute() and end() calls
+	 * the scheduler makes, and nested, so it names the OUTERMOST command the
+	 * scheduler drove into. A Routine that runs its steps by calling their
+	 * execute() itself does not appear here, its steps are not scheduled.
+	 *
+	 * Two things need this. A triggered command has to know which command holds
+	 * the reservation it is running under, which is the outermost one and not
+	 * necessarily its immediate parent. And \refitem Subsystem::setDefaultCommand
+	 * has to know whether the command it is retiring is the one currently on the
+	 * stack, so it can avoid destroying it underneath itself.
+	 *
+	 * @return The active command, or nullptr outside any scheduler callback.
+	 */
+	static Command *activeCommand()
+	{
+		return getInstance().active;
+	}
+
 	static bool scheduled(const Command *command)
 	{
 		CommandScheduler &instance = getInstance();
@@ -585,15 +657,7 @@ public:
 			return;
 		}
 
-		// Read the requirements before end(true), it may schedule a replacement
-		// that legitimately claims some of them
-		auto held = command->getRequirements();
-
-		command->end(true);
-
-		std::erase(instance.scheduledCommands, command);
-
-		releaseRequirements(command, held);
+		retire(command, true);
 	}
 };
 

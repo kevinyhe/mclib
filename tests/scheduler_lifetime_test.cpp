@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <vector>
 
 using mclib::mechanism::MechanismManager;
@@ -495,6 +496,159 @@ void testFinishedCommandEndsOnce() {
   CommandScheduler::unregisterSubsystem(&target);
 }
 
+// ---------------------------------------------------------------------------
+// 7. A replacement scheduled from inside end() must not re-end the dying command
+// ---------------------------------------------------------------------------
+
+/// Schedules a replacement wanting the same subsystem from inside its own
+/// end(). schedule() picks who to interrupt out of the requirements map, so a
+/// dying command still listed there was handed end(true) again, which scheduled
+/// again, until the stack ran out.
+class ReschedulingCommand : public Command {
+public:
+  ReschedulingCommand(Subsystem* subsystem, Command** replacement)
+      : m_subsystem(subsystem), m_replacement(replacement) {}
+
+  int ends = 0;
+
+  bool isFinished() override { return false; }
+
+  void end(bool /*interrupted*/) override {
+    ++ends;
+    // Guarded, so a scheduler that does recurse blows the check rather than the
+    // stack, and the test reports a number instead of a crash.
+    if (ends < 20 && m_replacement != nullptr && *m_replacement != nullptr) {
+      CommandScheduler::schedule(*m_replacement);
+    }
+  }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_subsystem}; }
+
+private:
+  Subsystem* m_subsystem = nullptr;
+  Command** m_replacement = nullptr;
+};
+
+void testEndSchedulingAReplacementDoesNotRecurse() {
+  std::printf("-- a replacement scheduled from end() does not re-end its host\n");
+
+  CountingSubsystem subsystem;
+  subsystem.setName("shared");
+  subsystem.registerSelf();
+
+  TracerCommand replacement(&subsystem);
+  Command* replacement_ptr = &replacement;
+
+  ReschedulingCommand dying(&subsystem, &replacement_ptr);
+  CommandScheduler::schedule(&dying);
+  CHECK(CommandScheduler::scheduled(&dying));
+
+  // Cancel it. Its end() schedules the replacement, which wants the same
+  // subsystem. The dying command must already be out of the requirements map by
+  // then, so schedule() finds nothing to interrupt.
+  CommandScheduler::cancel(&dying);
+
+  CHECK_EQ(static_cast<double>(dying.ends), 1.0);
+  CHECK(!CommandScheduler::scheduled(&dying));
+
+  // The replacement really did take over.
+  CHECK(CommandScheduler::scheduled(&replacement));
+  CHECK_EQ(static_cast<double>(replacement.initializes), 1.0);
+
+  std::optional<Command*> owner = CommandScheduler::getRequiring(&subsystem);
+  CHECK(owner.has_value());
+  CHECK(owner.has_value() && *owner == &replacement);
+
+  CommandScheduler::endAndForget(&replacement);
+  CommandScheduler::unregisterSubsystem(&subsystem);
+}
+
+void testEndAndForgetSchedulingAReplacementDoesNotRecurse() {
+  std::printf("-- the same, through endAndForget\n");
+
+  CountingSubsystem subsystem;
+  subsystem.setName("shared");
+  subsystem.registerSelf();
+
+  TracerCommand replacement(&subsystem);
+  Command* replacement_ptr = &replacement;
+
+  ReschedulingCommand dying(&subsystem, &replacement_ptr);
+  CommandScheduler::schedule(&dying);
+
+  CommandScheduler::endAndForget(&dying);
+
+  CHECK_EQ(static_cast<double>(dying.ends), 1.0);
+  CHECK(CommandScheduler::scheduled(&replacement));
+
+  CommandScheduler::endAndForget(&replacement);
+  CommandScheduler::unregisterSubsystem(&subsystem);
+}
+
+// ---------------------------------------------------------------------------
+// 8. A default command that replaces itself must survive its own execute()
+// ---------------------------------------------------------------------------
+
+/// Replaces itself from execute() and then keeps touching its own members, the
+/// shape that read freed memory when setDefaultCommand destroyed it outright.
+class SelfReplacingCommand : public Command {
+public:
+  SelfReplacingCommand(Subsystem* subsystem, int* after_swap)
+      : m_subsystem(subsystem), m_after_swap(after_swap) {}
+
+  void execute() override {
+    if (m_swapped) {
+      return;
+    }
+    m_swapped = true;
+
+    m_subsystem->setDefaultCommand(m_subsystem->startEnd([]() {}, []() {}));
+
+    // Every one of these is a read of *this* after the swap.
+    ++m_touches;
+    if (m_after_swap != nullptr) {
+      *m_after_swap = m_touches;
+    }
+  }
+
+  bool isFinished() override { return false; }
+
+  std::vector<Subsystem*> getRequirements() override { return {m_subsystem}; }
+
+private:
+  Subsystem* m_subsystem = nullptr;
+  int* m_after_swap = nullptr;
+  int m_touches = 0;
+  bool m_swapped = false;
+};
+
+void testSelfReplacingCommandSurvivesItsOwnFrame() {
+  std::printf("-- a self-replacing default command survives its own frame\n");
+
+  CountingSubsystem subsystem;
+  subsystem.setName("self-replacer");
+
+  int after_swap = 0;
+
+  subsystem.setDefaultCommand(
+      std::make_unique<SelfReplacingCommand>(&subsystem, &after_swap));
+  subsystem.registerSelf();
+
+  CommandScheduler::run();  // schedules it
+  CommandScheduler::run();  // it replaces itself and then reads its own members
+
+  // Under ASan this is where the use-after-free fired. The value proves the
+  // read happened and landed in live memory.
+  CHECK_EQ(static_cast<double>(after_swap), 1.0);
+
+  // The replacement took over cleanly.
+  CommandScheduler::run();
+  CHECK(CommandScheduler::getRequiring(&subsystem).has_value());
+  CHECK(subsystem.getDefaultCommand() != nullptr);
+
+  CommandScheduler::unregisterSubsystem(&subsystem);
+}
+
 }  // namespace
 
 int main() {
@@ -504,5 +658,8 @@ int main() {
   testForgetDuringDeferredDrain();
   testDefaultCommandReplacesItself();
   testFinishedCommandEndsOnce();
+  testEndSchedulingAReplacementDoesNotRecurse();
+  testEndAndForgetSchedulingAReplacementDoesNotRecurse();
+  testSelfReplacingCommandSurvivesItsOwnFrame();
   return mclib::test::summary("scheduler_lifetime");
 }
