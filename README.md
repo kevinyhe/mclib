@@ -8,8 +8,7 @@ common mechanisms.
 [Documentation](docs/README.md) ·
 [Installation](docs/installation.md) ·
 [Getting started](docs/getting-started.md) ·
-[Safety](docs/safety.md) ·
-[Known limits](docs/accuracy.md)
+[Safety](docs/safety.md)
 
 ## Install
 
