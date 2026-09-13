@@ -1,26 +1,33 @@
-# Safety and lifecycle
+# Safety
 
-What stops a motion, what the scheduler does when the field disables you, and what you must verify on your own robot.
+Blocking motions stop on timeout, cancellation, competition disable or an
+invalid sensor reading, including when `exit=false`. Only a successful chained
+motion leaves the drive energized. Run one blocking motion at a time.
 
-[Documentation index](README.md) · [Project README](../README.md)
+`wallReset()` returns `true` only after sustained wall contact, and then resets
+the pose. On failure it stops, returns `false` and leaves the pose unchanged.
 
-Blocking motions stop on timeout, cancellation, competition disable, or invalid
-sensor readings, including when `exit=false`. Only successful chained motions
-leave the drive energized. Run at most one blocking motion at a time.
+## Competition disable
 
-`wallReset()` returns `true` only when sustained wall contact is detected and
-the pose is reset. On failure it stops and returns `false`, leaving the pose
-unchanged. Check that result before relying on the new position.
+Call `CommandScheduler::disable()` from `disabled()` if the scheduler loop does
+not run while disabled. `run()` also handles the disabled state.
 
-Call `CommandScheduler::disable()` from your competition `disabled()` callback
-when the scheduler loop does not run while disabled (as in the example).
-`run()` also handles disabled competition status. Active commands are interrupted,
-queued commands are discarded, and subsystem `onDisabled()` hooks clear actuator
-state. Commands do not resume automatically on enable; default commands may start
-again. Custom actuator subsystems must implement an idempotent `onDisabled()`.
-The scheduler is single-task code: do not call its methods concurrently.
+On disable:
+
+- active commands are interrupted
+- queued commands are discarded
+- each subsystem's `onDisabled()` clears actuator state
+
+Commands do not resume on enable. Default commands may start again. Custom
+subsystems that drive motors or pneumatics must implement `onDisabled()`, and it
+must be safe to call more than once.
+
+The scheduler is single-task. Do not call it from more than one task.
+
+## Sensor faults
 
 Velocity and position mechanisms expose `hasSensorFault()`. Invalid feedback
-sets their voltage to zero and clears their ready flag. Homing reports `Failed`
-instead of treating invalid velocity as a hard stop. Verify these behaviors on
-your robot with the wheels raised before running autonomous on the field.
+sets their output to 0 V and clears their ready flag. Homing reports `Failed`
+on invalid velocity.
+
+Test on your robot with the wheels raised before running an autonomous.

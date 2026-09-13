@@ -1,62 +1,44 @@
-# Measured accuracy and known limits
+# Known limits
 
-What the library has been shown to do, what it has not, and which failures are
-still open. Read this before you trust a number from `mclib` on a field.
+## Testing
 
-[Documentation index](README.md) · [Project README](../README.md)
+| Test | Scope |
+| --- | --- |
+| `make test` | 37 host test programs: odometry, paths, pure pursuit, profiles, PID, mechanisms, scheduler, telemetry |
+| AddressSanitizer and UndefinedBehaviorSanitizer | the same 37 programs, checking for memory errors and leaks |
+| ARM build | the firmware compiles with `arm-none-eabi-g++` |
+| Physics simulator | the C++ motion routines and odometry against a simulated robot ([Simulator](simulator.md)) |
 
-## What is verified
+None of these measure a real robot. The default gains were tuned in simulation.
+Tune them on your robot.
 
-- **37 host test binaries** covering odometry, path generation, pure pursuit,
-  motion profiles, the PID, every mechanism class, the command scheduler and
-  the telemetry sinks. They run on any machine with `g++`: `make test`.
-- **The same 37 under AddressSanitizer and UndefinedBehaviorSanitizer.** These
-  catch memory leaks and undefined behaviour in the library.
-- **An ARM firmware build** with `arm-none-eabi-g++`, the compiler that builds
-  the code for the brain.
-- **A physics simulator** replaying the real C++ controller and odometry. See
-  [the simulator docs](simulator.md).
+## Simulator results at default gains
 
-## What is not verified
+Each move has a 4 s limit. See
+[BUILDER_VALIDATION.md](../tests/vexsim/BUILDER_VALIDATION.md) for details.
 
-Every number below comes from simulation. None of it is a measurement of a real
-robot, and simulation cannot produce one. Gains, wheel sizes, tracking-wheel
-geometry and surface friction are yours to measure.
-
-## Open failures at default gains
-
-From [the validation findings](../tests/vexsim/BUILDER_VALIDATION.md), with a
-four-second deadline per move:
-
-| Matrix | Passing | What is still failing |
+| Test set | Passing | Failing |
 | --- | --- | --- |
-| Physical drive-encoder, default gains | 70/80 | three boomerangs, six arcs, one six-motor diagonal point move |
-| Two-tracker physical variant | 67/80 | six arcs, three encoder-distance drives, two boomerangs, one four-motor point deadline, the encoder-heading stress case |
-| Ideal plant with no inertia, default gains | 28/36 | two slow arc deadlines, four fast turn cases, two fast boomerangs |
-| Targeted completion, default gains | 24/27 | three fast endpoint-only turns |
-| Targeted completion, tuned ideal plant | 27/27 | none, under ideal test conditions |
+| Drive encoders only | 70/80 | 3 boomerangs, 6 arcs, 1 six-motor diagonal point move |
+| Two tracking wheels | 67/80 | 6 arcs, 3 encoder-distance drives, 2 boomerangs, 1 four-motor point move timeout, the encoder-heading stress test |
+| Ideal robot (no slip or inertia) | 28/36 | 2 slow arc timeouts, 4 fast turns, 2 fast boomerangs |
+| Completion tests | 24/27 | 3 fast turns with no drive distance |
+| Completion tests, tuned gains | 27/27 | none |
 
-All 40 safety checks and all 4 wall-reset checks pass in both physical
-matrices. A motion that cannot reach its target still
-stops, still reports failure, and still leaves the drive de-energised.
+All 40 safety tests and all 4 wall-reset tests pass in both physical test sets.
 
-## Why the arcs fail
+## Arcs
 
-Lateral slip is not observable through drive encoders. `driveTo()` and
-`curveCircle()` close their distance loop around the outer drive wheel, so a
-wheel that slips sideways reports travel that did not happen. Tracking wheels
-do not fix this. With them, the arcs' odometry error is 0.055-0.090 inches
-while the robot misses the endpoint by 5.970-15.473 inches, because the loop
-controls wheel travel and wheel travel is what slips.
+`driveTo()` and `curveCircle()` control distance using the drive wheel encoders.
+When a wheel slips sideways, the encoder still counts travel. Tracking wheels
+improve the pose estimate (0.055-0.090 in error on arcs) but not the motion
+itself, which still misses by 5.970-15.473 in.
 
-Two things would close that gap, and neither is in the library today:
+Accurate arcs need a controller that steers using the robot's position, plus
+gains tuned on the robot.
 
-1. A path-following controller that closes the loop on position rather than on
-   an outer-wheel distance primitive.
-2. Your robot's measured dynamics and tuned gains.
+## Before a match
 
-## Before your first match
-
-Tune against your own robot; the shipped gains were tuned in simulation. Run
-every autonomous with the wheels raised first, then at half speed on a field.
-Check `atTarget()` and the motion return values after each move.
+1. Run each autonomous with the wheels off the ground.
+2. Run it at half speed on a field.
+3. Check `atTarget()` and each motion's return value.

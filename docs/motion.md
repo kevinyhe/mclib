@@ -1,26 +1,10 @@
-# Motion: profiles, paths and holonomic drives
+# Motion
 
-Motion profiling, drivetrain feedforward, pure pursuit, and X-drive/mecanum kinematics.
+## Motion profiles
 
-[Documentation index](README.md) · [Project README](../README.md)
-
-## Motion profiling and drivetrain feedforward
-
-`mclib/control/profile.hpp` and `mclib/control/feedforward.hpp`.
-
-Every motion in this library used to be a PID against a position error. The
-only way to make one faster was to raise `kp` until it oscillated, and the only
-acceleration limit was `max_slew_accel_fwd` and friends - a rate limit on
-*voltage*, which is a guess at a rate limit on acceleration. A profile plus a
-feedforward model replaces both: the profile says what velocity to be at right
-now, the model says what voltage that velocity costs, and the PID only has to
-clean up the difference.
-
-Both files are plain arithmetic over `mclib::units`, with no PROS calls,
-hardware or clock inside the profile, so `tests/profile_test.cpp` and
-`tests/feedforward_test.cpp` check every number on the host.
-
-### The profile
+`mclib/control/profile.hpp`. A motion profile plans speed over time for a
+move: speed up at a set acceleration, cruise, then slow down so the robot stops
+on the target.
 
 ```cpp
 using namespace mclib::control;
@@ -34,68 +18,49 @@ const ProfileState now = profile.sample(750_ms);
 // now.position == 24 in, now.velocity == 48 in/s, now.acceleration == 0
 ```
 
-That worked example: 48 inches at 48 in/s with 96 in/s² both ways is 0.5 s of
-acceleration over 12 inches, 0.5 s of cruise over 24 inches, 0.5 s of
-deceleration over 12 inches. Total 1.5 s, final position 48.000000000 in.
+This profile accelerates for 0.5 s over 12 in, cruises for 0.5 s over 24 in and
+decelerates for 0.5 s over 12 in: 1.5 s total.
 
-`ProfileConstraints` carries four magnitudes, two of which have a "zero means
-something else" convention that keeps the common case a two-field aggregate:
-
-| Field | Zero means |
+| `ProfileConstraints` field | 0 means |
 | --- | --- |
-| `max_velocity` | nothing - a zero here gives an empty profile |
-| `max_acceleration` | nothing - a zero here gives an empty profile |
+| `max_velocity` | empty profile |
+| `max_acceleration` | empty profile |
 | `max_deceleration` | same as `max_acceleration` |
-| `max_jerk` | unbounded, i.e. `generate()` builds a trapezoid |
+| `max_jerk` | no jerk limit (trapezoid) |
 
-Set `max_jerk` and `generate()` builds an S-curve instead: acceleration ramps
-in and out at the jerk limit, so the voltage command has no steps in it.
-Over the same 48 inches with a 384 in/s³ jerk limit that is 0.75 s of ramp
-over 18 inches, 0.25 s of cruise over 12 inches, and 0.75 s of ramp down: 1.75 s
-total. The smoother command costs a quarter of a second.
+Setting `max_jerk` ramps acceleration in and out (an S-curve). With a
+384 in/s³ limit the same move takes 1.75 s.
 
-The cases that break naive implementations are all defined behaviour and all
-pinned by tests:
+| Case | Result |
+| --- | --- |
+| Too short to reach cruise speed | accelerates then decelerates (a triangle); 6 in peaks at 24 in/s after 0.25 s |
+| Different accel and decel | 48 in at 96 in/s² accel, 48 in/s² decel: 0.50 s / 0.25 s / 1.00 s |
+| Zero distance | empty profile |
+| Negative distance | runs in reverse |
+| Already moving | starts from the current velocity |
+| Too fast to stop in time | decelerates at the limit and overshoots; `overshoots()` returns true and `netDisplacement()` reports the real distance |
 
-- **Too short to cruise.** 6 inches under the same limits is a triangle
-  peaking at 24 in/s after 0.25 s, and it still lands exactly on 6 inches.
-- **Asymmetric accel/decel.** This drivetrain already has four slew constants,
-  so `max_deceleration` is separate and `DirectionalConstraints` holds a
-  forward set and a reverse set. 48 inches with 96 in/s² accel and 48 in/s²
-  decel splits 0.50 s / 0.25 s / 1.00 s - 1.75 s total.
-- **Zero distance.** Empty profile, `duration()` 0, `sample()` all zeros.
-- **Negative distance.** A normal profile running the other way; velocity is
-  negative throughout.
-- **Non-zero initial velocity.** Already cruising at 48 in/s over 48 inches
-  drops the acceleration phase entirely: 0.75 s of cruise, 0.5 s of decel,
-  1.25 s. An initial velocity pointing *away* from the target accelerates back
-  through zero at `max_acceleration`.
-- **Too fast to stop.** 2 inches while doing 48 in/s needs 12 inches of
-  braking room. The profile becomes a single deceleration at the limit,
-  `overshoots()` returns true, and `netDisplacement()` reports the 12 inches it
-  really covers. Refusing to build anything would be worse - the robot is
-  moving either way and "brake at the limit" is the best command available.
-  The mirror case is handled the same way: asking to *reach* 48 in/s within
-  4 inches needs 12 inches of runway, so the profile accelerates at the limit,
-  overshoots, and says so.
+`DirectionalConstraints` holds separate forward and reverse limits.
+`select()` picks one using the distance, or the initial velocity when the
+distance is zero.
 
-`DirectionalConstraints::select()` takes the initial velocity as a tiebreak, so
-a zero-distance "stop from where you are" while rolling backwards gets the
-reverse deceleration limit rather than the forward one.
+`velocityAtDistance()` and `timeAtDistance()` look up the profile by distance
+instead of time, for path following.
 
-For a path follower, `velocityAtDistance()` and `timeAtDistance()` give the
-same profile parameterised by distance along the path instead of by a
-stopwatch.
+## Feedforward
 
-### The feedforward model
+`mclib/control/feedforward.hpp`. Feedforward predicts the voltage a speed needs,
+so the PID only corrects the error:
 
 ```
 V = kS * sgn(v) + kV * v + kA * a
 ```
 
-`kS` is volts, `kV` is volts per (in/s), `kA` is volts per (in/s²), and all
-three are typed - handing `kV` a bare number is a compile error, not a loop
-that is 39.37x wrong.
+| Gain | Meaning | Unit |
+| --- | --- | --- |
+| `kS` | voltage to overcome friction | V |
+| `kV` | voltage per unit of speed | V per in/s |
+| `kA` | voltage per unit of acceleration | V per in/s² |
 
 ```cpp
 SimpleMotorFeedforward model({.kS = 0.8_V,
@@ -106,59 +71,38 @@ model.calculate(30 * mclib::units::inps, 100 * inps2); // 8.8 V
 model.maxAchievableVelocity(12_V, {});                 // 56 in/s
 ```
 
-`kS` takes the sign of the velocity, or of the acceleration when the velocity
-setpoint is exactly zero, so the first tick of a motion still gets the static
-term. With both zero the output is 0 V, not +kS: a robot that is meant to stand
-still should not be pushed in an arbitrary direction.
+`kS` uses the sign of the velocity, or of the acceleration when velocity is
+zero. When both are zero, the output is 0 V.
 
-### Identifying kS, kV and kA on your robot
+### Measuring kS and kV
 
-A feedforward model nobody can measure is decoration, so both fits ship with
-the library.
-
-**kS and kV.** On a long clear stretch of field, or on blocks:
-
-1. Command a fixed voltage to both sides of the drive. Start around 2 V.
-2. Wait for the speed to stop changing - 500 ms is plenty.
-3. Record the commanded voltage and the measured velocity as one
-   `VelocitySample`. Take the velocity from odometry or from the drive
-   encoders through `DriveGeometry::encoderToDistance()`, **not** from the
-   motor's own `get_actual_velocity()`, which is already filtered.
-4. Repeat in roughly 1 V steps up to 12 V. Eight to twelve points is plenty.
-5. Do the whole run again in reverse and append those samples too.
+1. Apply a fixed voltage to both sides of the drive, starting at 2 V.
+2. Wait about 500 ms for the speed to settle.
+3. Record the voltage and measured speed as a `VelocitySample`. Measure speed
+   with odometry or `DriveGeometry::encoderToDistance()`, not the motor's
+   `get_actual_velocity()`.
+4. Repeat in 1 V steps up to 12 V.
+5. Repeat in reverse.
 
 ```cpp
 const VelocityFit fit = fitVelocityGains(samples, count);
 // fit.kS, fit.kV, fit.r_squared, fit.used
 ```
 
-Reverse samples are folded onto the forward branch internally - each sample's
-voltage and velocity are both multiplied by the sign of its velocity - so a
-bidirectional run fits one symmetric model rather than two half-models.
-Samples slower than `min_speed` (1 in/s by default) are dropped, so the "3 V,
-did not move" point cannot drag the intercept down. **Check `r_squared`.**
-Below about 0.98 the data is wrong, not the model: samples taken before the
-speed settled, a battery that sagged during the run, or a drivetrain binding.
+Samples slower than `min_speed` (default 1 in/s) are ignored. An `r_squared`
+below about 0.98 means bad data: the speed had not settled, the battery sagged,
+or the drivetrain is binding.
 
-**kA**, once kS and kV are known:
+### Measuring kA
 
-1. Ramp the voltage linearly 0 → 12 V over about two seconds, logging voltage,
-   velocity and acceleration every tick.
-2. Acceleration comes from differencing the velocity, and a raw difference of
-   encoder velocity is mostly noise - filter it. A three-point central
-   difference over a 10 ms loop is usually enough.
-3. `fitAccelerationGain(samples, count, {.kS = fit.kS, .kV = fit.kV})`.
+1. Ramp the voltage from 0 to 12 V over about 2 s, logging voltage, velocity and
+   acceleration each tick.
+2. Compute acceleration from velocity with a three-point central difference.
+3. Call `fitAccelerationGain(samples, count, {.kS = fit.kS, .kV = fit.kV})`.
 
-That fit is a least-squares line **through the origin** of the leftover
-voltage `V - kS*sgn(v) - kV*v` against acceleration, because the model says
-that residual is exactly `kA * a`. Fitting an intercept instead would silently
-absorb an error in kS.
+`kA` matters least. Leave it at 0 if the fit is unreliable.
 
-kA is the least important of the three and the hardest to measure. A model
-with `kA` left at zero still takes most of the work off the PID; a fitted kA
-you do not trust is worse than none.
-
-### The follower
+### Following a profile
 
 ```cpp
 ProfileFollower follower({
@@ -175,43 +119,28 @@ while (!follower.isFinished()) {
 }
 ```
 
-The PID inside runs with `setUseDt(true)` - this is new code, so there are no
-gains fitted against the historical raw-delta numerics to protect, and real
-rates are what `kd` should mean. It also runs with `setArrive(false)`: a
-profile ends when the profile ends, and a latched arrival mid-cruise would zero
-the output while the robot was still moving. The integral is clamped at 2 V by
-default rather than PID's unbounded 0, because a follower stalled against a
-wall would otherwise wind up the whole battery.
+`ProfileFollower` combines the profile, feedforward and a P loop on position.
+Its PID uses the real time step, does not stop early on arrival, and limits the
+integral to 2 V. With good feedforward, `kp` stays small.
 
-With a good model `kp` is small, because it only corrects modelling error.
+`calculate(setpoint, measured, dt)` computes one step from a given setpoint and
+time step.
 
-`calculate(setpoint, measured, dt)` is the seam a path follower uses: it brings
-its own setpoint and its own timestep and never touches the follower's
-stopwatch.
+`attachTelemetry(&logger)` logs setpoint position and velocity, measured
+position, error, and the feedforward and feedback parts of the output. If
+feedback is large compared to feedforward, re-measure the gains.
 
-`attachTelemetry(&logger)` registers six columns - setpoint position and
-velocity, measured position, error, and the feedforward/feedback split of the
-command - and writes them on every `update()`. Tune from that split. A
-feedback term that is large next to the feedforward means the model is wrong,
-and raising `kp` will not fix it. The follower never calls `sample()`; the
-control loop owns the cadence.
+## Paths and pure pursuit
 
-## Paths and pure pursuit (`mclib/path/`)
+`mclib/path/`. Pure pursuit follows a path by steering toward a point a fixed
+distance ahead on it (the lookahead), so the robot drives through waypoints
+without stopping.
 
-Multi-segment autons used to mean chaining point-to-point moves, each one
-stopping dead at its endpoint. `mclib/path/` replaces that with a path the
-robot follows without stopping.
-
-Three files, all PROS-free and host-tested:
-
-- `path/path.hpp` - `Waypoint`, `PathPoint`, and `Path`: an ordered list of
-  baked samples in field coordinates, each carrying position, tangent heading,
-  signed curvature and arc length from the start. Query it by arc length
-  (`atDistance`), by normalised parameter (`atParameter`), or ask for
-  `length()` and `maxAbsCurvature()`.
-- `path/spline.hpp` - `generateSpline()`, a centripetal Catmull-Rom.
-- `path/pure_pursuit.hpp` - the follower, plus the free functions
-  `curvatureSpeedLimit()`, `approachSpeedLimit()` and `wheelSpeeds()`.
+| Header | Contents |
+| --- | --- |
+| `path/path.hpp` | `Waypoint`, `PathPoint`, `Path`: samples with position, heading, curvature and distance along the path |
+| `path/spline.hpp` | `generateSpline()`: a smooth curve through every waypoint |
+| `path/pure_pursuit.hpp` | `PurePursuit`, `curvatureSpeedLimit()`, `approachSpeedLimit()`, `wheelSpeeds()` |
 
 ```cpp
 #include "mclib/mclib.hpp"
@@ -241,140 +170,77 @@ while (true) {
 }
 ```
 
-### Frame and sign
+Query a path with `atDistance()`, `atParameter()`, `length()` and
+`maxAbsCurvature()`.
 
-Field frame, compass convention: heading 0 is +Y, clockwise-positive
-(`math.hpp`). **Curvature is signed the way `mclib::arcRadius()` is: positive
-curves to the robot's right.** `PurePursuitOutput::cross_track_error` is
-positive when the robot is to the *right* of the path, so a correct follower
-answers a positive cross-track error with a negative curvature. `tests/
-path_test.cpp` asserts both directions explicitly, because a transposed frame
-compiles and runs and merely drives into a wall.
+### Signs
 
-The sign comes from the heading of the *segment* the projection landed on, not
-from `Path::atDistance()`. A polyline's heading is only defined per segment, so
-`atDistance()` ramps between vertex headings, which scales the reported error
-by `cos(the ramp)`, and flips its sign on a corner sharper than 90 degrees,
-which is the hairpin case.
+Heading 0 is +Y and positive is clockwise. Positive curvature turns right.
+`cross_track_error` is positive when the robot is right of the path.
 
-The basic frame check is a straight path from `(0, 0)` to `(0, 10)`, with the
-robot at the origin at heading 0 and a 5 in lookahead. The goal point
-comes back as exactly `(0, 5)` and the curvature as exactly `0`.
+### Splines
 
-### Why Catmull-Rom
+`generateSpline()` builds a centripetal Catmull-Rom spline. The curve passes
+through every waypoint, and position and heading are continuous across them.
+Curvature can change suddenly at a waypoint.
 
-An auton is written as "drive through these field positions". Catmull-Rom
-**interpolates** - the curve passes through every waypoint you type. A Bezier
-approximates: its interior control points are not on the curve, so the author
-places handles that mean nothing on a field diagram and the robot does not go
-through the numbers they wrote down.
+### Follower behavior
 
-The parameterisation is **centripetal** (alpha = 0.5). Uniform Catmull-Rom
-overshoots and can form a cusp or a loop when waypoint spacing is uneven, which
-is the exact shape that makes a pure-pursuit follower spin.
-
-The curve is **C1**: the two segments either side of a waypoint share a
-tangent, so position and heading are continuous across it. It is not C2 -
-curvature steps at a waypoint. `tests/path_test.cpp` samples 4000 points across
-a four-waypoint spline and asserts the heading change across each interior knot
-is no more than the local curvature times the arc length across it.
-
-End conditions are the part that naive Catmull-Rom gets wrong. Reflecting a
-phantom point through the first knot yields the one-sided slope: exact for a
-straight line, badly wrong for anything curved. On a 48 in circular arc it made
-the first segment's curvature swing through zero and overshoot to 2/R, and the
-curvature velocity limiter believed it and halved the speed for the first two
-inches of every path. The end tangents are the derivative of the quadratic
-through the first (and last) three knots instead, which reproduces a circle to
-0.4%: measured curvature 0.020793 /in against an exact 1/48 = 0.020833 /in.
-
-### The cases that break naive followers
-
-- **More than one intersection.** The lookahead circle can cut the path in
-  several places. The follower takes the **first intersection at or after a
-  monotone lookahead cursor**, walking segments forward from where it stopped
-  last tick. It takes the first intersection ahead, not the furthest along,
-  because on a hairpin the far branch is also inside the circle, and chasing it
-  cuts the corner and abandons the rest of the path.
-  The search runs twice. The first pass walks forward from the lookahead
-  cursor. The second restarts at the closest point, and only runs when the
-  first found nothing. Without it, a robot shoved back two inches leaves the
-  cursor ahead of its own lookahead circle and the follower reports the end of
-  the path with 30 in still to drive. The retry never starts behind the closest
-  point, so it cannot undo the doubling-back guarantee.
-- **Off the path.** When the closest path point is further away than the
-  lookahead, no intersection exists at all. The follower aims at the path point
-  one lookahead *beyond the closest point* - a rejoin, not a lunge at the
-  endpoint - and reports `off_path = true`. `finished` is vetoed while
-  `off_path` is set, so being shoved past the end of the route does not count
-  as arriving.
-- **The goal ends up behind the robot.** This is the one that drives into a
-  wall. `arcRadius()` returns `+infinity` for a goal straight ahead **and** for
-  one straight behind (both have zero lateral offset), so a reversed robot
-  gets curvature 0 and full speed away from the path, and the forward-only
-  cursor means it never recovers. Anything strictly behind the robot gets the
-  tightest turn available instead, toward whichever side the goal is on.
-  Exactly abeam is left alone: the arc through it is a well-defined semicircle,
-  not a degenerate case.
-- **End of path.** When the search runs off the end, the goal is the final path
-  point and `at_end` is true. The effective lookahead then shrinks as the robot
-  arrives, so commanded curvature is clamped to `max_curvature` (default a 6 in
-  radius). Once the remaining arc length is inside `finish_tolerance`,
-  `finished` is true and both wheel speeds are zero.
-- **Doubling back.** Both search cursors move forward only, and the
-  closest-point search is bounded to `search_window` (default 24 in) of arc
-  length ahead. The test drives up an outbound leg whose return leg is 4 in
-  away in field space; an unguarded nearest-point search latches onto the
-  return leg, this one does not. The window is enforced on the parameter
-  *inside* a segment, not only on whole samples. One segment of a
-  `fromWaypoints()` polyline can be longer than the whole window, and without
-  that check a single bad pose skips the rest of the route.
+| Situation | Behavior |
+| --- | --- |
+| Lookahead circle crosses the path more than once | follows the first crossing ahead of its last position |
+| No crossing found ahead | searches again from the closest point |
+| Robot farther from the path than the lookahead | aims at the path one lookahead past the closest point and sets `off_path`; `finished` stays false |
+| Target behind the robot | turns as tightly as allowed toward it |
+| Near the end | aims at the last point and sets `at_end`; curvature is limited to `max_curvature` (default 6 in radius) |
+| Within `finish_tolerance` of the end | sets `finished` and outputs zero |
+| Path doubles back near itself | the closest-point search only looks `search_window` (default 24 in) ahead |
 
 ### Speed
 
-Three limits, smallest wins:
+The commanded speed is the smallest of:
 
 | Limit | Formula |
 | --- | --- |
-| Configured cap | `max_velocity` |
-| Cornering | `sqrt(max_lateral_accel / k)` over the tightest curvature in the next lookahead of path |
+| `max_velocity` | fixed |
+| Cornering | `sqrt(max_lateral_accel / k)` for the tightest curvature within one lookahead |
 | Stopping | `sqrt(2 * max_decel * remaining)` |
 
-A non-positive `max_lateral_accel` or `max_decel` means "no limit". Treating it
-as "speed zero" would pin the robot at `min_velocity` for the whole path when
-you switch the endpoint ramp off.
+`max_lateral_accel` or `max_decel` at 0 or below disables that limit.
+`min_velocity` sets a minimum. Both wheels scale down together if either would
+exceed `max_velocity`.
 
-`min_velocity` is a floor under the result while the path is unfollowed, and
-the pair is scaled down together if `wheelSpeeds()` would put either wheel over
-`max_velocity`. Measured, with 60 in/s^2 of lateral budget: a 48 in radius arc
-runs at 42.7 in/s (the 48 in/s cap, scaled by the 1.125 outer-wheel spread), a
-10 in radius arc at 24.5 in/s, an 8 in radius at 21.9, a 2 in radius at 11.0.
+With 60 in/s² lateral acceleration: a 48 in radius runs at 42.7 in/s, 10 in at
+24.5 in/s, 8 in at 21.9 in/s and 2 in at 11.0 in/s.
 
-These are stateless kinematic one-liners on purpose. A trapezoidal or S-curve
-profile layers on top by ignoring `PurePursuitOutput::velocity` and feeding the
-profile's speed through `wheelSpeeds()` with the reported curvature.
+To use a motion profile instead, ignore `PurePursuitOutput::velocity` and pass
+the profile speed and the reported curvature to `wheelSpeeds()`.
 
 ### Logging
 
-`PurePursuit::attachLogger(logger)` registers five channels - goal x, goal y,
-cross-track error, curvature in 1/in, and commanded velocity - and every
-`update()` writes them.
+`PurePursuit::attachLogger(logger)` logs goal x, goal y, cross-track error,
+curvature (1/in) and commanded velocity on every `update()`.
 
-### Do not use `getRadius()`
+## Holonomic drives
 
-`utils.hpp`'s `getRadius()` is frame-transposed and returns 5.0 for a target
-dead ahead, where the true radius is infinite. `mclib::arcRadius()` in
-`math.hpp` is the correct primitive and is what this unit calls.
+X-drive and mecanum support, in three parts:
 
-## Holonomic drive (X-drive and mecanum)
+| Header | Contents |
+| --- | --- |
+| `chassis/holonomic_math.hpp` | `holonomic::mix(forward, strafe, turn, kind)` converts -1..1 commands to four wheel outputs, scaled down together if any exceeds 1. `holonomic::fieldToRobot(field_x, field_y, heading_rad)` converts a field-relative command. |
+| `chassis/holonomic_chassis.hpp` | `HolonomicChassis`: four motor groups and an optional IMU |
+| `chassis/holonomic_controller.hpp` | `HolonomicController`: the subsystem, with driver control and `moveToPose()` |
 
-Three pieces, mirroring `Chassis` / `ChassisController` for a four-wheel holonomic base.
+Strafe is positive to the right; turn is positive clockwise. Motor order is
+front-left, front-right, back-left, back-right, viewed from above with the front
+at the top. Use negative ports for reversed motors. Check wiring with
+`drive(1, 0, 0)`: the robot should drive straight forward.
 
-`include/mclib/chassis/holonomic_math.hpp` is the arithmetic, host-tested. `holonomic::mix(forward, strafe, turn, kind)` turns three -1..1 commands into four wheel fractions (`front_left`, `front_right`, `back_left`, `back_right`), scaled down together if any would exceed 1 so the direction of travel survives saturation. Strafe is positive to the right, turn positive clockwise. `holonomic::fieldToRobot(field_x, field_y, heading_rad)` rotates a field-frame command into the robot frame using the library's compass convention (0 = +Y, clockwise positive). Both layouts use the same four sums; the enum records which robot you have.
-
-`HolonomicChassis` owns the four motor groups and an optional IMU. Wheel order is front_left, front_right, back_left, back_right looking down with forward at the top; reverse a motor with a negative port. Test `drive(1, 0, 0)` first: a wheel wired backward makes forward look like a strafe plus a turn.
-
-`HolonomicController` is the subsystem. `moveToPose()` runs a distance PID along the bearing to the target and a heading PID on the wrapped heading error, both on the odometry pose from `control::robotState()`, and settles when both arrive or the timeout expires. Every exit writes the motors: hold at the end by default, zero volts when `stop_at_end` is false so a chained move keeps its momentum. It needs `control::startOdometry()` running, or the pose never moves.
+`moveToPose()` drives toward the target with one PID on distance and one on
+heading, using the odometry pose. It finishes when both arrive or on timeout.
+By default it holds at the end; with `stop_at_end = false` it sets 0 V so a
+following move starts with the robot still moving. Requires
+`control::startOdometry()`.
 
 ```cpp
 #include "mclib/chassis/holonomic_chassis.hpp"
@@ -418,4 +284,8 @@ void autonomous() {
 }
 ```
 
-`makeDriveCommand()` reads three stick axes (defaults: left Y forward, left X strafe, right X turn), shapes each through its own `DriveCurve`, and drives field-centric when the config says so: pushing the left stick up always moves the robot toward field +Y whichever way it faces. Set `field_centric_teleop = false` for robot-centric sticks. `drive.driveFieldCentric(x, y, turn)` and `drive.drive(forward, strafe, turn)` are the two primitives underneath.
+`makeDriveCommand()` reads left Y (forward), left X (strafe) and right X (turn),
+each shaped by its own `DriveCurve`. With `field_centric_teleop = true`, pushing
+the left stick forward moves the robot toward field +Y regardless of its
+heading. `drive.driveFieldCentric(x, y, turn)` and
+`drive.drive(forward, strafe, turn)` are the underlying calls.

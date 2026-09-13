@@ -1,15 +1,11 @@
-# Units and the coordinate frame
+# Units and coordinates
 
-The compile-time unit types, and the field frame every pose and heading is expressed in.
+## Units
 
-[Documentation index](README.md) · [Project README](../README.md)
-
-## Units (`units/units.hpp`)
-
-Every dimensioned value in mclib is a `Quantity`: one `double` wrapped in a type
-that carries five integer exponents - length, time, angle, voltage, current.
-Multiplying adds the exponents, dividing subtracts them, so `QLength / QTime`
-*is* `QVelocity` and `QLength + QTime` does not compile.
+`mclib/units/units.hpp`. Distances, times, angles, voltages and currents are
+typed values instead of plain numbers. The compiler checks that units combine
+correctly: a length divided by a time is a velocity, and adding a length to a
+time does not compile.
 
 ```cpp
 QLength distance = 24_in;
@@ -21,49 +17,43 @@ QLength   back  = speed * timeout;      // 24 in again
 // QLength wrong = distance + timeout;  // error: no operator+
 ```
 
-A `Quantity` is the same size as the `double` it replaces, all its operations
-are `constexpr` and `inline`, and none of it survives to the ELF - the section
-sizes of `bin/cold.package.elf` are unchanged by the migration.
+A unit type is exactly as fast and as large as a `double`. Values are still
+floating point, so `(24_in).in()` is `23.999999999999996`; compare with a
+tolerance, not `==`.
 
-It is still floating point underneath, so do not expect exact decimal
-round-trips: `(24_in).in()` is `23.999999999999996`, because `24.0 * 0.0254` is
-not representable. Compare with a tolerance, never with `==`.
-
-### Aliases
+### Types
 
 `QNumber`, `QLength`, `QArea`, `QTime`, `QAngle`, `QVoltage`, `QCurrent`,
 `QVelocity`, `QAcceleration`, `QJerk`, `QAngularVelocity`,
 `QAngularAcceleration`, `QCurvature` (1/length), `QFrequency` (1/time).
 
-Anything else you need is a valid type already: `QVoltage / QCurrent` is a
-resistance, `square(QLength{}) ` is an area.
+Other combinations are valid types too, e.g. `QVoltage / QCurrent`.
+
+`QNumber` (a unitless number) converts to and from `double` automatically.
+Other types must be created with a literal or constructor.
 
 ### Literals
 
-`_m` `_cm` `_mm` `_in` `_ft` `_tile` - length (a `_tile` is 24 in)
-`_s` `_ms` `_min` - time
-`_rad` `_deg` `_rot` - angle
-`_V` `_mV` `_A` `_mA` - voltage and current
-`_mps` `_inps` `_mps2` `_radps` `_degps` `_rpm` - rates
+| Dimension | Literals |
+| --- | --- |
+| Length | `_m` `_cm` `_mm` `_in` `_ft` `_tile` (24 in) |
+| Time | `_s` `_ms` `_min` |
+| Angle | `_rad` `_deg` `_rot` |
+| Voltage, current | `_V` `_mV` `_A` `_mA` |
+| Rates | `_mps` `_inps` `_mps2` `_radps` `_degps` `_rpm` |
 
-Named constants exist for all of them too, for when the number is not a
-literal: `metre`, `inch`, `tile`, `minute`, `degree`, `radian`, `rotation`,
-`volt`, `millivolt`, `ampere`, `milliampere`, `rpm`, `percent`. These live in
-`mclib::units` and are **not** global, so qualify them or pull the namespace in:
+Named constants (`metre`, `inch`, `tile`, `minute`, `degree`, `radian`,
+`rotation`, `volt`, `millivolt`, `ampere`, `milliampere`, `rpm`, `percent`) are
+in `mclib::units`:
 
 ```cpp
 using namespace mclib::units;
 QLength target = 24 * inch;
 ```
 
-The two exceptions are `millisecond` and `second`, which stay global for
-back-compat, so `250 * millisecond` and `pros::millis() * millisecond` work
-unqualified anywhere.
+`millisecond` and `second` are also global.
 
-### Getting a raw double back out
-
-Both directions of the escape hatch are explicit, because both are where unit
-bugs come from.
+### Converting to `double`
 
 ```cpp
 double ms = timeout.ms();       // named accessor - says what the number means
@@ -74,20 +64,24 @@ double mv = battery.mV();
 QLength from_raw{0.6096};       // explicit ctor, value in SI base units
 ```
 
-Accessors: `.m() .cm() .mm() .in() .ft()`, `.s() .ms()`, `.rad() .deg()`,
-`.volts() .mV()`, `.amps() .mA()`, `.mps() .inps()`, `.radps() .degps() .rpm()`.
-Each is constrained to its own dimension, so `timeout.in()` is a compile error
-rather than a wrong number. Free-function spellings - `inches(x)`,
-`milliseconds(t)`, `degrees(a)` - exist for call sites where they read better.
-`.raw()` gives the stored value in SI base units and is the escape hatch of last
-resort.
+| Dimension | Accessors |
+| --- | --- |
+| Length | `.m()` `.cm()` `.mm()` `.in()` `.ft()` |
+| Time | `.s()` `.ms()` |
+| Angle | `.rad()` `.deg()` |
+| Voltage | `.volts()` `.mV()` |
+| Current | `.amps()` `.mA()` |
+| Velocity | `.mps()` `.inps()` |
+| Angular velocity | `.radps()` `.degps()` `.rpm()` |
+
+An accessor for the wrong dimension does not compile. Free functions
+`inches(x)`, `milliseconds(t)` and `degrees(a)` do the same. `.raw()` returns
+SI base units.
 
 ### Angles
 
-`QAngle` stores **radians**. The public motion API of this library speaks
-degrees and `Pose2D::theta` speaks radians, so every conversion is a visible
-method call (`.deg()` / `.rad()`). Angle is a real dimension, so
-`radius * angle` does not type-check on its own - use the sanctioned crossings:
+`QAngle` stores radians. The motion functions take degrees and `Pose2D::theta`
+is in radians. Use these helpers to combine angles with lengths:
 
 ```cpp
 QLength arc     = arcLength(radius, angle);      // radius * angle
@@ -97,92 +91,53 @@ QAngularVelocity turn = turnRate(speed, curvature);   // speed * curvature
 QCurvature k    = turnCurvature(speed, omega);        // the inverse
 ```
 
-Pure pursuit needs `turnRate`. `speed * curvature` on its own is a
-`QFrequency`: the arithmetic is right but the dimension is wrong.
+`wrap(angle)` wraps into [-180°, +180°], matching `mclib::wrapAngle(double)`.
 
-`wrap(angle)` folds an angle into [-180 deg, +180 deg], using the same algorithm
-and the same closed range as the pre-existing `mclib::wrapAngle(double)`,
-including at exactly -180 deg. Two wrapping functions that disagreed on that
-edge would be a trap for motion code migrating from `double` to `QAngle`.
+### Math
 
-### Math helpers
+`abs`, `min`, `max` and `clamp` keep the unit. `sign` returns -1, 0 or +1.
+`square` squares the unit (a length becomes an area). `sin`/`cos`/`tan` take a `QAngle`;
+`asin`/`acos`/`atan` return one. `atan2(QLength, QLength)` returns a `QAngle`
+and `hypot(QLength, QLength)` a `QLength`.
 
-`abs`, `min`, `max` and `clamp` return the same dimension they were given.
-`sign` returns a plain double (-1, 0 or +1) and `square` doubles the exponents.
-`sin/cos/tan` take a `QAngle` and return a plain double; `asin/acos/atan` go the
-other way; `atan2(QLength, QLength)` returns a `QAngle` and
-`hypot(QLength, QLength)` a `QLength`.
+### Global names
 
-### Namespaces and back-compat
-
-Everything lives in `mclib::units`. For back-compat the type aliases, the
-`millisecond` / `second` constants and all literal operators are also pulled
-into the global namespace, so the pre-existing idiom keeps working unchanged:
+The type aliases, `millisecond`, `second` and all literals are also in the
+global namespace:
 
 ```cpp
 QTime now = pros::millis() * millisecond;
 if (now - start >= 250 * millisecond) { /* ... */ }
 ```
 
-The global surface is split in two. `QTime`, `millisecond` and `second` are
-unconditional, because mclib's own headers use them unqualified at about 33
-sites and the library would stop compiling without them. The other 13 aliases
-and all the literal suffixes are convenience, and defining
-`MCLIB_NO_GLOBAL_UNITS` before including mclib switches them off.
-
-That opt-out exists for a specific collision: okapilib declares the same
-`QLength` / `QAngle` / `QArea` / `QJerk` / `QFrequency` / `QAcceleration` names
-and the same `_in` / `_ft` / `_deg` / `_rad` / `_ms` / `_s` / `_rpm` suffixes, so
-a project doing `using namespace okapi;` alongside mclib would get ambiguity on
-all of them. With the macro defined, reach for `mclib::units::` instead.
-
-The `Quantity` template itself is never exported globally. Spell it
-`mclib::units::Quantity`, so a global `class Quantity` in your own code does not
-become ambiguous.
-
-`QNumber` (all exponents zero) converts implicitly to and from `double`, so
-gains and gear ratios work with plain arithmetic. That is the one hole in the
-type safety. Every other dimension requires the explicit
-constructor.
+Define `MCLIB_NO_GLOBAL_UNITS` before including mclib to remove the aliases
+(except `QTime`) and the literals from the global namespace, e.g. when using
+okapilib. `QTime`, `millisecond` and `second` stay global. `Quantity` is only
+available as `mclib::units::Quantity`.
 
 ### Tests
-
-`tests/units_test.cpp` is a standalone host program:
 
 ```sh
 g++ -std=gnu++20 -Iinclude -o /tmp/units_test tests/units_test.cpp && /tmp/units_test
 ```
 
-It covers dimension composition, literal values, round-tripping and the old
-`QTime` millisecond semantics. The checks that dimensionally-wrong code does
-*not* compile are written as concepts whose negation is asserted - if
-`QLength + QTime` ever starts compiling, that file stops building.
+## Coordinate frame
 
-## Coordinate Frame
+mclib uses one field frame:
 
-mclib has one canonical frame, the **compass / field frame**:
+- `theta = 0` points along +Y
+- `theta` increases clockwise, so +90° points along +X
+- the unit vector for a heading is `(sin(theta), cos(theta))`
+- the bearing from A to B is `atan2(b.x - a.x, b.y - a.y)`
 
-- `theta = 0` points along **+Y**.
-- `theta` increases **clockwise**, so **+90 deg points along +X**.
-- The unit vector for a heading is `(sin(theta), cos(theta))`: x uses sin, y
-  uses cos.
-- A bearing from A to B is `atan2(b.x - a.x, b.y - a.y)`: x first, y second.
+The robot frame matches the field frame at `theta = 0`: +Y forward, +X right.
 
-Both of those are the transpose of the usual textbook formulas. That matches how
-VEX field diagrams are drawn, and it is what `control/odometry.cpp`,
-`control/motion.cpp` and `snapshot/raycast.cpp` do.
+`math.hpp` uses radians (`Pose2D::theta`, `wrapAngle`). The motion API
+(`Chassis`, `control/motion.cpp`, `RobotState::correctAngleDeg()`) uses
+degrees. Convert with `degToRad` / `radToDeg` from `utils.hpp`. Distances are
+inches.
 
-Units: angles are **radians** everywhere inside `math.hpp` (`Pose2D::theta`,
-`wrapAngle`), and **degrees** at the public motion API (`Chassis`,
-`control/motion.cpp`, `RobotState::correctAngleDeg()`). Convert at that boundary with
-`degToRad` / `radToDeg` from `utils.hpp`. Translations are inches.
-
-The robot frame is chosen to coincide with the field frame at `theta = 0`:
-**+Y is forward, +X is the robot's right.**
-
-### Converting between frames
-
-Use these instead of writing `sin`/`cos` by hand:
+### Frame conversions
 
 ```cpp
 Pose2D compose(const Pose2D& base, const Pose2D& local);
@@ -198,30 +153,18 @@ Vec2 robotPointToField(const Vec2& robot_point, const Pose2D& robot_pose);
 double arcRadius(const Pose2D& from, const Vec2& target);
 ```
 
-`fieldToRobot` / `robotToField` take a displacement and only rotate it. The
-`...Point...` variants translate first, so they answer "where is this field
-point relative to the robot".
+`fieldToRobot` and `robotToField` rotate a displacement. The `...Point...`
+versions also translate.
 
-### `rotationMatrix` and `rotate` are not the field convention
+`rotationMatrix(rad)` and `rotate()` use the standard counter-clockwise frame
+with zero along +X. Do not use them for poses or waypoints; use `fieldToRobot`
+and `robotToField`.
 
-`rotationMatrix(rad)` is the standard textbook rotation: counter-clockwise,
-zero along +X, `[[cos, -sin], [sin, cos]]`. Keep using it for generic linear
-algebra. Do **not** use it to move a pose or a waypoint between frames.
+### `Pose2D::operator+`
 
-Feeding it a compass heading turns the wrong way: `rotate({0, 1}, rad)` gives
-`(-sin, cos)`, while a robot at that heading actually points at `(sin, cos)`.
-Because the two frames are transposes, `rotationMatrix(rad)` happens to equal
-the field-to-robot matrix, so `rotate()` with a compass heading silently does
-`fieldToRobot()`, the inverse of what "rotate my local offset into the
-field" means. Call `fieldToRobot` / `robotToField` and the bug cannot happen.
-
-### `Pose2D::operator+` is not a compose
-
-`operator+` adds `x`, `y`, and `theta` component-wise and wraps `theta`. It
-does **not** rotate the incoming translation by the existing heading, so it is
-"add a field-frame offset", not "move in my own frame". `compose(base, local)`
-is the real SE(2) operation: `local` is interpreted in `base`'s frame, with
-`local.x` to the right and `local.y` forward.
+`operator+` adds `x`, `y` and `theta` component-wise in the field frame and
+wraps `theta`. `compose(base, local)` applies `local` in `base`'s frame, with
+`local.x` right and `local.y` forward.
 
 ```cpp
 Pose2D p{0, 0, degToRad(90)};            // facing +X

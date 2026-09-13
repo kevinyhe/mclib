@@ -1,89 +1,59 @@
-# Installation and building
+# Installation
 
-How to get mclib into a PROS project, what it depends on, and how to build it from source.
+## Install the template
 
-[Documentation index](README.md) · [Project README](../README.md)
-
-## Install into a PROS project
-
-mclib ships as a PROS template, the same way LemLib does. You need the PROS CLI
-(`pip install pros-cli`) and a PROS 4 project.
+Requires the PROS CLI (`pip install pros-cli`) and a PROS 4 project.
 
 1. Download `mclib@<version>.zip` from the
-   [releases page](https://github.com/kevinyhe/mclib/releases).
-2. From inside your project directory:
+   [releases page](https://github.com/kevinyhe/mclib/releases). Keep the
+   filename; `pros c fetch` reads the name and version from it.
+2. In the project directory:
 
 ```sh
 pros c fetch mclib@0.1.0.zip
 pros c apply mclib
 ```
 
-`fetch` puts the template in the local cache, which every project on the
-machine shares. `apply` copies the headers and the compiled archive into one
-project and records the dependency in its `project.pros`, so run `apply` in
-each project that uses mclib.
-
-Then include the umbrella header:
-
 ```cpp
 #include "mclib/mclib.hpp"
 ```
 
-To move to a newer mclib later, fetch the new zip and run `pros c apply mclib
---force-apply`. To remove it, `pros c uninstall mclib`.
+`fetch` adds the template to the shared PROS cache. `apply` copies it into the
+current project and records it in `project.pros`.
 
-### Version pinning
+| Task | Command |
+| --- | --- |
+| Pin a version | `pros c apply mclib@0.1.0` |
+| Upgrade | fetch the new zip, then `pros c apply mclib --force-apply` |
+| Remove | `pros c uninstall mclib` |
 
-`pros c apply mclib@0.1.0` pins an exact version when several are cached. With
-no version, the newest cached one wins. Pin it. You do not want to find out at a
-competition that a library upgrade changed a default gain.
+The template installs:
 
-### What lands in your project
+- `include/mclib/**` - headers
+- `include/Eigen/**` - Eigen headers
+- `firmware/mclib.a` - the library, with debug symbols
 
-- `include/mclib/**` - the public headers.
-- `include/Eigen/**` - the bundled Eigen headers the public API needs.
-- `firmware/mclib.a` - the compiled library.
-
-The archive is built with debug symbols, so it is large (roughly 21 MB) and the
-template zip is larger still. The linker only pulls in the code you call, so
-none of that size reaches the brain.
-
-## Building
-
-Build the PROS project:
+## Build from source
 
 ```sh
-pros make
-```
-
-Build the PROS library archive:
-
-```sh
-pros make library
-```
-
-Create a PROS template package:
-
-```sh
-pros make template
+pros make            # build the project
+pros make library    # build bin/mclib.a
+pros make template   # package mclib@<version>.zip
 ```
 
 ## Eigen
 
-Eigen is header-only here. Keep the headers local so this path exists:
+Eigen is header-only. Either path works:
 
 ```text
 include/Eigen/Core
 ```
 
-You can also use this alternate layout:
-
 ```text
 eigen/Eigen/Core
 ```
 
-The `Makefile` already adds `eigen/` as an extra include directory. Do not add
-Eigen files to the compiled source list.
+Do not add Eigen to the compiled sources.
 
 ## Layout
 
@@ -136,23 +106,17 @@ mclib/
 make test
 ```
 
-`make test` compiles the host-buildable library sources once into objects,
-links every `tests/*.cpp` into its own binary with the system `g++`, and runs
-them all. `make -j8 test` builds in parallel; a full build takes about a
-minute and an incremental one under a second. It never touches the ARM
-toolchain, never links PROS, and never runs the firmware build. Binaries land
-in `bin/tests/`, which is already gitignored, and `make clean` removes them.
+`make test` builds each `tests/*.cpp` into its own host binary with `g++` and
+runs it. It does not use PROS or the ARM toolchain. Use `make -j8 test` to build
+in parallel. Binaries go to `bin/tests/`.
 
-`tests/` sits at the repo root, outside `src/`. `common.mk` globs
-`src/**` recursively into the firmware, so a test directory under `src/` would
-be compiled into the library. Do not move it, and do not add `tests/` to
-`TEMPLATE_FILES`.
+Keep `tests/` outside `src/`. `common.mk` compiles everything under `src/` into
+the library.
 
 ### Writing a test
 
-One test per file, each with its own `int main()`. There is no framework, no
-registration macro, and nothing to add to the `Makefile`. The glob picks up
-any new `tests/*.cpp` on the next run.
+One file per test, each with its own `main()`. New files are picked up
+automatically.
 
 ```cpp
 // mclib
@@ -168,16 +132,13 @@ int main() {
 }
 ```
 
-`tests/test_assert.hpp` gives you three macros:
-
-| Macro | Use |
+| Macro | Checks |
 | --- | --- |
-| `CHECK(cond)` | boolean condition |
-| `CHECK_NEAR(actual, expected, eps)` | floating point within a tolerance |
-| `CHECK_EQ(actual, expected)` | exact equality on doubles |
+| `CHECK(cond)` | condition is true |
+| `CHECK_NEAR(actual, expected, eps)` | within a tolerance |
+| `CHECK_EQ(actual, expected)` | exact equality |
 
-Prefer the numeric ones. A failure prints the file, the line, the expression,
-and both values:
+A failure prints the file, line, expression and both values, then continues:
 
 ```text
 == utils_test
@@ -188,17 +149,12 @@ FAIL utils (1 of 120 checks failed)
 FAILED TESTS: utils_test
 ```
 
-A failed assertion does not stop the run, so one invocation reports every
-broken check. `mclib::test::summary()` returns 0 when everything passed and 1
-otherwise; `make test` exits non-zero and names each failing binary.
+`mclib::test::summary()` returns 0 if every check passed.
 
-### Documenting a bug you are not allowed to fix
+### Known bugs
 
-Do not `CHECK` the wrong value. Pinning known-bad behaviour means the person
-who eventually fixes it gets a red build blamed on their commit. Use
-`mclib::test::knownBug(still_present, "what is wrong")` instead. It prints
-either `KNOWN BUG (still present)` or `KNOWN BUG (appears FIXED, update this
-test)` and never touches the exit code.
+Record a known bug with `knownBug()` instead of checking for the wrong value. It
+prints the bug's status and does not affect the exit code.
 
 ```cpp
 const double near_degenerate = getRadius(0.0, 0.0, 0.0, 1.0, -90.0);
@@ -208,21 +164,10 @@ mclib::test::knownBug(
     "~1e15 instead of +infinity");
 ```
 
-### What can be tested
+### Host-testable sources
 
-Tests link against `HOST_TEST_SRC` in the `Makefile`, the library sources that
-compile without PROS headers: the math, the PID, the odometry integrator, the
-motion profile and feedforward, the path follower, the snapshot solver, the
-mechanisms, the command scheduler, the telemetry logger and the drive curves.
-
-`robot_state.cpp` and `odometry.cpp` were written to stay PROS-free. `sync.hpp`
-picks `std::mutex` over `pros::Mutex` when `MCLIB_HOST_BUILD` is defined, and
-`Odometry` takes a struct of raw sensor readings instead of reading devices
-itself. The task that reads them lives in `control/odometry_task.cpp`, which is
-not host-testable and holds no math.
-
-This list is expected to grow. Anything that pulls in `pros/...` cannot be
-linked on the host, so making a source testable usually means putting a seam in
-front of the PROS call (a time source, a motor interface) rather than changing
-the test setup. When a source becomes PROS-free, add it to `HOST_TEST_SRC` and
-it is available to every test.
+`HOST_TEST_SRC` in the `Makefile` lists the sources that build without PROS:
+math, PID, odometry, profiles, feedforward, paths, snapshot, mechanisms,
+scheduler, telemetry and drive curves. Defining `MCLIB_HOST_BUILD` makes
+`sync.hpp` use `std::mutex`. Add a source to `HOST_TEST_SRC` once it builds
+without PROS headers.

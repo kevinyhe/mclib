@@ -1,22 +1,20 @@
-# Commands and subsystems
+# Commands
 
-The command scheduler, subsystem registration, and who owns a command.
+mclib includes a command-based framework modeled on FRC's WPILib.
 
-[Documentation index](README.md) · [Project README](../README.md)
+- A **subsystem** is one part of the robot, such as the drivetrain or a lift.
+- A **command** is an action that uses one or more subsystems, such as "move the
+  lift to 90°".
+- A command's **requirements** are the subsystems it uses. Scheduling a command
+  interrupts any running command with the same requirement, so two commands
+  never drive the same motors.
+- A subsystem's **default command** runs whenever no other command is using it.
+- `CommandScheduler::run()` updates every command and subsystem. Call it every
+  10 ms in `opcontrol()` and during autonomous.
 
-## Subsystem lifecycle
+## Registering subsystems
 
-Command factories return `std::unique_ptr<Command>`, but the scheduler stores raw
-`Command*`. That mismatch is easy to get wrong:
-
-```cpp
-// BROKEN. The unique_ptr dies at the end of the statement, so the scheduler is
-// left holding a dangling pointer.
-conveyor.makeForwardCommand()->schedule();
-```
-
-The subsystem itself is the owner. Hand it the default command with
-`setDefaultCommand` and register with `registerSelf`:
+Give the subsystem its default command, then register it:
 
 ```cpp
 PositionMechanism arm{...};
@@ -33,12 +31,10 @@ void initialize() {
 }
 ```
 
-You do not need a global `std::unique_ptr` for it. The subsystem keeps the
-default command alive for as long as the subsystem is alive.
+The subsystem owns its default command.
 
-The older two-argument form still works, and is still the right tool when the
-default command must live somewhere other than the subsystem. You keep ownership,
-so the command has to outlive the registration:
+To keep ownership yourself, pass the command to the scheduler directly. It must
+stay alive while registered:
 
 ```cpp
 std::unique_ptr<Command> conveyor_idle;
@@ -49,8 +45,46 @@ void initialize() {
 }
 ```
 
-Commands that are not defaults still need an owner. Store the `unique_ptr`
-somewhere that outlives the scheduling, then schedule the raw pointer:
+### Subsystem API
+
+| Method | Description |
+| --- | --- |
+| `setDefaultCommand(std::unique_ptr<Command>)` | Takes ownership of the default command, replacing any previous one. |
+| `getDefaultCommand()` | The default command, or `nullptr`. |
+| `registerSelf()` | Registers with the scheduler using the stored default command. |
+| `setName(std::string)` / `getName()` | Name for logging. |
+| `setEnabled(bool)` / `isEnabled()` | A disabled subsystem skips `periodic()`. |
+| `runPeriodic()` | Called by the scheduler. Override `periodic()` instead. |
+
+Disabling a subsystem does not stop its motors. PROS motors keep their last
+voltage, so command a safe state before disabling. A subsystem that integrates
+sensor changes in `periodic()` (such as odometry in `ChassisController`) misses
+the motion that happens while disabled.
+
+`setDefaultCommand` can be called after registration; the old default is
+cancelled first.
+
+### Scheduler API
+
+```cpp
+CommandScheduler::registerSubsystem(&conveyor);                       // uses the stored default command
+CommandScheduler::registerSubsystem(&conveyor, conveyor_idle.get());  // caller owned default command
+CommandScheduler::unregisterSubsystem(&conveyor);                     // cancels its command, stops periodic()
+```
+
+Registering a null or already-registered subsystem does nothing.
+`unregisterSubsystem` is safe on a subsystem that was never registered. A
+subsystem removes itself from the scheduler when destroyed.
+
+## Command ownership
+
+Factories such as `makeIndexCommand()` return `std::unique_ptr<Command>`. The
+scheduler stores a plain pointer and never deletes commands, so something in
+your program must keep each command alive while it can run:
+
+1. the subsystem, for default commands (`setDefaultCommand`)
+2. a `MechanismManager` (see [Mechanisms](mechanisms.md#mechanismmanager))
+3. a global `std::unique_ptr<Command>`
 
 ```cpp
 std::unique_ptr<Command> index;
@@ -61,77 +95,29 @@ void opcontrol() {
 }
 ```
 
-### Subsystem API
-
-| Method | What it does |
-| --- | --- |
-| `setDefaultCommand(std::unique_ptr<Command>)` | Take ownership of the default command. Destroys any previous one. |
-| `getDefaultCommand()` | Non owning `Command*`, or `nullptr` if none was set. |
-| `registerSelf()` | Register with the `CommandScheduler` using the stored default command. |
-| `setName(std::string)` / `getName()` | Human readable name, useful for logging. |
-| `setEnabled(bool)` / `isEnabled()` | A disabled subsystem skips `periodic()`. It does not stop the hardware, see below. |
-| `runPeriodic()` | Non virtual. Called by the scheduler, checks `isEnabled()` and then calls the virtual `periodic()`. Override `periodic()`, not this. |
-
-`setEnabled(false)` parks a subsystem without unregistering it. Commands can still
-be scheduled against it, they just have no effect until it is enabled again.
-Because `runPeriodic()` is non virtual and does the check, this works for
-subclasses that override `periodic()`, such as `StateMechanism` and
-`ChassisController`.
-
-It does not stop the hardware. PROS motors hold the last voltage they were
-given, so a disabled `StateMechanism` keeps driving at whatever `applyState`
-last wrote. Command a safe state first, then disable. And a `periodic()` that
-integrates sensor deltas, like `ChassisController` updating odometry, misses
-everything that happens while disabled and folds it into one step when
-re-enabled, which corrupts the pose.
-
-### Scheduler API
+Scheduling a temporary leaves the scheduler with a dangling pointer:
 
 ```cpp
-CommandScheduler::registerSubsystem(&conveyor);                       // uses the stored default command
-CommandScheduler::registerSubsystem(&conveyor, conveyor_idle.get());  // caller owned default command
-CommandScheduler::unregisterSubsystem(&conveyor);                     // cancels its command, stops periodic()
+// BROKEN. The unique_ptr dies at the end of the statement, so the scheduler is
+// left holding a dangling pointer.
+conveyor.makeForwardCommand()->schedule();
 ```
 
-Registering a null subsystem, or one that is already registered, is a no-op
-rather than an assertion failure. Asserts compile out in release builds, so they
-were not a real guard.
+To destroy a command early, call `CommandScheduler::endAndForget(cmd)` first.
 
-`unregisterSubsystem` cancels whatever command currently requires the subsystem
-and its default command, drops its requirement entry, and stops `runPeriodic()`
-from being called on it. It is safe to call on a subsystem that was never
-registered. `~Subsystem` does the same cleanup automatically, minus the `end()`
-callbacks, so a subsystem that goes out of scope cannot leave the scheduler
-holding dangling pointers.
+## Combining commands
 
-`setDefaultCommand` is also safe to call after registration: the old default
-command is cancelled and scrubbed from the scheduler before it is destroyed, and
-the registration is repointed at the new one.
+| Method | Result |
+| --- | --- |
+| `a.andThen(&b)` | runs `a`, then `b` |
+| `a.with(&b)` | runs both; ends when both finish |
+| `a.race(&b)` | runs both; ends when either finishes |
+| `a.withTimeout(t)` | ends `a` after `t` |
+| `a.until(condition)` | ends `a` when `condition` returns true |
+| `a.repeatedly()` | restarts `a` each time it finishes |
+| `a.asProxy()` | schedules `a` separately from the group it is in |
 
-## Who owns a command
-
-Every command is heap-allocated and the scheduler stores raw `Command*`. It
-never deletes anything. So something in your code has to own each command and
-outlive the scheduler's use of it.
-
-There are three ways to own one, in order of preference:
-
-1. **Give it to the subsystem.** `subsystem.setDefaultCommand(cmd)` takes
-   ownership of the default command. Nothing else to do.
-2. **Give it to a `MechanismManager`.** It owns the default commands of every
-   mechanism you add to it. See [Mechanisms](mechanisms.md#mechanismmanager).
-3. **Hold the `std::unique_ptr` yourself**, in storage that lives as long as the
-   program. A file-scope `std::unique_ptr<Command>` works, as in the `index`
-   example above.
-
-Do not hold it in a local `unique_ptr` inside a function. The command dies at
-the closing brace while the scheduler still points at it.
-
-### Decorators
-
-`andThen()`, `with()`, `race()`, `withTimeout()`, `until()`, `repeatedly()` and
-`asProxy()` build a new command that wraps the one you called them on. Each
-returns a `std::unique_ptr<Command>`, so the result is yours to own:
+Each returns a new `std::unique_ptr<Command>`. Store it like any other command:
 
 ```cpp
 std::unique_ptr<Command> lift_move;
@@ -143,17 +129,8 @@ void initialize() {
 }
 ```
 
-They are `[[nodiscard]]`, so discarding the result is a compiler warning.
-Before 0.1.0 it was a silent leak.
-
-Two rules:
-
-- **The wrapper borrows what you hand it.** `a.andThen(&b)` does not adopt `b`.
-  Both `a` and `b` have to outlive the sequence. The only exception is the
-  helper a decorator builds for itself - the `WaitCommand` inside
-  `withTimeout()`, the `WaitUntilCommand` inside `until()` - which the wrapper
-  owns and destroys.
-- **Do not chain off a temporary.** Name each intermediate:
+The new command holds pointers to the commands it combines. Keep those alive
+too, and store each step in its own variable:
 
 ```cpp
 // Wrong: the sequence is destroyed at the end of the statement, and the
@@ -165,12 +142,5 @@ std::unique_ptr<Command> sequence = a.andThen(&b);
 std::unique_ptr<Command> timed = sequence->withTimeout(2.0 * second);
 ```
 
-`Trigger::andOther()`, `orOther()` and `negate()` work the same way: they return
-an owned `std::unique_ptr<Trigger>` that captures the source triggers by
-pointer, so the sources must outlive it.
-
-### Before you schedule
-
-A command must be owned before it is scheduled, and it must stay alive until the
-scheduler is done with it. To destroy one early, first take it back with
-`CommandScheduler::endAndForget(cmd)`.
+`Trigger::andOther()`, `orOther()` and `negate()` return
+`std::unique_ptr<Trigger>` and hold pointers to the triggers they combine.

@@ -1,23 +1,16 @@
 # Telemetry and time
 
-CSV logging to the SD card, streaming over USB serial, and the clock seam that makes both testable.
+## CSV logging
 
-[Documentation index](README.md) · [Project README](../README.md)
-
-## Telemetry: CSV logging to the SD card
-
-Tuning a PID by watching the robot and guessing is the slowest way to do it.
-`mclib/telemetry/telemetry.hpp` gives you a fixed-rate CSV log on the V5 SD
-card, with columns that say what unit they are in.
+`mclib/telemetry/telemetry.hpp`. Logs values at a fixed rate to a CSV file on the
+SD card. Column names include units.
 
 ```cpp
 #include "mclib/telemetry/telemetry.hpp"
 
 void autonomous() {
-  // A Logger is one-shot: register, sample, close. Build a fresh one per run
-  // so a second autonomous over field control gets a second log. The ring
-  // storage is static because sizeof(Row) is ~200 bytes and 256 rows has no
-  // business on a task stack; the logger is not.
+  // One Logger per run. The buffer is static because 256 rows (~50 KB) is too
+  // large for a task stack.
   static mclib::telemetry::RowBuffer<256> tlm_buffer;
   mclib::telemetry::SdCardSink tlm_sink("auton");
   mclib::telemetry::Logger tlm(tlm_sink, tlm_buffer,
@@ -29,8 +22,7 @@ void autonomous() {
   auto cmd = tlm.addVoltage("left_cmd");  // column "left_cmd_V"
   auto err = tlm.addNumber("error");      // column "error", no unit
 
-  // Starts a background pros::Task that does the SD writes. Declared after the
-  // logger, so it is destroyed first and never outlives what it drains.
+  // Writes to the SD card from a background task. Declare it after the logger.
   mclib::telemetry::FlushTask flusher(tlm);
 
   while (!controller.settled()) {
@@ -46,14 +38,12 @@ void autonomous() {
 }
 ```
 
-If the logger has to live longer than one run - shared between auton and
-driver control, say - keep it in a `std::optional` and re-construct it at the
-start of each run. Registration, sampling and `close()` are all one-way on a
-given `Logger`: once `close()` has run, that object is finished.
+A `Logger` is single-use: add channels, sample, close. Create a new one for each
+run. To share one across autonomous and driver control, keep it in a
+`std::optional` and reconstruct it for each run.
 
-The file lands at `/usd/auton000.csv`, then `auton001.csv`, and so on - the
-sink picks the first index that does not already exist, so a re-run never
-overwrites the previous match's log. Output looks like this:
+`SdCardSink("auton")` writes `/usd/auton000.csv`, then `auton001.csv` on the next
+run, and so on. Existing files are never overwritten.
 
 ```
 t_ms,x_in,heading_deg,left_cmd_V,error
@@ -64,65 +54,41 @@ t_ms,x_in,heading_deg,left_cmd_V,error
 # rows=412 dropped=0
 ```
 
-Column names carry the unit, which is what makes a log readable a week later.
-`24_in` written into an `addLength` channel reads back as `24.0` in the column
-called `x_in`.
+A value set on an `addLength` channel is written in inches; `24_in` is written
+as `24.0` in the `x_in` column.
 
-### What it costs the control loop
+### Performance
 
-`set()` is one double store. `sample()` is a clock read, and on a sampling tick
-a `sizeof(Row)` copy (about 200 bytes) into a lock-free ring plus one release
-store. The producer side never allocates, locks or touches a file. That is the
-worst case a control tick pays: under a microsecond on the V5's Cortex-A9,
-however slow or jittery the SD card is.
+`set()` stores a number. `sample()` copies one row (about 200 bytes) into a
+buffer. Neither allocates memory, locks or writes to the SD card, so logging
+does not slow the control loop.
 
-The writing happens in `FlushTask`, a `pros::Task` at priority
-`TASK_PRIORITY_DEFAULT - 1`, which drains the ring every 100 ms by default.
-Batching means one `fwrite` per five rows at a 20 ms period rather than one per
-row. The ring is single-producer / single-consumer over two `std::atomic`
-indices, so the control loop never waits on the flush task and never waits on
-the card.
+`FlushTask` writes the buffer to the card every 100 ms from a low-priority task.
 
-### Bounded resources
+### Limits
 
-Nothing here can grow without limit:
-
-- **Buffer full: drop newest.** The new row is discarded and the buffered rows
-  are kept, so the log is a contiguous prefix of the run with a gap at the end.
-  A contiguous prefix beats a log with a hole punched in the middle, and it is
-  the only policy a lock-free SPSC ring can offer without the producer racing
-  the consumer's read cursor. Dropped rows are counted and the count is written
-  into the CSV trailer, so a truncated log says so.
-- **Row cap.** `LoggerConfig::max_rows` defaults to 30000 - ten minutes at
-  20 ms. Past it the logger stops committing.
-- **File size cap.** `SdSinkConfig::max_bytes` defaults to 4 MiB. Past it the
-  sink closes the file. A log that fills the card mid-match is worse than none.
-- **Channel cap.** 24 columns, names truncated to 32 characters. Registering a
-  25th channel returns an invalid handle; writing through one is ignored.
+| Limit | Default | When reached |
+| --- | --- | --- |
+| Buffer full | `RowBuffer` size | new rows are dropped; the count is written to the last line |
+| Row cap | `LoggerConfig::max_rows` = 30000 (10 min at 20 ms) | logging stops |
+| File size | `SdSinkConfig::max_bytes` = 4 MiB | the file is closed |
+| Channels | 24, names up to 32 characters | extra channels are ignored |
 
 ### No SD card
 
-`SdCardSink` probes for the card exactly once, on the first flush, by opening
-the file. If there is no card the sink reports itself unavailable and every
-later call is a no-op. It does not throw, crash or keep retrying. The logger
-still drains its ring so the control loop never wedges behind a dead sink. The
-same holds for a card that dies mid-match.
+The sink checks for the card once, on the first write. Without a card, or if the
+card fails, logging does nothing and the program continues.
 
-### Testing without a card
+### Testing
 
-The sink is an interface. `MemorySink` captures everything in a `std::string`
-and `NullSink` is permanently unavailable, so `tests/telemetry_test.cpp` drives
-the logger under a `mclib::time::ScopedClock` and asserts on real CSV text -
-the header, the timestamps, the drop policy, and the round-trip of `24_in` back
-to `24.0`. Only `src/mclib/telemetry/flush_task.cpp` includes a PROS header;
-the logger and both test sinks are header-only.
+`MemorySink` stores output in a `std::string`, and `NullSink` discards it.
+`tests/telemetry_test.cpp` checks the CSV output on the host. Only
+`src/mclib/telemetry/flush_task.cpp` includes PROS.
 
-## Telemetry over USB serial
+## USB serial
 
-`mclib/telemetry/file_sink.hpp`. The logger writes into any `Sink`; `FileSink`
-is a sink over a `std::FILE*` it does not own, and on the V5 `stdout` is the
-USB serial link. So a logger pointed at `stdoutSink()` streams its CSV into
-the PROS terminal while the robot is tethered, no SD card involved:
+`mclib/telemetry/file_sink.hpp`. `stdoutSink()` sends the CSV to the PROS
+terminal over USB.
 
 ```cpp
 #include "mclib/telemetry/file_sink.hpp"
@@ -145,27 +111,17 @@ void opcontrol() {
 }
 ```
 
-Run `pros terminal` on the laptop and the CSV appears there, one row per
-sample. Redirect it to a file (`pros terminal > run.csv`) to keep it.
+Run `pros terminal > run.csv` to save it.
 
-`FileSink(file)` works over any open stream - `std::tmpfile()` in the host
-test, `stdout` on the robot. It never calls `fclose`; `close()` only stops
-further writes, so closing the sink never takes the serial link away from
-`printf`. A short write (the link dropped, the stream closed underneath it)
-marks the sink dead and every later write is refused, so a dead link costs
-the flush task nothing. The trailer and the `# rows=... dropped=...` line come
-out the same as on the SD card.
+`FileSink(file)` writes to any open `std::FILE*` and never closes it. If a write
+fails, the sink stops writing.
 
-Serial is slower than the card and shared with everything else that prints.
-Keep the sample period at 20 ms or above and the channel count modest, or
-`sample()` will start dropping rows when the ring fills faster than the link
-drains it. The dropped count in the trailer tells you if that happened.
+Serial is slower than the SD card. Sample every 20 ms or slower with few
+channels, and check the dropped count on the last line.
 
-## Time (`mclib/time.hpp`)
+## Time
 
-`mclib::time::millis()` returns milliseconds since the program started, exactly
-like `pros::millis()` does, and `mclib::time::now()` returns the same value as a
-`QTime`.
+`mclib/time.hpp`.
 
 ```cpp
 #include "mclib/time.hpp"
@@ -174,30 +130,18 @@ const std::uint32_t t = mclib::time::millis();  // raw milliseconds
 const QTime now = mclib::time::now();           // same value as a QTime
 ```
 
-`time.hpp` includes no PROS header. `src/mclib/time.cpp` is the single
-translation unit in the library that reads `pros::millis()`, through the
-out-of-line function `mclib::time::systemMillis()`. That is what `millis()`
-calls when no clock has been installed, so the clock is live from the first
-static constructor onwards - there is no initialisation order to get wrong -
-and every caller's undefined reference to it forces the linker to pull
-`time.cpp.o` out of `mclib.a`.
+`mclib::time::millis()` returns milliseconds since the program started, like
+`pros::millis()`. `now()` returns the same value as a `QTime`.
 
-### Converted so far
+Code that reads time through `mclib::time` can be tested with a fake clock.
+`pid.cpp`, `chassis_controller.cpp`, the mechanisms and `waitCommand.h` do.
+`control/motion.cpp`, `control/odometry.cpp` and
+`auton/autonomous_routine.cpp` call `pros::millis()` and `pros::delay()`
+directly, so a fake clock does not affect them.
 
-`pid.cpp`, `chassis_controller.cpp`, `mechanism.hpp`, `preset_position_mechanism.hpp`,
-`waitCommand.h` and the mechanism sources (`auto_trigger`, `conveyor`, `homing`,
-`position`, `pto`, `toggle_group`, `velocity`) all read time through the seam.
-`control/motion.cpp`, `control/odometry.cpp` and `auton/autonomous_routine.cpp`
-still call `pros::millis()` and `pros::delay()` directly and have not been
-converted. A fake clock does not affect those loops, so do not mix a
-`ScopedClock` with a routine that drives them.
+### Fake clocks in tests
 
-### Host tests
-
-Because the seam is a function pointer, a host test can install its own clock,
-step it by hand, and check timing behaviour without a robot or the PROS
-toolchain. A host build does not link `time.cpp`, so it supplies its own
-`systemMillis()` - one line, used only before a fake clock is installed:
+A host test provides `systemMillis()` and installs its own clock:
 
 ```cpp
 namespace mclib {
@@ -223,9 +167,6 @@ static std::uint32_t fake_ms = 0;
 // ScopedClock put the previous clock back here
 ```
 
-`setClock()` installs a clock and returns the previous one, `getClock()` reports
-it, and `restoreSystemClock()` goes back to the platform clock. `ScopedClock`
-does the save/restore for you.
-
-`src/mclib/pid.cpp` compiles and links with no PROS headers reachable, so the
-control code can be tested on a host.
+`setClock()` installs a clock and returns the previous one, `getClock()` returns
+the current one, and `restoreSystemClock()` restores the real clock.
+`ScopedClock` restores the previous clock when it goes out of scope.

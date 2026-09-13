@@ -1,14 +1,9 @@
-# Autonomous routines and the selector
+# Autonomous
 
-Building an autonomous routine, budgeting its time, and picking one on the brain screen.
+## Routines
 
-[Documentation index](README.md) · [Project README](../README.md)
-
-## Autonomous Routines
-
-Use `mclib::auton::Routine` to compose a whole autonomous as an
-owned sequence. Motion steps run in order, and mechanism commands can be
-triggered between motions.
+`mclib::auton::Routine` builds an autonomous from motions and mechanism
+commands. Steps run in order.
 
 ```cpp
 mclib::mechanism::ConveyorMechanism conveyor({
@@ -47,23 +42,24 @@ void autonomous() {
 }
 ```
 
-Use `then(command)` or `add(command)` when the routine should wait for a
-command to finish before moving on. Use `trigger(command)` when the command
-should be scheduled and the routine should immediately continue to the next
-step. Motion steps support fluent options such as `withMaxVoltage`,
-`withMinVoltage`, `withDirection`, `reversed`, `withoutStop`, and
-`withoutOverturn`.
+| Step | Behavior |
+| --- | --- |
+| `then(command)`, `add(command)` | runs the command and waits for it to finish |
+| `trigger(command)` | starts the command and moves to the next step immediately |
+| `wait(time)` | waits |
+| `driveTo(distance, timeout)` | drives a distance relative to the current position |
+| `turnToAngle(angle, timeout)` | turns to a field heading |
+| `moveToPoint(Point{x, y}, timeout)` | drives to a field position |
 
-Every motion parameter carries its unit in its type: `24_in`, `90_deg`,
-`2_s`, `10_V`. `driveTo` always means a relative distance. It used to be
-overloaded so that `driveTo(24, 1000)` drove 24 inches while
-`driveTo(24, 36, 1000)` drove to the field point `(24, 36)`, two different
-motions told apart only by argument count. Say `moveToPoint(Point{...}, t)`
-for a field point.
+Motion options: `withMaxVoltage`, `withMinVoltage`, `withDirection`, `reversed`,
+`withoutStop` and `withoutOverturn`.
 
-Mechanisms are built from generic stateful subsystem templates. `StateMechanism<T>`
-owns the command-facing state machine, while concrete mechanisms decide how that
-state is applied to device wrappers.
+All motion arguments take units: `24_in`, `90_deg`, `2_s`, `10_V`.
+
+## Mechanisms in routines
+
+Mechanisms are subsystems, so register them in `initialize()` and use their
+command factories as steps. See [Mechanisms](mechanisms.md).
 
 ```cpp
 // #include "mclib/device/line.hpp". Line is in the global namespace.
@@ -89,13 +85,8 @@ void initialize() {
 }
 ```
 
-`ConveyorMechanism` watches average current draw and average velocity while it
-runs. A sustained stall triggers a bounded number of reversing unjam attempts;
-when those run out it stops the motors and latches `isJammed()`.
-`makeIndexCommand(timeout_ms)` runs at `index_voltage` until the sensor gate
-reads true, then stops, so it can be sequenced with `then()` in a routine.
-
-The same pattern works for other mechanisms:
+`makeIndexCommand(timeout_ms)` runs the conveyor until the sensor reads true,
+then finishes, so it works with `then()`.
 
 ```cpp
 mclib::device::MotorGroup arm_motors({-3, 4}, mclib::device::Gearset::Blue);
@@ -123,114 +114,20 @@ std::unique_ptr<Command> makeLowCommand() {
 }
 ```
 
-The lambdas take no capture because everything is at file scope. Inside a
-function you can capture with `[&]`, but the captured devices must outlive the
-mechanism: it stores the lambdas and calls them every `periodic()` tick, so
-capturing function-local devices by reference leaves it calling into destroyed
-objects. Make them members, statics, or file-scope objects.
+`makeStopCommand()` holds the arm in place and runs until interrupted, so it
+takes over whenever a command such as `makeMoveToCommand` finishes. The gains in
+this example are placeholders; tune them for your robot.
 
-The tuning above is example tuning. `kp`, `max_voltage` and the error/duration
-tolerances are per-robot; start from the `PositionMechanismConfig` defaults.
+### Custom mechanisms
 
-`makeStopCommand()` is the right default here: it holds the present position
-instead of coasting, and it runs until interrupted, so it takes over again the
-moment a terminating command such as `makeMoveToCommand` releases the arm.
+Subclass `StateMechanism<State>`, or use `MotorStateMechanism<State>` to map an
+enum to motor voltages. Both provide `makeStateForCommand(state, 500 *
+millisecond)` and `makeStateUntilCommand(state, [] { return done; })`.
 
-For custom mechanisms, subclass `StateMechanism<State>` or use
-`MotorStateMechanism<State>` when an enum maps to one or more motor voltages.
-Timed and condition-based commands come from the same generic helpers:
-`makeStateForCommand(state, 500 * millisecond)` and
-`makeStateUntilCommand(state, [] { return done; })`.
+## Selector
 
-### Migrating from `Intake`
-
-`Intake`, `IntakeState`, and `IntakeConfig` were removed. `ConveyorMechanism`
-does the same job without being named after one robot's mechanism.
-
-| `Intake` | `ConveyorMechanism` |
-| --- | --- |
-| `IntakeConfig::bottom_port`, `top_port` | `ConveyorConfig::motor_ports` |
-| `IntakeConfig::gearset` | `ConveyorConfig::gearset` |
-| `index_voltage` (default 12.0) | `index_voltage` (default 8.0, so set it explicitly if you relied on the old value) |
-| `score_voltage` | `forward_voltage` |
-| `reverse_voltage` | `reverse_voltage` |
-| `IntakeState::Disabled` | `ConveyorState::Stopped` |
-| `IntakeState::Index` | `ConveyorState::IndexToSensor` |
-| `IntakeState::Score` | `ConveyorState::Forward` |
-| `IntakeState::Reverse` | `ConveyorState::Reverse` |
-| `disable()` / `makeDisableCommand()` | `stop()` / `makeStopCommand()` |
-| `makeScoreCommand()` | `makeForwardCommand()` |
-| `makeReverseCommand()` | `makeReverseCommand()` |
-| `makeIndexCommand()` | `makeIndexCommand(timeout_ms)` |
-| `setState()` / `getState()` | `setState()` / `getState()`, or the typed `setConveyorState()` / `getConveyorState()` |
-
-Two behaviour differences to check before you swap:
-
-**Indexing needs a sensor.** `IntakeState::Index` ran the motor and never
-stopped on its own. `ConveyorState::IndexToSensor` runs at `index_voltage` while
-the sensor gate reads false and holds at zero volts while it reads true, and
-`makeIndexCommand` finishes once the gate latches. With no gate injected,
-`IndexToSensor` behaves like `Stopped` and `makeIndexCommand` finishes
-immediately. If you want the old unconditional behaviour, use
-`ConveyorState::Forward`.
-
-**Per-motor voltages are gone.** `Intake` drove its two motors at different
-voltages per state: `Index` ran the bottom motor only, while `Score` and
-`Reverse` ran both. `ConveyorMechanism` drives all of its motors as one
-`device::MotorGroup` at a single voltage, so it cannot express that split. Model
-a two-stage path as two `ConveyorMechanism` instances, one per stage:
-
-```cpp
-mclib::mechanism::ConveyorMechanism bottom(
-    {.motor_ports = {-20}}, [] { return line_sensor.get(); });
-mclib::mechanism::ConveyorMechanism top({.motor_ports = {-21}});
-
-// ParallelCommandGroup stores raw Command*, so the two stage commands have to
-// outlive the group that points at them.
-std::unique_ptr<Command> bottom_index;
-std::unique_ptr<Command> bottom_forward;
-std::unique_ptr<Command> top_forward;
-std::unique_ptr<Command> score;
-
-void initialize() {
-  bottom.setName("conveyor_bottom");
-  bottom.setDefaultCommand(bottom.makeStopCommand());
-  bottom.registerSelf();
-
-  top.setName("conveyor_top");
-  top.setDefaultCommand(top.makeStopCommand());
-  top.registerSelf();
-
-  // Old IntakeState::Index. Bottom stage only, gated on the sensor. The top
-  // stage keeps its stop default while this runs.
-  bottom_index =
-      bottom.makeStateCommand(mclib::mechanism::ConveyorState::IndexToSensor);
-
-  // Old IntakeState::Score. Both stages at once.
-  bottom_forward = bottom.makeForwardCommand();
-  top_forward = top.makeForwardCommand();
-  score = std::make_unique<ParallelCommandGroup>(
-      std::initializer_list<Command*>{bottom_forward.get(), top_forward.get()});
-}
-
-void opcontrol() {
-  bottom_index->schedule();  // index
-  score->schedule();         // score
-}
-```
-
-Drive the stages with scheduled commands, not with bare `setConveyorState`
-calls. Both stop defaults re-assert `Stopped` every tick, so a direct state
-write is undone on the next `CommandScheduler::run()` unless a command holds
-the requirement.
-
-Two instances also give each stage its own voltages, its own sensor gate, and
-its own jam detection, which one shared `MotorGroup` average could never do.
-
-## Autonomous selector
-
-`mclib/auton/selector.hpp`. Pick which autonomous runs, on the brain screen
-or the controller, without reflashing.
+`mclib/auton/selector.hpp`. Selects the autonomous on the brain screen or
+controller.
 
 ```cpp
 #include "mclib/auton/selector.hpp"
@@ -254,28 +151,18 @@ void autonomous() {
 }
 ```
 
-`startPolling()` runs a `pros::Task` that redraws the buttons, takes touches,
-and watches the two controller buttons. The task stops itself the moment
-`pros::competition::is_autonomous()` turns true, so it never fights the
-routine for the screen or the controller. `stopPolling()` joins it early if
-you want to.
+`startPolling()` starts a task that draws the screen and reads touches and
+controller buttons. It stops when autonomous begins. `stopPolling()` stops it
+early.
 
-The brain screen shows one button per entry in a two-column grid below the
-PROS status bar; the selected one is blue. Touch a button to pick it. On the
-controller, the two bound buttons (Left and Right by default; any two
-`DigitalButton`s) step back and forward through the list with wraparound,
-and line 0 shows the current name. Controller text is written at most every
-50 ms because the V5 controller drops faster updates.
+The brain screen shows one button per routine in two columns; the selected one
+is blue. On the controller, the two bound buttons (Left and Right by default)
+step through the list and line 0 shows the selection. Controller text updates
+at most every 50 ms.
 
-`saveSelection()` writes the selected entry's *name* to
-`/usd/auton_selection.txt`; `loadSelection()` reads it back and selects that
-entry. Saving the name and not the index means adding or reordering routines
-in code never changes which one the saved file picks. A name that is no longer
-in the list leaves the selection alone and returns false. Nothing here needs
-the SD card; without one, both just return false.
+`saveSelection()` writes the selected routine's name to
+`/usd/auton_selection.txt`. `loadSelection()` selects the routine with that
+name. Both return `false` if there is no SD card or no matching routine.
 
-The list logic - add, select, wraparound, which button a touch lands on - is
-`SelectorModel` in `mclib/auton/selector_model.hpp`. It has no PROS include,
-so `tests/selector_model_test.cpp` checks it on the host. `AutonSelector`
-adds only the screen, controller, task and file calls, and exposes the model
-through `model()` and `setLayout()` if you want a different grid.
+The list logic is `SelectorModel` in `mclib/auton/selector_model.hpp`, which is
+tested on the host. Use `model()` and `setLayout()` to change the grid.

@@ -1,16 +1,23 @@
-# Simulator and motion builder
+# Simulator
 
-Replaying the real C++ controller against the physics simulator, and what those runs prove.
+`tests/vexsim/` runs the C++ motion routines and odometry against the vexsim
+physics engine, checked out next to this repository at `../vexsim`.
 
-[Documentation index](README.md) · [Project README](../README.md)
+## Motion builder
 
-Run `python3 tests/vexsim/builder/server.py` and open **http://127.0.0.1:8765**
-to build autonomous sequences and replay the C++ controller driving
-`../vexsim`. The workbench compares the simulated robot's true position with
-what odometry reported, keeps failed runs, and checks the physics before it
-checks the controller. See the [builder guide](../tests/vexsim/builder/README.md)
-and [validation findings](../tests/vexsim/BUILDER_VALIDATION.md).
+```sh
+python3 tests/vexsim/builder/server.py
+```
 
-Simulation does not replace measuring your robot. The motions that still fail at
-default gains are listed in [accuracy.md](accuracy.md); the tolerances were not
-loosened to make them pass.
+Open http://127.0.0.1:8765 to build a sequence, run it, and compare the
+simulated position with odometry. See the
+[builder guide](../tests/vexsim/builder/README.md).
+
+## Test matrix
+
+```sh
+python3 tests/vexsim/run.py
+```
+
+See [tests/vexsim/README.md](../tests/vexsim/README.md) for options and
+[known limits](accuracy.md) for results.

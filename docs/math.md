@@ -1,8 +1,6 @@
-# Core math API
+# Math
 
-The geometry and helper functions the rest of the library is built on.
-
-[Documentation index](README.md) · [Project README](../README.md)
+`mclib/math.hpp`:
 
 ```cpp
 using Vec2 = Eigen::Matrix<double, 2, 1>;
@@ -39,8 +37,7 @@ Mat2 rotationMatrix(double rad);
 Vec2 rotate(const Vec2& vec, double rad);
 ```
 
-`utils.hpp` lives in the **global namespace** and holds the degree/radian
-bridge plus `getRadius`:
+`utils.hpp` is in the global namespace:
 
 ```cpp
 double degToRad(double deg);
@@ -52,31 +49,30 @@ double radToDeg(double rad);
 double getRadius(double x, double y, double x1, double y1, double angle);
 ```
 
-`getRadius` is a legacy helper with a frame bug. Its denominator uses
-`delta_y` where the target's **lateral** offset in the robot frame belongs, so a
-target 10 in dead ahead of a robot at heading 0 (a straight line, with infinite
-radius) comes back as 5. Use `mclib::arcRadius(from, target)`, which computes it
-correctly.
+`getRadius` puts `delta_y` where the robot-frame lateral offset belongs, so it
+returns 5 for a target 10 in straight ahead. Use `mclib::arcRadius()`.
 
-Nothing in the library calls `getRadius` any more: `boomerang` switched to
-`arcRadius()`. It stays in `utils.hpp` for existing robot code. Its degenerate
-case returns infinity; it used to return `999`, which silently became a finite
-speed limit downstream.
+## Modules
 
-Other modules are split into matching header/source pairs:
+| Path | Contents |
+| --- | --- |
+| `auton/` | autonomous routine builder, selector |
+| `chassis/` | chassis hardware and controllers |
+| `command/` | command scheduler |
+| `control/` | motion routines, odometry, profiles, feedforward, drive curves, `chassis_io.hpp` drive interface |
+| `control/motion_config.hpp` | tuning shared by every drive loop |
+| `device/` | wrappers over PROS devices |
+| `mechanism/` | mechanism classes |
+| `path/` | paths, splines, pure pursuit |
+| `pid.hpp` | PID controller |
+| `robot_geometry.hpp` | optional place to declare drive geometry |
+| `snapshot/` | distance-sensor pose correction |
+| `telemetry/` | CSV logging |
+| `units/` | unit types |
+| `utils.hpp` | angle and geometry utilities |
 
-- `auton/*.hpp` / `auton/*.cpp`: owning autonomous routine builder
-- `chassis/*.hpp` / `chassis/*.cpp`: chassis hardware and PID controller
-- `robot_geometry.hpp`: an optional place to declare your drive geometry once
-- `control/motion_config.hpp` / `control/motion_config.cpp`: the one tuning record every drive loop reads
-- `control/*.hpp` / `control/*.cpp`: the drive-hardware seam (`chassis_io.hpp`), scaling, motion, odometry, drive curves and shared state helpers
-- `pid.hpp` / `pid.cpp`: PID controller
-- `utils.hpp` / `utils.cpp`: angle and geometry utilities
-- `device/*.hpp` / `device/*.cpp`: the only place that calls PROS motor, controller, pneumatic, and sensor APIs directly
-- `mechanism/*.hpp` / `mechanism/*.cpp`: generic stateful mechanisms (conveyor, position, velocity, toggle, multi-position, homing, PTO) plus motor and pneumatic subsystem wrappers
-- `snapshot/*.hpp` / `snapshot/*.cpp`: distance-sensor pose correction. `raycast.cpp`
-  casts rays against the static field map in `collision_map.hpp`; `snapshot_pose.cpp`
-  runs the damped Gauss-Newton solve for `(x, y)` and the accept/reject gate;
-  `snapshot.hpp` is the only part that reads a real sensor. `sensor.hpp` holds the one
-  PROS-dependent type, so the geometry and the solve are host-testable
-  (`tests/snapshot_test.cpp`).
+`snapshot/` corrects the robot's position using distance sensors aimed at the
+field walls. `raycast.cpp` predicts what each sensor should read from the field
+map in `collision_map.hpp`, `snapshot_pose.cpp` finds the `(x, y)` that best
+matches the real readings and rejects bad fits, and `snapshot.hpp` reads the
+sensors. Only `sensor.hpp` depends on PROS.

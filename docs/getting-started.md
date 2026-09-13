@@ -1,16 +1,9 @@
-# Setting up your robot
+# Getting started
 
-Ports, geometry, odometry and your first working opcontrol.
-
-[Documentation index](README.md) · [Project README](../README.md)
-
-Nothing in mclib knows what ports your motors are on. A robot program declares
-its devices, builds a `Chassis` from them, and builds a `ChassisController`
-on the Chassis. Constructing the controller does two things for the whole
-library: it binds that Chassis as the drivetrain every motion routine in
-`control/motion.hpp` runs on, and it installs its config as the one tuning
-record every drive loop reads. `src/main.cpp` is a complete example; the core
-of it is:
+Declare the devices, build a `Chassis`, then build a `ChassisController` on it.
+The controller binds the chassis as the drivetrain for every routine in
+`control/motion.hpp` and sets the tuning they use. `src/main.cpp` is a complete
+example.
 
 ```cpp
 #include "main.h"
@@ -57,25 +50,33 @@ void opcontrol() {
 }
 ```
 
+## Configuration
+
 `ChassisControllerConfig` is `mclib::control::MotionConfig`
-(`mclib/control/motion_config.hpp`): three gain sets, two exit rules, the
-voltage cap, the stiction floor (`min_voltage`, 1.5 V by default), the slew
-rates and the boomerang `chase_power`. Every field has a default from one
-tuned robot; expect to retune the gains for yours. `drive.setConfig()` changes
-the tuning for every loop at once.
+(`control/motion_config.hpp`). It holds:
 
-There are no defaults for the geometry. `units::Wheel` has no constructor
-taking a bare number, so you have to say which measurement you took:
-`Wheel::fromDiameter(2.75_in)` for calipers across the wheel,
-`Wheel::fromCircumference(9.06_in)` for a tape around the tread. A wrong wheel
-size is a silent 5% scaling error on every autonomous. `mclib/robot_geometry.hpp`
-is an optional place to write the numbers down once.
+- distance, turn and heading PID gains
+- two exit rules
+- the voltage cap
+- `min_voltage`, the minimum output needed to get the drive moving (default 1.5 V)
+- slew rates (how fast output voltage may change)
+- `chase_power` for `boomerang` moves
 
-### Odometry
+The defaults come from one robot. Retune for yours. `drive.setConfig()`
+updates every loop.
 
-The odometry runs on its own task and is the only thing that writes the pose.
-`startOdometry()` with no arguments reads heading and drive encoders from the
-bound Chassis. To add tracking wheels, describe them:
+Geometry has no defaults. `units::Wheel` is built from a measurement:
+
+- `Wheel::fromDiameter(2.75_in)`
+- `Wheel::fromCircumference(9.06_in)`
+
+`mclib/robot_geometry.hpp` is an optional place to keep these values.
+
+## Odometry
+
+Odometry runs on its own task and is the only writer of the pose.
+`startOdometry()` with no arguments uses the chassis heading and drive encoders.
+To add tracking wheels:
 
 ```cpp
 mclib::device::Rotation vertical_tracker(-6);        // forward-rolling wheel
@@ -98,26 +99,25 @@ void initialize() {
 }
 ```
 
-Any sensor with a `position()` returning `std::optional<QAngle>` works as a
-tracking wheel through `encoderReader()`: `Rotation` and `AdiEncoder` both do.
-A vertical wheel replaces the drive encoders for forward travel and is immune
-to drive slip; a horizontal wheel catches sideways push. Without either, the
-drive encoders measure forward travel and sideways motion is invisible.
+Any sensor whose `position()` returns `std::optional<QAngle>` works with
+`encoderReader()`, including `Rotation` and `AdiEncoder`.
 
-Reset the IMU and the pose together. The odometry tracks heading as deltas
-from the pose it was reset to, while the motion routines steer on the raw IMU
-rotation; `Chassis::setPose()` writes both.
+| Sensors | Forward travel | Sideways travel |
+| --- | --- | --- |
+| Drive encoders only | drive encoders | not measured |
+| Vertical tracker | tracker | not measured |
+| Vertical and horizontal trackers | tracker | tracker |
 
-Without an IMU, a differential `Chassis` derives clockwise-positive heading from
-left minus right wheel travel divided by track width. Set a positive measured
-track width; wheel slip affects this estimate. `setPose()` and drive taring keep
-the encoder heading frame aligned. Snapshot position corrections update the
-odometry integrator as well as its published pose and preserve encoder baselines.
+Reset the IMU and the pose together. `Chassis::setPose()` sets both.
 
-### Driver control
+Without an IMU, a differential `Chassis` computes heading from the difference in
+left and right wheel travel divided by track width. Set a measured, positive
+track width. Wheel slip affects this estimate.
 
-`ChassisController` has three teleop commands, each meant as the subsystem's
-default command:
+Snapshot position corrections update the odometry integrator and keep encoder
+baselines.
+
+## Driver control
 
 ```cpp
 mclib::control::DriveCurveConfig sticks{.deadzone = 0.05, .gain = 5.0};
@@ -128,33 +128,33 @@ drive.makeCurvatureDriveCommand(master, sticks, turn);  // turn stick bends the 
 drive.makeTankDriveCommand(master, sticks);             // each stick drives a side
 ```
 
-`DriveCurveConfig` (`mclib/control/drive_curve.hpp`) shapes a stick: a
-deadzone that stays continuous at its edge, an exponential curve whose `gain`
-makes small deflections finer without losing full speed, a `min_output` to
-step over drive stiction, and a `slew_per_tick` to limit how fast the command
-can change. All default to off except the deadzone.
+`DriveCurveConfig` (`control/drive_curve.hpp`):
 
-### Without a ChassisController
+| Field | Effect |
+| --- | --- |
+| `deadzone` | ignores small stick values; output stays continuous at the edge |
+| `gain` | exponential curve for finer control near center |
+| `min_output` | minimum output outside the deadzone |
+| `slew_per_tick` | limits how fast the output changes |
 
-The blocking motion routines only need a bound drive. If you do not want the
-command framework, bind the Chassis yourself and set the tuning:
+All are off by default except the deadzone.
+
+## Without a ChassisController
 
 ```cpp
 mclib::control::bindDrive(&chassis);
 mclib::control::setMotionConfig(my_config);
 ```
 
-With no drive bound every routine prints one diagnostic and returns at once,
-so a program that forgot this fails loudly instead of spinning on a NaN
-heading until its timeout.
+If no drive is bound, every motion routine prints an error and returns.
 
-### Commands for the motion routines
+## Motion commands
 
-`ChassisController` also exposes command factories for the blocking routines
-in `control/motion.hpp`, so an autonomous can be a command sequence:
+`ChassisController` wraps each blocking routine as a command:
 `makeTurnToAngleCommand`, `makeDriveToCommand`, `makeCurveCircleCommand`,
 `makeSwingCommand`, `makeWallResetCommand`, `makeTurnToPointCommand`,
-`makeMoveToPointCommand`, and `makeBoomerangCommand`. Each launches the routine
-on its own task and cancels it cooperatively when the command is interrupted.
-The scheduler-driven `makeDriveDistanceCommand` and `makeTurnToHeadingCommand`
-run a step per scheduler pass instead, on the same config.
+`makeMoveToPointCommand` and `makeBoomerangCommand`. Each runs the routine on
+its own task and cancels it when interrupted.
+
+`makeDriveDistanceCommand` and `makeTurnToHeadingCommand` run one step per
+scheduler pass instead.

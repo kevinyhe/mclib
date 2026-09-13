@@ -1,15 +1,11 @@
 <!-- // mclib -->
 # mclib
 
-A PROS 4 library for VEX V5: odometry, motion control, a command-based
-framework, and classes for common mechanisms (lifts, flywheels, conveyors,
-pneumatics).
+A PROS 4 library for VEX V5 robots. It tracks the robot's position on the
+field, drives it to targets in autonomous, and provides ready-made classes for
+common mechanisms.
 
-Ships as a PROS template, the same way LemLib does. Headers live in
-`include/mclib/`, implementations in `src/mclib/`, and the repository is itself
-a buildable PROS project.
-
-**[Documentation](docs/README.md)** ·
+[Documentation](docs/README.md) ·
 [Installation](docs/installation.md) ·
 [Getting started](docs/getting-started.md) ·
 [Safety](docs/safety.md) ·
@@ -18,8 +14,8 @@ a buildable PROS project.
 ## Install
 
 Download `mclib@<version>.zip` from the
-[releases page](https://github.com/kevinyhe/mclib/releases), then, inside your
-PROS project:
+[releases page](https://github.com/kevinyhe/mclib/releases). In your PROS
+project:
 
 ```sh
 pros c fetch mclib@0.1.0.zip
@@ -30,33 +26,31 @@ pros c apply mclib
 #include "mclib/mclib.hpp"
 ```
 
-Full instructions, including version pinning and upgrades, are in
-[docs/installation.md](docs/installation.md).
+See [docs/installation.md](docs/installation.md) for version pinning and
+upgrades.
 
-## What it does
+## Features
 
-- **Drivetrain control.** Differential and holonomic (X-drive, mecanum)
-  chassis, with PID distance/turn/heading loops, slew limiting and a stiction
-  floor.
-- **Odometry.** Arc-based pose tracking on its own task, from drive encoders or
-  dedicated tracking wheels, behind a lock so a torn read is impossible.
-- **Motion.** Trapezoidal profiles, drivetrain feedforward (`kS`/`kV`/`kA`),
-  Catmull-Rom splines and a pure pursuit follower.
-- **Commands.** A WPILib-shaped scheduler: subsystems, requirements, default
-  commands, sequences, parallel groups, triggers.
-- **Mechanisms.** Position, velocity, toggle, conveyor with jam recovery,
-  homing against a hard stop, PTO, pneumatics, named presets, sensor
-  auto-triggers.
-- **Devices.** Typed wrappers over the PROS motor, rotation, IMU, distance,
-  optical, vision, GPS and ADI APIs.
-- **Telemetry.** Fixed-rate CSV to the SD card or over USB serial, with a
-  background flush task.
-- **Autonomous.** Routine builder with a time budget, and an on-screen
-  selector that remembers the last choice.
-- **Units.** Compile-time dimensional analysis, so handing `kV` a bare number
-  is a compile error rather than a loop that is 39.37x wrong.
+- **Drivetrains.** Tank (differential), X-drive and mecanum. PID loops for
+  driving, turning and holding heading, with acceleration limits and a minimum
+  voltage to overcome friction.
+- **Odometry.** Tracks the robot's x, y and heading in the background using
+  drive encoders or tracking wheels.
+- **Motion.** Drive to a point, turn to an angle, follow curved paths (pure
+  pursuit), and plan smooth speed changes (motion profiles).
+- **Commands.** A command-based framework like FRC's: subsystems, default
+  commands, sequences, parallel groups and controller button triggers.
+- **Mechanisms.** Lifts and arms, flywheels, pneumatics, conveyors with jam
+  recovery, homing against a hard stop, PTOs and sensor auto-triggers.
+- **Devices.** Wrappers for PROS motors and sensors. Readings come back empty
+  when a device is unplugged, instead of as an error code.
+- **Telemetry.** Log values to a CSV file on the SD card or to the PROS terminal.
+- **Autonomous.** Chain motions and mechanism actions into a routine, and pick a
+  routine on the brain screen.
+- **Units.** Values carry units (`24_in`, `90_deg`, `2_s`), and mixing
+  incompatible units is a compile error.
 
-## A first program
+## Example
 
 ```cpp
 #include "main.h"
@@ -103,21 +97,7 @@ void opcontrol() {
 }
 ```
 
-There are no default dimensions. A wrong wheel size silently scales every
-autonomous by 5%, so mclib makes you say which measurement you took.
-
-## Before you trust it on a field
-
-The shipped gains were tuned against a simulated robot. Tune them on yours.
-At default gains, several arc and boomerang motions still miss their endpoints.
-[Measured accuracy and known limits](docs/accuracy.md) has the exact numbers and
-the reason: drive encoders cannot see a wheel slipping sideways.
-
-The safety checks all pass. A motion that cannot reach its target still stops,
-reports failure, and leaves the drive de-energised. Read
-[Safety and lifecycle](docs/safety.md) and test with the wheels raised first.
-
-## Building from source
+## Building
 
 Requires the PROS CLI and the Arm GNU toolchain (`arm-none-eabi-g++`).
 
@@ -128,22 +108,18 @@ make template     # package mclib@<version>.zip
 make test         # build and run the host test suite
 ```
 
-`make test` runs on any machine with `g++`. Every test is a single file under
-`tests/` with its own `main()`.
+`make test` needs only a host `g++`.
 
 ## Requirements
 
 - PROS kernel 4.2.2 or newer
-- `gnu++20` (the PROS kernel headers already require C++20)
-- Eigen, bundled in `include/Eigen` and shipped with the template. Fixed-size
-  types only; dynamic types like `MatrixXd` do not belong on the brain.
+- `gnu++20`
+- Eigen, bundled in `include/Eigen`. Use fixed-size types only.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and pull requests are
-welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE). You can use mclib in your robot code
-without opening that code; changes to mclib's own files stay open.
+[MPL-2.0](LICENSE).
