@@ -55,7 +55,7 @@ step. Motion steps support fluent options such as `withMaxVoltage`,
 `withoutOverturn`.
 
 Every motion parameter carries its unit in its type: `24_in`, `90_deg`,
-`2_s`, `10_V`. `driveTo` always means a relative distance -- it used to be
+`2_s`, `10_V`. `driveTo` always means a relative distance. It used to be
 overloaded so that `driveTo(24, 1000)` drove 24 inches while
 `driveTo(24, 36, 1000)` drove to the field point `(24, 36)`, two different
 motions told apart only by argument count. Say `moveToPoint(Point{...}, t)`
@@ -164,9 +164,9 @@ does the same job without being named after one robot's mechanism.
 | `makeIndexCommand()` | `makeIndexCommand(timeout_ms)` |
 | `setState()` / `getState()` | `setState()` / `getState()`, or the typed `setConveyorState()` / `getConveyorState()` |
 
-Two behaviour differences worth knowing before you swap:
+Two behaviour differences to check before you swap:
 
-**Indexing needs a sensor.** `IntakeState::Index` just ran the motor and never
+**Indexing needs a sensor.** `IntakeState::Index` ran the motor and never
 stopped on its own. `ConveyorState::IndexToSensor` runs at `index_voltage` while
 the sensor gate reads false and holds at zero volts while it reads true, and
 `makeIndexCommand` finishes once the gate latches. With no gate injected,

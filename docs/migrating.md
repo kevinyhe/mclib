@@ -4,8 +4,6 @@ Moving off the old `config.cpp` layout.
 
 [Documentation index](README.md) · [Project README](../README.md)
 
-## Migrating from `config.cpp`
-
 Earlier versions shipped one robot's devices as globals inside the library
 (`left_chassis`, `right_chassis`, `inertial_sensor`, `intake`, `hood`, ...)
 and a set of bare tuning globals (`distance_kp`, `min_output`,

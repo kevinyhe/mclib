@@ -2,7 +2,8 @@
 # mclib
 
 A PROS 4 library for VEX V5: odometry, motion control, a command-based
-framework, and the mechanism classes a competition robot actually needs.
+framework, and classes for common mechanisms (lifts, flywheels, conveyors,
+pneumatics).
 
 Ships as a PROS template, the same way LemLib does. Headers live in
 `include/mclib/`, implementations in `src/mclib/`, and the repository is itself
@@ -102,19 +103,18 @@ void opcontrol() {
 }
 ```
 
-There are no default dimensions. A wrong wheel size is a silent 5% scaling
-error on every autonomous, so mclib makes you state which measurement you took.
+There are no default dimensions. A wrong wheel size silently scales every
+autonomous by 5%, so mclib makes you say which measurement you took.
 
 ## Before you trust it on a field
 
-The shipped gains are a starting point that passes a simulated plant, not a
-calibration of your robot. At default gains, several arc and boomerang motions
-still miss their endpoints - see
-[Measured accuracy and known limits](docs/accuracy.md) for the exact matrices
-and the reason (lateral slip is not observable through drive encoders).
+The shipped gains were tuned against a simulated robot. Tune them on yours.
+At default gains, several arc and boomerang motions still miss their endpoints.
+[Measured accuracy and known limits](docs/accuracy.md) has the exact numbers and
+the reason: drive encoders cannot see a wheel slipping sideways.
 
-Safety behaviour is verified: a motion that cannot reach its target still stops,
-still reports failure, and still leaves the drive de-energised. Read
+The safety checks all pass. A motion that cannot reach its target still stops,
+reports failure, and leaves the drive de-energised. Read
 [Safety and lifecycle](docs/safety.md) and test with the wheels raised first.
 
 ## Building from source
@@ -128,8 +128,8 @@ make template     # package mclib@<version>.zip
 make test         # build and run the host test suite
 ```
 
-`make test` needs only a host `g++` - no brain, no ARM toolchain. Every test is
-a single file under `tests/` with its own `main()`.
+`make test` runs on any machine with `g++`. Every test is a single file under
+`tests/` with its own `main()`.
 
 ## Requirements
 

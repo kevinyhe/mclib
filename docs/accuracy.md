@@ -9,12 +9,11 @@ still open. Read this before you trust a number from `mclib` on a field.
 
 - **37 host test binaries** covering odometry, path generation, pure pursuit,
   motion profiles, the PID, every mechanism class, the command scheduler and
-  the telemetry sinks. They run on any machine with `g++`; no brain and no ARM
-  toolchain required. `make test`.
-- **The same 37 under AddressSanitizer and UndefinedBehaviorSanitizer**, which
-  is what catches leaks and undefined behaviour in the library itself.
-- **An ARM firmware build** with `arm-none-eabi-g++`, so the code that runs on
-  the brain is the code that was compiled, not a host approximation.
+  the telemetry sinks. They run on any machine with `g++`: `make test`.
+- **The same 37 under AddressSanitizer and UndefinedBehaviorSanitizer.** These
+  catch memory leaks and undefined behaviour in the library.
+- **An ARM firmware build** with `arm-none-eabi-g++`, the compiler that builds
+  the code for the brain.
 - **A physics simulator** replaying the real C++ controller and odometry. See
   [the simulator docs](simulator.md).
 
@@ -32,23 +31,23 @@ four-second deadline per move:
 | Matrix | Passing | What is still failing |
 | --- | --- | --- |
 | Physical drive-encoder, default gains | 70/80 | three boomerangs, six arcs, one six-motor diagonal point move |
-| Two-tracker physical variant | 67/80 | deadlines and settlement, drive-encoder distance loops, encoder heading under slip |
-| Independent ideal motion matrix | 30/36 | two slow arc deadlines, four fast turn oscillation cases |
+| Two-tracker physical variant | 67/80 | six arcs, three encoder-distance drives, two boomerangs, one four-motor point deadline, the encoder-heading stress case |
+| Ideal plant with no inertia, default gains | 28/36 | two slow arc deadlines, four fast turn cases, two fast boomerangs |
 | Targeted completion, default gains | 24/27 | three fast endpoint-only turns |
 | Targeted completion, tuned ideal plant | 27/27 | none, under ideal test conditions |
 
-Safety behaviour passes in full: **40/40 safety checks** and **4/4 wall-reset
-checks** in both physical matrices. A motion that cannot reach its target still
+All 40 safety checks and all 4 wall-reset checks pass in both physical
+matrices. A motion that cannot reach its target still
 stops, still reports failure, and still leaves the drive de-energised.
 
 ## Why the arcs fail
 
 Lateral slip is not observable through drive encoders. `driveTo()` and
 `curveCircle()` close their distance loop around the outer drive wheel, so a
-wheel that slips sideways reports travel that did not happen. Better pose
-estimation does not fix it: with tracking wheels the *pose* can be within
-0.14-0.32 inches of truth while the body still misses the endpoint by several
-inches, because the thing being controlled is wheel travel, not position.
+wheel that slips sideways reports travel that did not happen. Tracking wheels
+do not fix this. With them, the arcs' odometry error is 0.055-0.090 inches
+while the robot misses the endpoint by 5.970-15.473 inches, because the loop
+controls wheel travel and wheel travel is what slips.
 
 Two things would close that gap, and neither is in the library today:
 
@@ -56,9 +55,8 @@ Two things would close that gap, and neither is in the library today:
    an outer-wheel distance primitive.
 2. Your robot's measured dynamics and tuned gains.
 
-## What this means for your season
+## Before your first match
 
-Tune against your own robot. The shipped gains are a starting point that passes
-a simulated plant, not a calibration. Run every autonomous with the wheels
-raised first, then at half speed on a field, and watch `atTarget()` and the
-motion return values rather than assuming a move landed.
+Tune against your own robot; the shipped gains were tuned in simulation. Run
+every autonomous with the wheels raised first, then at half speed on a field.
+Check `atTarget()` and the motion return values after each move.

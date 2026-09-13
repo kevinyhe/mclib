@@ -129,7 +129,6 @@ bool stuck = conveyor.isJammed();
 `applyState` runs from `periodic()`, so the conveyor must be registered with
 `CommandScheduler` or its motors never move.
 
-
 Commands:
 
 ```cpp
@@ -202,7 +201,7 @@ Geared 1:2 for speed, so the output spins twice as fast as the motor, is
 `ratio = 2.0`. Geared 2:1 for torque is `ratio = 0.5`. The default `1.0` means
 the output *is* the motor shaft, and reproduces the ungeared behaviour exactly.
 
-Which RPM is which matters, so it is pinned down:
+Each value is in one of two RPM spaces:
 
 | Quantity | Space |
 | --- | --- |
@@ -212,8 +211,8 @@ Which RPM is which matters, so it is pinned down:
 | the velocity source callback, `getCurrentMotorRpm()` | motor RPM |
 | `kp`, `ki`, `kd`, `kv` | volts per motor RPM |
 
-The rule: **everything you say to the mechanism is output RPM**, because the
-output speed is what you actually care about. The loop internally divides by
+Everything you pass to the mechanism is output RPM, because output speed is
+what you are trying to control. The loop internally divides by
 `ratio` and runs in motor RPM, so the gains keep their natural "volts per motor
 RPM" meaning. For `kv` that means the number itself is unchanged by gearing - it
 is set by the motor's free speed. `kp`, `ki` and `kd` still want retuning when
@@ -250,9 +249,8 @@ With the motor measured at 280 RPM, the wheel is at 560 RPM:
 
 `atSpeed()` is judged in output RPM too. At `ratio = 2.0` with
 `tolerance_rpm = 10.0`, a motor error of 6 RPM is a wheel error of 12 RPM and
-does **not** count as at speed, even though 6 is under 10. Applying the ratio to
-the target but not to the tolerance is the classic silent bug here; it is not
-done that way.
+does **not** count as at speed, even though 6 is under 10. Scaling the target
+but not the tolerance would be a silent bug, so both are scaled.
 
 `ratio` must be finite and greater than zero - zero would divide by zero, a
 negative value would invert the loop, and an infinite one would divide every
@@ -339,8 +337,8 @@ void initialize() {
 
 `makeSetCommand`, `makeExtendCommand`, `makeRetractCommand` and
 `makeToggleCommand` act once and end. The `...ForCommand(QTime)` variants hold
-the state for the duration, then end and leave the mechanism in that state --
-they do not restore the previous one.
+the state for the duration, then end and leave the mechanism in that state.
+They do not restore the previous one.
 
 ## MechanismManager
 
@@ -376,7 +374,7 @@ void opcontrol() {
 ```
 
 The manager must outlive the scheduler's use of the commands, so give it static
-or program-long storage — a file-scope object like above is fine.
+or program-long storage. A file-scope object like the one above works.
 
 `add()` returns `false` and stores nothing if the subsystem or command is null,
 if that subsystem is already held, or if the name is already taken. `name` is
@@ -402,7 +400,7 @@ mechanisms.setAllEnabled(true);
 printf("%s", mechanisms.describe().c_str());
 ```
 
-`describe()` prints one line per entry — name, enabled, registered, and which
+`describe()` prints one line per entry: name, enabled, registered, and which
 command currently holds the scheduler's requirement on that subsystem:
 
 ```
@@ -516,8 +514,8 @@ Three stop detectors can be enabled independently, and the first one to fire
 wins: the limit-switch predicate, current draw above `current_threshold_amps`,
 and a velocity stall (`|rpm| < velocity_threshold_rpm` held for
 `stall_dwell_ms`). Inrush current is ignored for the first `startup_grace_ms`,
-and the stall detector arms once the mechanism has been seen moving — or once
-that window has passed, which covers a mechanism that starts out already resting
+and the stall detector arms once the mechanism has been seen moving, or once
+that window has passed, which covers a mechanism that starts out resting
 against the stop. The sensor is zeroed at the stop, before any back-off.
 
 Drive it either from the state machine directly (`startHoming()`,
@@ -533,14 +531,14 @@ while (home_arm->scheduled()) {
 }
 ```
 
-`makeHomeCommand` always finishes — on success, on failure, or on its own
-timeout — and stops the motor on every exit path, interruption included. It also
+`makeHomeCommand` always finishes (on success, on failure, or on its own
+timeout) and stops the motor on every exit path, interruption included. It also
 steps the state machine from `execute()`, so it still works if the mechanism is
 not registered with the scheduler.
 
 ## PTO (`mechanism/pto_mechanism.hpp`)
 
-`PTOMechanism` is one set of motors mechanically switched between two consumers —
+`PTOMechanism` is one set of motors mechanically switched between two consumers,
 usually the drivetrain and a lift. It is a `StateMechanism<bool>`: `true` means the
 motors are routed to the engaged consumer, `false` to the disengaged one.
 
@@ -598,7 +596,7 @@ temperatures. Writing voltage through it bypasses the guard; use
 re-fetch it every tick rather than caching it across a shift. Voltage always goes
 through the drive calls: `periodic()` rewrites the commanded voltage every tick, so
 a direct `setVoltage()` is overwritten on the next scheduler pass. The same holds
-for the constructor that takes an existing `MotorGroup` — once the PTO shares it,
+for the constructor that takes an existing `MotorGroup`. Once the PTO shares it,
 the drivetrain must write through `driveDisengaged()` too.
 
 Commands: `makeEngageCommand()`, `makeDisengageCommand()` and `makeToggleCommand()`
@@ -891,13 +889,13 @@ timeout, and brake if interrupted. `makeNextCommand()`, `makePreviousCommand()`
 and `makeCycleCommand()` are one-shots. `makeManualCommand(volts)` and
 `makeStopCommand()` hold the requirement for as long as they run.
 
-Behaviors worth knowing:
+What to expect:
 
 - Nothing drives until you ask. A fresh mechanism sits at 0 V with the loop
   disengaged, like a bare `PositionMechanism`. The first `setPreset()`,
   step, `moveTo()`, `setManualVoltage()` or `stop()` engages it.
 - The table pushes its setpoint every tick, but the mechanism only retargets
-  when the setpoint actually changed or when a retarget was asked for. Feeding
+  when the setpoint changed or when a retarget was asked for. Feeding
   the sink straight into `moveTo()` would reset the PID 50 times a second and
   the loop would never settle.
 - Re-issuing the *same* preset after a manual override still takes control
@@ -925,11 +923,10 @@ Behaviors worth knowing:
 ## AutoTriggerMechanism: auto-fire on a sensor edge
 
 `AutoTriggerMechanism` watches a `std::function<bool()>` and calls a
-`std::function<void()>` when it goes from false to true. That is the whole
-type. It knows nothing about what the sensor is or what the action does, which
-is why it covers auto-clamping on a goal, auto-indexing on a detected object,
-auto-retracting on a limit switch, and auto-stopping on a proximity reading with
-one implementation.
+`std::function<void()>` when it goes from false to true. It knows nothing
+about what the sensor is or what the action does, so one implementation covers
+auto-clamping on a goal, auto-indexing on a detected object, auto-retracting on
+a limit switch, and auto-stopping on a proximity reading.
 
 Composed with a `ToggleMechanism`, it replaces a hand-written game-specific
 clamp subsystem:
@@ -1056,14 +1053,12 @@ pointing at the old address.
 
 ## Mechanism copy/move, and PID holding output
 
-Two defects that several mechanisms were each working around locally are now
-fixed at the source. The local workarounds are still in place and still
-correct; removing them is a separate follow-up, so mechanism behaviour is
-unchanged by this alone.
+Two rules that apply to every mechanism: they cannot be copied or moved, and
+their PID can keep driving after it arrives.
 
 ### `StateMechanism` is explicitly non-copyable and non-movable
 
-`StateMechanism<StateT>` now deletes its copy constructor, copy assignment,
+`StateMechanism<StateT>` deletes its copy constructor, copy assignment,
 move constructor and move assignment.
 
 Subclasses routinely store a `std::function` that captured `this` -
@@ -1075,7 +1070,7 @@ possibly destroyed, object. A mechanism is also an identity: the
 `CommandScheduler` registers it by address and it owns its default command, so
 a second copy was never meaningful.
 
-Both operations were in fact already blocked by accident - `Subsystem` holds a
+Both operations were already blocked by accident: `Subsystem` holds a
 `std::unique_ptr<Command>`, which implicitly deletes its copy constructor, and
 declares a virtual destructor, which suppresses the implicit move constructor.
 That is fragile (removing the `unique_ptr` member would silently re-enable
@@ -1085,7 +1080,7 @@ what is wrong.
 
 Hold mechanisms in place: static or program-long storage, or
 `std::vector<std::unique_ptr<T>>`. `std::vector<PositionMechanism>` does not
-compile, which is the point.
+compile.
 
 ### `PID::setHoldOutput(bool)`
 
@@ -1104,15 +1099,12 @@ hold: arrival requires `|error| <= small_error_tolerance`, and `update()` zeroes
 loaded arm settles wherever `kp * error` balances the load, up to
 `small_error_tolerance` of steady droop.
 
-The default is `false`, which is the original behaviour, so existing callers
-are unaffected. `ChassisController` and the legacy routines in
-`control/motion.cpp` end their motions on `targetArrived()`, which this change
-does not touch either way.
+The default on a bare `PID` is `false`, the original behaviour.
+`ChassisController` and the routines in `control/motion.cpp` end their motions
+on `targetArrived()`, which works the same with hold on or off.
 
-`setHoldOutput` is on `PID` itself. `Arm` and `PositionMechanism` hold their
-`PID` privately with no accessor and no config flag, so today only code that
-owns a bare `PID` can turn it on. Plumbing it through those configs is the
-follow-up that also retires their local workarounds.
+`PositionMechanismConfig::hold_output` turns it on for position mechanisms, and
+defaults to `true` there.
 
 Three useful configurations:
 
@@ -1124,13 +1116,12 @@ Three useful configurations:
 
 ### The `small_error_tolerance` trap
 
-Worth knowing, and now documented in `pid.hpp`: `PID`'s default
-`small_error_tolerance` is `1`, and `update()` zeroes `sum_error` whenever
+`PID`'s default `small_error_tolerance` is `1`, and `update()` zeroes `sum_error` whenever
 `|error| <= small_error_tolerance`. For any loop that operates inside an error
 of 1 - velocity control in rpm, a position loop in revolutions - that silently
 disables `ki` entirely. Call `setSmallBigErrorTolerance(0, 0)` for those loops
 (and `setArrive(false)`, since the same tolerances drive arrival detection).
 
-`pid.hpp` now documents every method and the interaction between `arrive`,
+`pid.hpp` documents every method and the interaction between `arrive`,
 `arrived`, `hold_output`, the two error tolerances and the two settle
 durations.

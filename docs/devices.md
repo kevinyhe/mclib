@@ -4,8 +4,6 @@ Thin typed wrappers over the PROS device APIs.
 
 [Documentation index](README.md) · [Project README](../README.md)
 
-## Device wrappers
-
 Every wrapper lives in `mclib::device`, owns the PROS object, and exposes two kinds of getter. The plain one (`getDistanceCm()`, `getHue()`, ...) returns exactly what PROS returns, including `PROS_ERR` / `PROS_ERR_F` on a bad port. The typed one (`distance()`, `hue()`, `position()`, ...) returns `std::optional` and is `nullopt` on those errors, so an unplugged sensor is something you have to unwrap rather than a 2-billion-degree angle that flows into odometry.
 
 ADI (3-wire) wrappers take the port as a char (`'A'`..`'H'`) and have a second constructor `(expander_smart_port, adi_port, ...)` for a 3-wire expander.

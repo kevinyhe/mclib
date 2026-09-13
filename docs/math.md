@@ -4,8 +4,6 @@ The geometry and helper functions the rest of the library is built on.
 
 [Documentation index](README.md) · [Project README](../README.md)
 
-## Core Math API
-
 ```cpp
 using Vec2 = Eigen::Matrix<double, 2, 1>;
 using Vec3 = Eigen::Matrix<double, 3, 1>;
@@ -36,7 +34,7 @@ Vec2 fieldPointToRobot(const Vec2& field_point, const Pose2D& robot_pose);
 Vec2 robotPointToField(const Vec2& robot_point, const Pose2D& robot_pose);
 double arcRadius(const Pose2D& from, const Vec2& target);
 
-// Standard frame (CCW, 0 = +X). NOT the field convention -- see above.
+// Standard frame (CCW, 0 = +X). NOT the field convention; see units.md.
 Mat2 rotationMatrix(double rad);
 Vec2 rotate(const Vec2& vec, double rad);
 ```
@@ -49,25 +47,21 @@ double degToRad(double deg);
 double radToDeg(double rad);
 
 // x/y/x1/y1 in inches (field frame), angle in DEGREES (compass frame).
-// Legacy and frame-buggy -- see below. Returns +infinity when the
+// Legacy and frame-buggy; see below. Returns +infinity when the
 // denominator degenerates.
 double getRadius(double x, double y, double x1, double y1, double angle);
 ```
 
-`getRadius` is a legacy helper with a frame bug: its denominator uses
-`delta_y` where the target's **lateral** offset in the robot frame belongs, so
-a target 10 in dead ahead of a robot at heading 0 -- a straight line, infinite
-radius -- comes back as 5. `mclib::arcRadius(from, target)` computes it
-correctly. `getRadius` is left alone because `boomerang`'s tuning was fitted
-around its behavior; rewiring the caller is Phase 3 work.
+`getRadius` is a legacy helper with a frame bug. Its denominator uses
+`delta_y` where the target's **lateral** offset in the robot frame belongs, so a
+target 10 in dead ahead of a robot at heading 0 (a straight line, with infinite
+radius) comes back as 5. Use `mclib::arcRadius(from, target)`, which computes it
+correctly.
 
-The one change made here is the degenerate case: it used to return a magic
-`999`, which silently became a finite speed limit downstream, and now returns
-infinity. Its one caller, `control/motion.cpp:1074`, feeds it to
-`sqrt(chase_power * getRadius(...) * 9.8)` -- an expression that mixes a
-voltage-ish tuning constant, a radius in inches, and g in m/s^2, takes the
-square root of a value that can be negative, and now yields NaN when
-`chase_power` is 0. That is a known problem and out of scope here.
+Nothing in the library calls `getRadius` any more: `boomerang` switched to
+`arcRadius()`. It stays in `utils.hpp` for existing robot code. Its degenerate
+case returns infinity; it used to return `999`, which silently became a finite
+speed limit downstream.
 
 Other modules are split into matching header/source pairs:
 

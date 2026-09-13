@@ -56,8 +56,8 @@ using namespace mclib::units;
 QLength target = 24 * inch;
 ```
 
-The two exceptions are `millisecond` and `second`, which are global for
-back-compat — `250 * millisecond` and `pros::millis() * millisecond` work
+The two exceptions are `millisecond` and `second`, which stay global for
+back-compat, so `250 * millisecond` and `pros::millis() * millisecond` work
 unqualified anywhere.
 
 ### Getting a raw double back out
@@ -85,8 +85,8 @@ resort.
 ### Angles
 
 `QAngle` stores **radians**. The public motion API of this library speaks
-degrees and `Pose2D::theta` speaks radians; making the conversion a method call
-(`.deg()` / `.rad()`) is the point. Angle is a real dimension, so
+degrees and `Pose2D::theta` speaks radians, so every conversion is a visible
+method call (`.deg()` / `.rad()`). Angle is a real dimension, so
 `radius * angle` does not type-check on its own - use the sanctioned crossings:
 
 ```cpp
@@ -97,8 +97,8 @@ QAngularVelocity turn = turnRate(speed, curvature);   // speed * curvature
 QCurvature k    = turnCurvature(speed, omega);        // the inverse
 ```
 
-`turnRate` is the one pure pursuit needs: `speed * curvature` on its own is a
-`QFrequency` — right arithmetic, wrong dimension.
+Pure pursuit needs `turnRate`. `speed * curvature` on its own is a
+`QFrequency`: the arithmetic is right but the dimension is wrong.
 
 `wrap(angle)` folds an angle into [-180 deg, +180 deg], using the same algorithm
 and the same closed range as the pre-existing `mclib::wrapAngle(double)`,
@@ -125,10 +125,10 @@ if (now - start >= 250 * millisecond) { /* ... */ }
 ```
 
 The global surface is split in two. `QTime`, `millisecond` and `second` are
-unconditional, because mclib's own headers use them unqualified at ~33 sites —
-making those conditional would only mean the library stops compiling. Everything
-else — the other 13 aliases and all the literal suffixes — is convenience, and
-defining `MCLIB_NO_GLOBAL_UNITS` before including mclib switches it off.
+unconditional, because mclib's own headers use them unqualified at about 33
+sites and the library would stop compiling without them. The other 13 aliases
+and all the literal suffixes are convenience, and defining
+`MCLIB_NO_GLOBAL_UNITS` before including mclib switches them off.
 
 That opt-out exists for a specific collision: okapilib declares the same
 `QLength` / `QAngle` / `QArea` / `QJerk` / `QFrequency` / `QAcceleration` names
@@ -136,13 +136,13 @@ and the same `_in` / `_ft` / `_deg` / `_rad` / `_ms` / `_s` / `_rpm` suffixes, s
 a project doing `using namespace okapi;` alongside mclib would get ambiguity on
 all of them. With the macro defined, reach for `mclib::units::` instead.
 
-The `Quantity` template itself is never exported globally — spell it
-`mclib::units::Quantity` — because a downstream global `class Quantity` would
-otherwise become ambiguous.
+The `Quantity` template itself is never exported globally. Spell it
+`mclib::units::Quantity`, so a global `class Quantity` in your own code does not
+become ambiguous.
 
-One deliberate hole in the type safety: `QNumber` (all exponents zero) converts
-implicitly to and from `double`, because gains and gear ratios have to
-interoperate with plain arithmetic. Every other dimension requires the explicit
+`QNumber` (all exponents zero) converts implicitly to and from `double`, so
+gains and gear ratios work with plain arithmetic. That is the one hole in the
+type safety. Every other dimension requires the explicit
 constructor.
 
 ### Tests
@@ -164,14 +164,13 @@ mclib has one canonical frame, the **compass / field frame**:
 
 - `theta = 0` points along **+Y**.
 - `theta` increases **clockwise**, so **+90 deg points along +X**.
-- The unit vector for a heading is `(sin(theta), cos(theta))` -- x uses sin, y
+- The unit vector for a heading is `(sin(theta), cos(theta))`: x uses sin, y
   uses cos.
-- A bearing from A to B is `atan2(b.x - a.x, b.y - a.y)` -- x first, y second.
+- A bearing from A to B is `atan2(b.x - a.x, b.y - a.y)`: x first, y second.
 
-Both of those are the transpose of the usual textbook formulas. This is
-deliberate: it matches how VEX field diagrams are drawn, and it is what
-`control/odometry.cpp`, `control/motion.cpp` and `snapshot/raycast.cpp`
-already do.
+Both of those are the transpose of the usual textbook formulas. That matches how
+VEX field diagrams are drawn, and it is what `control/odometry.cpp`,
+`control/motion.cpp` and `snapshot/raycast.cpp` do.
 
 Units: angles are **radians** everywhere inside `math.hpp` (`Pose2D::theta`,
 `wrapAngle`), and **degrees** at the public motion API (`Chassis`,
@@ -213,7 +212,7 @@ Feeding it a compass heading turns the wrong way: `rotate({0, 1}, rad)` gives
 `(-sin, cos)`, while a robot at that heading actually points at `(sin, cos)`.
 Because the two frames are transposes, `rotationMatrix(rad)` happens to equal
 the field-to-robot matrix, so `rotate()` with a compass heading silently does
-`fieldToRobot()` -- the inverse of what "rotate my local offset into the
+`fieldToRobot()`, the inverse of what "rotate my local offset into the
 field" means. Call `fieldToRobot` / `robotToField` and the bug cannot happen.
 
 ### `Pose2D::operator+` is not a compose

@@ -18,10 +18,10 @@ pros c fetch mclib@0.1.0.zip
 pros c apply mclib
 ```
 
-`fetch` puts the template in the local cache; `apply` copies the headers and the
-compiled archive into your project and records the dependency in
-`project.pros`. Both steps are per-project - the cache is shared, the applied
-copy is not.
+`fetch` puts the template in the local cache, which every project on the
+machine shares. `apply` copies the headers and the compiled archive into one
+project and records the dependency in its `project.pros`, so run `apply` in
+each project that uses mclib.
 
 Then include the umbrella header:
 
@@ -35,9 +35,8 @@ To move to a newer mclib later, fetch the new zip and run `pros c apply mclib
 ### Version pinning
 
 `pros c apply mclib@0.1.0` pins an exact version when several are cached. With
-no version, the newest cached one wins. Pin it: a mid-season library upgrade
-that changes a default gain is not something you want to discover at a
-competition.
+no version, the newest cached one wins. Pin it. You do not want to find out at a
+competition that a library upgrade changed a default gain.
 
 ### What lands in your project
 
@@ -46,8 +45,8 @@ competition.
 - `firmware/mclib.a` - the compiled library.
 
 The archive is built with debug symbols, so it is large (roughly 21 MB) and the
-template zip is larger still. None of that reaches the brain: only the code you
-actually call is linked into your binary.
+template zip is larger still. The linker only pulls in the code you call, so
+none of that size reaches the brain.
 
 ## Building
 
@@ -144,7 +143,7 @@ minute and an incremental one under a second. It never touches the ARM
 toolchain, never links PROS, and never runs the firmware build. Binaries land
 in `bin/tests/`, which is already gitignored, and `make clean` removes them.
 
-`tests/` sits at the repo root, deliberately outside `src/`. `common.mk` globs
+`tests/` sits at the repo root, outside `src/`. `common.mk` globs
 `src/**` recursively into the firmware, so a test directory under `src/` would
 be compiled into the library. Do not move it, and do not add `tests/` to
 `TEMPLATE_FILES`.
@@ -152,7 +151,7 @@ be compiled into the library. Do not move it, and do not add `tests/` to
 ### Writing a test
 
 One test per file, each with its own `int main()`. There is no framework, no
-registration macro, and nothing to add to the `Makefile` — the glob picks up
+registration macro, and nothing to add to the `Makefile`. The glob picks up
 any new `tests/*.cpp` on the next run.
 
 ```cpp
@@ -197,7 +196,7 @@ otherwise; `make test` exits non-zero and names each failing binary.
 
 Do not `CHECK` the wrong value. Pinning known-bad behaviour means the person
 who eventually fixes it gets a red build blamed on their commit. Use
-`mclib::test::knownBug(still_present, "what is wrong")` instead — it prints
+`mclib::test::knownBug(still_present, "what is wrong")` instead. It prints
 either `KNOWN BUG (still present)` or `KNOWN BUG (appears FIXED, update this
 test)` and never touches the exit code.
 
@@ -211,16 +210,16 @@ mclib::test::knownBug(
 
 ### What can be tested
 
-Tests link against `HOST_TEST_SRC` in the `Makefile` — the library sources that
+Tests link against `HOST_TEST_SRC` in the `Makefile`, the library sources that
 compile without PROS headers: the math, the PID, the odometry integrator, the
 motion profile and feedforward, the path follower, the snapshot solver, the
 mechanisms, the command scheduler, the telemetry logger and the drive curves.
 
-`robot_state.cpp` and `odometry.cpp` are PROS-free by construction, not by accident. `sync.hpp`
+`robot_state.cpp` and `odometry.cpp` were written to stay PROS-free. `sync.hpp`
 picks `std::mutex` over `pros::Mutex` when `MCLIB_HOST_BUILD` is defined, and
-`Odometry` takes a struct of raw sensor readings rather than reading devices
-itself -- the task that does read them lives in `control/odometry_task.cpp`,
-which is not host-testable and holds no math.
+`Odometry` takes a struct of raw sensor readings instead of reading devices
+itself. The task that reads them lives in `control/odometry_task.cpp`, which is
+not host-testable and holds no math.
 
 This list is expected to grow. Anything that pulls in `pros/...` cannot be
 linked on the host, so making a source testable usually means putting a seam in

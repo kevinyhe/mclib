@@ -72,9 +72,9 @@ called `x_in`.
 
 `set()` is one double store. `sample()` is a clock read, and on a sampling tick
 a `sizeof(Row)` copy (about 200 bytes) into a lock-free ring plus one release
-store. No allocation, no lock, no file I/O on the producer side. That is the
-whole worst case a control tick pays - sub-microsecond on the V5's Cortex-A9,
-and independent of how slow or jittery the SD card is.
+store. The producer side never allocates, locks or touches a file. That is the
+worst case a control tick pays: under a microsecond on the V5's Cortex-A9,
+however slow or jittery the SD card is.
 
 The writing happens in `FlushTask`, a `pros::Task` at priority
 `TASK_PRIORITY_DEFAULT - 1`, which drains the ring every 100 ms by default.
@@ -104,7 +104,7 @@ Nothing here can grow without limit:
 
 `SdCardSink` probes for the card exactly once, on the first flush, by opening
 the file. If there is no card the sink reports itself unavailable and every
-later call is a no-op: no exceptions, no crash, no retry storm. The logger
+later call is a no-op. It does not throw, crash or keep retrying. The logger
 still drains its ring so the control loop never wedges behind a dead sink. The
 same holds for a card that dies mid-match.
 
@@ -188,8 +188,8 @@ and every caller's undefined reference to it forces the linker to pull
 `waitCommand.h` and the mechanism sources (`auto_trigger`, `conveyor`, `homing`,
 `position`, `pto`, `toggle_group`, `velocity`) all read time through the seam.
 `control/motion.cpp`, `control/odometry.cpp` and `auton/autonomous_routine.cpp`
-still call `pros::millis()` and `pros::delay()` directly; they are Phase 3 work.
-Until then a fake clock does not affect those loops, so do not mix a
+still call `pros::millis()` and `pros::delay()` directly and have not been
+converted. A fake clock does not affect those loops, so do not mix a
 `ScopedClock` with a routine that drives them.
 
 ### Host tests
@@ -227,5 +227,5 @@ static std::uint32_t fake_ms = 0;
 it, and `restoreSystemClock()` goes back to the platform clock. `ScopedClock`
 does the save/restore for you.
 
-`src/mclib/pid.cpp` compiles and links with no PROS headers reachable at all,
-which is what makes host-side testing of the control code possible.
+`src/mclib/pid.cpp` compiles and links with no PROS headers reachable, so the
+control code can be tested on a host.

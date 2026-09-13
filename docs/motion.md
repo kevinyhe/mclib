@@ -16,8 +16,8 @@ feedforward model replaces both: the profile says what velocity to be at right
 now, the model says what voltage that velocity costs, and the PID only has to
 clean up the difference.
 
-Both files are pure arithmetic over `mclib::units` - no PROS, no hardware, no
-clock inside the profile at all - so `tests/profile_test.cpp` and
+Both files are plain arithmetic over `mclib::units`, with no PROS calls,
+hardware or clock inside the profile, so `tests/profile_test.cpp` and
 `tests/feedforward_test.cpp` check every number on the host.
 
 ### The profile
@@ -36,7 +36,7 @@ const ProfileState now = profile.sample(750_ms);
 
 That worked example: 48 inches at 48 in/s with 96 in/s² both ways is 0.5 s of
 acceleration over 12 inches, 0.5 s of cruise over 24 inches, 0.5 s of
-deceleration over 12 inches. **Total 1.5 s, final position 48.000000000 in.**
+deceleration over 12 inches. Total 1.5 s, final position 48.000000000 in.
 
 `ProfileConstraints` carries four magnitudes, two of which have a "zero means
 something else" convention that keeps the common case a two-field aggregate:
@@ -51,8 +51,8 @@ something else" convention that keeps the common case a two-field aggregate:
 Set `max_jerk` and `generate()` builds an S-curve instead: acceleration ramps
 in and out at the jerk limit, so the voltage command has no steps in it.
 Over the same 48 inches with a 384 in/s³ jerk limit that is 0.75 s of ramp
-over 18 inches, 0.25 s of cruise over 12 inches, 0.75 s of ramp down - **1.75 s
-total**. Smoothness costs a quarter of a second.
+over 18 inches, 0.25 s of cruise over 12 inches, and 0.75 s of ramp down: 1.75 s
+total. The smoother command costs a quarter of a second.
 
 The cases that break naive implementations are all defined behaviour and all
 pinned by tests:
@@ -183,8 +183,7 @@ the output while the robot was still moving. The integral is clamped at 2 V by
 default rather than PID's unbounded 0, because a follower stalled against a
 wall would otherwise wind up the whole battery.
 
-With a good model `kp` is small. It is correcting modelling error, not driving
-the motion.
+With a good model `kp` is small, because it only corrects modelling error.
 
 `calculate(setpoint, measured, dt)` is the seam a path follower uses: it brings
 its own setpoint and its own timestep and never touches the follower's
@@ -192,9 +191,9 @@ stopwatch.
 
 `attachTelemetry(&logger)` registers six columns - setpoint position and
 velocity, measured position, error, and the feedforward/feedback split of the
-command - and writes them on every `update()`. That split is the whole tuning
-story: a feedback term that is large next to the feedforward means the model is
-wrong, not that `kp` needs raising. The follower never calls `sample()`; the
+command - and writes them on every `update()`. Tune from that split. A
+feedback term that is large next to the feedforward means the model is wrong,
+and raising `kp` will not fix it. The follower never calls `sample()`; the
 control loop owns the cadence.
 
 ## Paths and pure pursuit (`mclib/path/`)
@@ -255,11 +254,11 @@ compiles and runs and merely drives into a wall.
 The sign comes from the heading of the *segment* the projection landed on, not
 from `Path::atDistance()`. A polyline's heading is only defined per segment, so
 `atDistance()` ramps between vertex headings, which scales the reported error
-by `cos(the ramp)` — and flips its sign outright on a corner sharper than 90
-degrees, which is exactly the hairpin case.
+by `cos(the ramp)`, and flips its sign on a corner sharper than 90 degrees,
+which is the hairpin case.
 
-The frame check that anchors the whole unit: a straight path from `(0, 0)` to
-`(0, 10)`, robot at the origin at heading 0, lookahead 5 in. The goal point
+The basic frame check is a straight path from `(0, 0)` to `(0, 10)`, with the
+robot at the origin at heading 0 and a 5 in lookahead. The goal point
 comes back as exactly `(0, 5)` and the curvature as exactly `0`.
 
 ### Why Catmull-Rom
@@ -294,12 +293,12 @@ through the first (and last) three knots instead, which reproduces a circle to
 - **More than one intersection.** The lookahead circle can cut the path in
   several places. The follower takes the **first intersection at or after a
   monotone lookahead cursor**, walking segments forward from where it stopped
-  last tick. "First ahead" and not "furthest along" is the point: on a hairpin
-  the far branch is also inside the circle, and chasing it cuts the corner and
-  abandons the rest of the path.
+  last tick. It takes the first intersection ahead, not the furthest along,
+  because on a hairpin the far branch is also inside the circle, and chasing it
+  cuts the corner and abandons the rest of the path.
   The search runs twice. The first pass walks forward from the lookahead
   cursor. The second restarts at the closest point, and only runs when the
-  first found nothing — without it, a robot shoved back two inches leaves the
+  first found nothing. Without it, a robot shoved back two inches leaves the
   cursor ahead of its own lookahead circle and the follower reports the end of
   the path with 30 in still to drive. The retry never starts behind the closest
   point, so it cannot undo the doubling-back guarantee.
@@ -311,7 +310,7 @@ through the first (and last) three knots instead, which reproduces a circle to
   as arriving.
 - **The goal ends up behind the robot.** This is the one that drives into a
   wall. `arcRadius()` returns `+infinity` for a goal straight ahead **and** for
-  one straight behind — both are a zero lateral offset — so a reversed robot
+  one straight behind (both have zero lateral offset), so a reversed robot
   gets curvature 0 and full speed away from the path, and the forward-only
   cursor means it never recovers. Anything strictly behind the robot gets the
   tightest turn available instead, toward whichever side the goal is on.
@@ -327,9 +326,9 @@ through the first (and last) three knots instead, which reproduces a circle to
   length ahead. The test drives up an outbound leg whose return leg is 4 in
   away in field space; an unguarded nearest-point search latches onto the
   return leg, this one does not. The window is enforced on the parameter
-  *inside* a segment, not only on whole samples — one segment of a
+  *inside* a segment, not only on whole samples. One segment of a
   `fromWaypoints()` polyline can be longer than the whole window, and without
-  that a single bad pose skips the route for good.
+  that check a single bad pose skips the rest of the route.
 
 ### Speed
 
@@ -341,9 +340,9 @@ Three limits, smallest wins:
 | Cornering | `sqrt(max_lateral_accel / k)` over the tightest curvature in the next lookahead of path |
 | Stopping | `sqrt(2 * max_decel * remaining)` |
 
-A non-positive `max_lateral_accel` or `max_decel` means "no limit", not "speed
-zero" — switching the endpoint ramp off must not pin the robot at
-`min_velocity` for the whole path.
+A non-positive `max_lateral_accel` or `max_decel` means "no limit". Treating it
+as "speed zero" would pin the robot at `min_velocity` for the whole path when
+you switch the endpoint ramp off.
 
 `min_velocity` is a floor under the result while the path is unfollowed, and
 the pair is scaled down together if `wheelSpeeds()` would put either wheel over
@@ -359,8 +358,7 @@ profile's speed through `wheelSpeeds()` with the reported curvature.
 
 `PurePursuit::attachLogger(logger)` registers five channels - goal x, goal y,
 cross-track error, curvature in 1/in, and commanded velocity - and every
-`update()` writes them. A path follower you cannot plot is a path follower you
-cannot tune.
+`update()` writes them.
 
 ### Do not use `getRadius()`
 

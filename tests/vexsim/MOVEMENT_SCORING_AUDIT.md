@@ -1,8 +1,8 @@
-# Movement and scoring audit — September 9, 2026
+# Movement and scoring audit, September 9, 2026
 
-Not all movement scenarios pass. The mclib controllers and the external Metro
-controllers are separate implementations; a passing mclib test is not a Metro
-accuracy guarantee.
+Some movement scenarios still fail. The mclib controllers and the external
+Metro controllers are separate implementations, so a passing mclib test says
+nothing about Metro's accuracy.
 
 ## September 10: original targets restored, editable points
 
@@ -35,10 +35,10 @@ boomerang error is 27.16 in. These failures show that slip alone does not explai
 all endpoint problems. Raw results and compiled test artifacts remain in the
 two temporary directories above. Both commands return failure as intended.
 
-Metro coverage includes its actual full routine, host scheduler/sensor checks,
-and compiled signed-arc geometry. It does not independently prove every Metro
-movement function accurate. This update does not silently substitute mclib
-controllers or feed simulated truth into Metro's steering.
+Metro coverage includes its full routine, host scheduler and sensor checks,
+and compiled signed-arc geometry. It does not prove every Metro movement function
+accurate. Metro still steers with its own controllers and its own odometry; no
+mclib controller or simulated truth was swapped in.
 
 ## Why the original Metro replay missed
 
@@ -79,7 +79,7 @@ retain identity; no test or production mapping assigns a successful goal.
 Entry, collision and scoring remain the native physics calculation. The
 user-selected 4x goal stopping rate is included in these checks.
 
-The constrained intake route and route-change repositioning remain geometric
-approximations, not measured Metro mechanism dynamics. The complete autonomous
-run still misses the goals with its existing waypoint/deadline configuration;
-passing isolated scoring checks does not mean the autonomous scores correctly.
+The constrained intake route and route-change repositioning are geometric
+approximations; nobody measured Metro's mechanism dynamics. The complete
+autonomous still misses the goals with its current waypoints and deadlines, so
+passing the isolated scoring checks does not mean the autonomous scores.

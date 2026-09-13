@@ -19,10 +19,8 @@ The subsystem itself is the owner. Hand it the default command with
 `setDefaultCommand` and register with `registerSelf`:
 
 ```cpp
-Intake intake{...};
 PositionMechanism arm{...};
 ConveyorMechanism conveyor{{-20, -21}};
-Arm arm{...};
 
 void initialize() {
   conveyor.setName("conveyor");
@@ -35,8 +33,8 @@ void initialize() {
 }
 ```
 
-No global `std::unique_ptr` variables and no lifetime bookkeeping. The subsystem
-keeps the default command alive for as long as it is alive.
+You do not need a global `std::unique_ptr` for it. The subsystem keeps the
+default command alive for as long as the subsystem is alive.
 
 The older two-argument form still works, and is still the right tool when the
 default command must live somewhere other than the subsystem. You keep ownership,
@@ -123,19 +121,11 @@ There are three ways to own one, in order of preference:
 2. **Give it to a `MechanismManager`.** It owns the default commands of every
    mechanism you add to it. See [Mechanisms](mechanisms.md#mechanismmanager).
 3. **Hold the `std::unique_ptr` yourself**, in storage that lives as long as the
-   program. A file-scope `std::unique_ptr<Command>` is the usual answer.
+   program. A file-scope `std::unique_ptr<Command>` works, as in the `index`
+   example above.
 
-```cpp
-std::unique_ptr<Command> index;
-
-void opcontrol() {
-  index = conveyor.makeIndexCommand(1500.0);
-  index->schedule();
-}
-```
-
-A local `unique_ptr` inside a function is the mistake to avoid: the command dies
-at the closing brace while the scheduler still points at it.
+Do not hold it in a local `unique_ptr` inside a function. The command dies at
+the closing brace while the scheduler still points at it.
 
 ### Decorators
 
@@ -153,8 +143,8 @@ void initialize() {
 }
 ```
 
-They are `[[nodiscard]]`: dropping the result on the floor is a warning, because
-it used to be a leak.
+They are `[[nodiscard]]`, so discarding the result is a compiler warning.
+Before 0.1.0 it was a silent leak.
 
 Two rules:
 
@@ -182,5 +172,5 @@ pointer, so the sources must outlive it.
 ### Before you schedule
 
 A command must be owned before it is scheduled, and it must stay alive until the
-scheduler is done with it. `CommandScheduler::endAndForget(cmd)` is the way to
-take a command back from the scheduler if you need to destroy it early.
+scheduler is done with it. To destroy one early, first take it back with
+`CommandScheduler::endAndForget(cmd)`.

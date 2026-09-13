@@ -4,8 +4,6 @@ Ports, geometry, odometry and your first working opcontrol.
 
 [Documentation index](README.md) · [Project README](../README.md)
 
-## Setting up your robot
-
 Nothing in mclib knows what ports your motors are on. A robot program declares
 its devices, builds a `Chassis` from them, and builds a `ChassisController`
 on the Chassis. Constructing the controller does two things for the whole

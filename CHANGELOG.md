@@ -40,9 +40,8 @@ First release. Packaged as a PROS template:
   selector that persists the last choice.
 - **Units.** A compile-time dimensional analysis library, so a gain with the
   wrong units fails to compile.
-- **Testing.** 37 host test binaries that build with a plain `g++`, no brain and
-  no ARM toolchain needed, plus a physics simulator that replays the real C++
-  controller.
+- **Testing.** 37 host test binaries that build with a host `g++`, plus a
+  physics simulator that replays the real C++ controller.
 
 ### Fixed
 

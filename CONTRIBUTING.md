@@ -4,8 +4,7 @@ Bug reports, questions and pull requests are all welcome.
 
 ## Before you start
 
-Read [docs/README.md](docs/README.md). The library is built around a few fixed
-ideas that a change has to respect:
+Read [docs/README.md](docs/README.md). A change has to keep these four rules:
 
 - **The field frame is compass convention.** Heading 0 is +Y, clockwise
   positive. See [docs/units.md](docs/units.md).
@@ -85,7 +84,7 @@ Then `make template` produces `mclib@<version>.zip`.
 
 1. Branch off `main`.
 2. Keep `make test` green, and add a test for the behaviour you changed.
-   A bug fix without a test that fails before it is not finished.
+   A bug fix needs a test that fails without the fix.
 3. Update the docs under `docs/` in the same change.
 4. Add an entry to [CHANGELOG.md](CHANGELOG.md) under "Unreleased".
 5. CI runs the host tests, the sanitizer build, the ARM firmware build and the
