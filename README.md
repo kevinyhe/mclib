@@ -1,6 +1,8 @@
 <!-- // mclib -->
 # mclib
 
+Made out of love for the Big Arch's finest.
+
 A PROS 4 library for VEX V5 robots. It tracks the robot's position on the
 field, drives it to targets in autonomous, and provides ready-made classes for
 common mechanisms.
