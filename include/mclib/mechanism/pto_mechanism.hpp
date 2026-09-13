@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/device/motor_group.hpp"
@@ -137,6 +141,7 @@ public:
    * `driveDisengaged(0.0)`, which the guard drops when you do not own the PTO.
    */
   void stop();
+  void onDisabled() override { stop(); }
 
   /// The voltage currently commanded by whichever side owns the PTO.
   double getCommandedVoltage() const;

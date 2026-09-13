@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/device/motor_group.hpp"
 
 #include "pros/error.h"
@@ -69,7 +73,7 @@ MotorGroup::MotorGroup(std::initializer_list<std::int8_t> ports,
     : MotorGroup(std::vector<std::int8_t>(ports), gearset) {}
 
 MotorGroup::MotorGroup(std::vector<std::int8_t> ports, Gearset gearset)
-    : m_motors(std::move(ports), toProsGearset(gearset)) {}
+    : m_motors(std::move(ports), toProsGearset(gearset), pros::MotorUnits::degrees) {}
 
 void MotorGroup::setVoltage(double volts) {
   m_motors.move_voltage(voltsToMillivolts(volts));
@@ -155,10 +159,12 @@ std::optional<units::QCurrent> MotorGroup::averageCurrent() const {
 }
 
 std::int32_t MotorGroup::voltsToMillivolts(double volts) {
+  if (!std::isfinite(volts)) return 0;
   return static_cast<std::int32_t>(std::clamp(volts, -12.0, 12.0) * 1000.0);
 }
 
 std::int32_t MotorGroup::percentToPower(double percent) {
+  if (!std::isfinite(percent)) return 0;
   return static_cast<std::int32_t>(std::clamp(percent, -1.0, 1.0) * 127.0);
 }
 

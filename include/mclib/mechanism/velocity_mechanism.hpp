@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/mechanism/mechanism.hpp"
@@ -93,6 +97,8 @@ struct VelocityMechanismConfig {
  */
 class VelocityMechanism : public StateMechanism<double> {
 public:
+  /// True after the last periodic tick rejected a nonfinite measurement/target.
+  bool hasSensorFault() const { return m_sensor_fault; }
   using VelocitySource = std::function<double()>;
   using VoltageSink = std::function<void(double)>;
 
@@ -119,6 +125,7 @@ public:
   bool isSpinningUp() const;
 
   void stop();
+  void onDisabled() override;
 
   const VelocityMechanismConfig& getConfig() const;
 
@@ -143,6 +150,7 @@ private:
   VoltageSink m_voltage_sink;
   PID m_pid;
   bool m_at_speed = false;
+  bool m_sensor_fault = false;
   bool m_in_tolerance = false;
   double m_in_tolerance_since_ms = 0.0;
 };

@@ -1,0 +1,10 @@
+{
+  "name": "Timeout recovery / inspect the second step",
+  "preset": "six_motor_450",
+  "tracking_mode": "two",
+  "stop_on_failure": false,
+  "steps": [
+    {"type": "turn", "heading": 90, "timeout_ms": 50, "volts": 12},
+    {"type": "drive", "distance": 12, "timeout_ms": 4000, "volts": 12}
+  ]
+}

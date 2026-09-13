@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include <functional>
@@ -38,6 +42,10 @@ public:
 	 * that need to run every frame
 	 */
 	virtual void periodic() {}
+
+	/// Reset persistent actuator state when competition is disabled. Called on
+	/// the scheduler task; overrides must be idempotent and must not block.
+	virtual void onDisabled() {}
 
 	/**
 	 * @brief Entry point the \refitem CommandScheduler uses to tick this subsystem

@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/time.hpp"
@@ -46,12 +50,14 @@ constexpr int signOf(T value) {
 template <typename T>
 struct RawAccess {
   static constexpr T from(double raw) { return T::fromBase(raw); }
+  static constexpr double get(T value) { return value.raw(); }
 };
 
 /// @brief Specialisation for the dimensionless PID, where raw is the value.
 template <>
 struct RawAccess<double> {
   static constexpr double from(double raw) { return raw; }
+  static constexpr double get(double value) { return value; }
 };
 
 /**
@@ -258,6 +264,10 @@ class PIDController {
    */
   void setHoldOutput(bool new_hold_output);
 
+  /// When false, arrival describes the current dwell, not a historical latch.
+  /// Use with hold output when multiple axes must be settled simultaneously.
+  void setLatchArrival(bool latch) { latch_arrival = latch; arrived = false; }
+
   /**
    * @brief Compute D and I as true rates against elapsed time. Default false.
    *
@@ -371,6 +381,7 @@ class PIDController {
   bool arrived;
   bool arrive;
   bool hold_output;
+  bool latch_arrival = true;
   Input small_error_tolerance;
   Input big_error_tolerance;
   double small_error_duration;
@@ -559,6 +570,10 @@ Output PIDController<Input, Output>::updateInternal(Input input, QTime dt, bool 
   using mclib::pid_detail::absValue;
 
   current_error = target - input;
+  if (!std::isfinite(mclib::pid_detail::RawAccess<Input>::get(current_error))) {
+    reset();
+    return Output{};
+  }
 
   // Rate mode only. With use_dt false nothing below reads a timestep, the
   // clock is never sampled, and the arithmetic is bit-for-bit what it was
@@ -621,6 +636,8 @@ Output PIDController<Input, Output>::updateInternal(Input input, QTime dt, bool 
 
   integral = ki * sum_error;
 
+  if (!latch_arrival) arrived = false;
+
   // Use raw error change for settling checks so kD tuning does not affect
   // arrival detection thresholds. This stays a raw per-tick delta in rate mode
   // too, so the thresholds mean the same thing under either setting.
@@ -642,7 +659,8 @@ Output PIDController<Input, Output>::updateInternal(Input input, QTime dt, bool 
     big_check_time = mclib::time::millis();
   }
 
-  // Arrival still latches either way. hold_output only decides whether the
+  // Arrival latches by default; setLatchArrival(false) tracks current settling.
+  // hold_output only decides whether the
   // loop keeps driving afterwards; it defaults to false so callers that wait
   // for the output to fall to zero to end a motion keep working.
   if (arrived && !hold_output) {
@@ -651,6 +669,10 @@ Output PIDController<Input, Output>::updateInternal(Input input, QTime dt, bool 
   }
 
   output = proportional + integral + derivative;
+  if (!std::isfinite(mclib::pid_detail::RawAccess<Output>::get(output))) {
+    reset();
+    return Output{};
+  }
   return output;
 }
 

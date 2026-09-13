@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/path/path.hpp"
 
 #include <cmath>
@@ -68,7 +72,18 @@ double turnFraction(double curvature_a, double curvature_b, double span, double 
 
 }  // namespace
 
-Path::Path(std::vector<PathPoint> points) : m_points(std::move(points)) {
+Path::Path(std::vector<PathPoint> points) {
+  m_points.reserve(points.size());
+  for (const PathPoint& point : points) {
+    // Apply the same invariant as fromWaypoints to raw samples. Zero-length
+    // segments have no tangent and corrupt projection/cross-track telemetry.
+    // Keep the first sample's metadata, matching the waypoint builder.
+    if (!m_points.empty() &&
+        (point.point() - m_points.back().point()).norm() < 1e-9) {
+      continue;
+    }
+    m_points.push_back(point);
+  }
   recomputeDistances();
 }
 

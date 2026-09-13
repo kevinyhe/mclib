@@ -1,0 +1,51 @@
+# mclib
+#
+# Doxygen configuration for the mclib API reference.
+#   doxygen Doxyfile
+# Output lands in docs/api/html. That directory is not committed.
+
+PROJECT_NAME           = mclib
+PROJECT_BRIEF          = "A PROS 4 library for VEX V5"
+PROJECT_NUMBER         = 0.1.0
+
+OUTPUT_DIRECTORY       = docs/api
+CREATE_SUBDIRS         = NO
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HTML_OUTPUT            = html
+
+# The public API is the headers. Sources are included so \details comments that
+# live next to an implementation are picked up too.
+INPUT                  = include/mclib src/mclib README.md docs
+FILE_PATTERNS          = *.hpp *.h *.cpp *.md
+RECURSIVE              = YES
+EXCLUDE                = include/Eigen include/pros docs/api
+USE_MDFILE_AS_MAINPAGE = README.md
+
+# The command framework uses \refitem to cross-reference classes.
+ALIASES                = "refitem=\ref"
+
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+EXTRACT_PRIV_VIRTUAL   = YES
+HIDE_UNDOC_MEMBERS     = NO
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+
+# MCLIB_HOST_BUILD picks the host mutex in sync.hpp. Documenting that branch
+# keeps the docs free of PROS types the reader cannot follow.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+PREDEFINED             = MCLIB_HOST_BUILD
+
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_NO_PARAMDOC       = YES

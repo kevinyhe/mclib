@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "pros/adi.hpp"
@@ -19,7 +23,7 @@ public:
   /**
    * @param adi_port Pair form for ADI expander use
    */
-  explicit Line(pros::ADIAnalogIn adi_port,
+  explicit Line(pros::adi::AnalogIn adi_port,
                 std::int32_t threshold = 2000,
                 bool detect_dark_line = true);
 

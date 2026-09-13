@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/device/rotation.hpp"
 
 #include "pros/error.h"
@@ -9,7 +13,7 @@ namespace device {
 namespace {
 std::int8_t signedPort(std::int8_t port, bool reversed) {
   const std::int8_t absolute = port < 0 ? -port : port;
-  return reversed ? -absolute : absolute;
+  return (reversed || port < 0) ? -absolute : absolute;
 }
 }  // namespace
 

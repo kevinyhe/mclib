@@ -1,6 +1,11 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
+#include "mclib/control/chassis_io.hpp"
 #include "mclib/device/inertial.hpp"
 #include "mclib/device/motor_group.hpp"
 #include "mclib/math.hpp"
@@ -30,7 +35,7 @@ namespace mclib {
  * `Chassis` built without geometry. Describe your robot once, at setup:
  *
  * @code
- * #include "mclib/config.hpp"
+ * #include "mclib/robot_geometry.hpp"
  * mclib::Chassis drive({-11, 13, 14}, {-16, 17, -18},
  *                      mclib::device::Gearset::Blue,
  *                      mclib::config::robot_drive_geometry);
@@ -47,7 +52,16 @@ namespace mclib {
  */
 using ChassisDimensions = units::DriveGeometry;
 
-class Chassis {
+/**
+ * @brief A differential drive: two motor groups, an optional IMU, and the
+ *        geometry that turns encoder degrees into inches.
+ *
+ * Implements `control::DriveHardware`, so a Chassis is what the blocking
+ * motion routines in `control/motion.hpp` and the odometry task run on once
+ * it is bound - which `ChassisController`'s constructor does for you, or
+ * `mclib::control::bindDrive(&chassis)` does by hand.
+ */
+class Chassis : public control::DriveHardware {
 public:
   Chassis(std::initializer_list<std::int8_t> left_ports,
           std::initializer_list<std::int8_t> right_ports,
@@ -81,11 +95,8 @@ public:
   void setBrakeMode(device::BrakeMode mode);
   void tare();
 
-  /// @brief Mean left motor position, degrees of motor shaft.
-  double leftPositionDeg();
-  /// @brief Mean right motor position, degrees of motor shaft.
-  double rightPositionDeg();
-  /// @brief Mean of the two sides, degrees of motor shaft.
+  /// @brief Mean of the two sides, degrees of motor shaft. The per-side
+  ///        readers are leftPositionDeg() / rightPositionDeg() below.
   double averagePositionDeg();
 
   /// @brief Distance the left side has rolled, per getDimensions().
@@ -94,7 +105,8 @@ public:
   QLength rightDistance();
   /// @brief Mean of the two sides. What ChassisController::driveDistance() tracks.
   QLength averageDistance();
-  /// @brief Heading from this Chassis's IMU, or from the odometry without one.
+  /// @brief Heading from the IMU, or differential wheel travel without one.
+  /// Encoder heading requires a positive track width and is sensitive to slip.
   QAngle heading();
 
   /// @brief leftDistance() in inches.
@@ -103,8 +115,8 @@ public:
   double rightDistanceIn();
   /// @brief averageDistance() in inches.
   double averageDistanceIn();
-  /// @brief heading() in degrees.
-  double headingDeg();
+  // headingDeg() - heading() in degrees - is declared with the DriveHardware
+  // overrides below.
 
   /**
    * @brief Teleport the odometry to a known pose.
@@ -115,11 +127,10 @@ public:
    *
    * @warning Also writes `pose.theta` back to this Chassis's IMU, so the
    * odometry's heading frame and the frame `motion.cpp` steers in stay
-   * identical. That only works when this Chassis holds the same IMU the
-   * odometry task reads -- the `inertial_sensor` from `config.cpp`. A Chassis
-   * built with `imu == nullptr`, or with an `Inertial` on another port, moves
-   * the odometry frame without moving the heading source, and the two drift
-   * apart by exactly that offset with no diagnostic.
+   * identical. That holds when the odometry task reads its heading from this
+   * Chassis - `odometrySetupFrom(chassis)` - which is the normal setup. A
+   * Chassis built with `imu == nullptr` reports the odometry's own heading
+   * and has nothing to write, so the frames cannot drift.
    */
   void setPose(const Pose2D& pose);
 
@@ -139,6 +150,21 @@ public:
   device::MotorGroup& leftMotors();
   device::MotorGroup& rightMotors();
   device::Inertial* imu();
+
+  // control::DriveHardware - the surface the motion routines and the odometry
+  // task drive this Chassis through. Same conventions as the methods above.
+  void setDriveVoltage(double left_volts, double right_volts) override;
+  void setSideVoltage(bool left_side, double volts) override;
+  void brakeDrive(device::BrakeMode mode) override;
+  void brakeSide(bool left_side, device::BrakeMode mode) override;
+  void tareDrive() override;
+  double leftPositionDeg() override;
+  double rightPositionDeg() override;
+  double headingDeg() override;
+  void setHeadingDeg(double heading_deg) override;
+  std::vector<double> driveCurrentsMa() override;
+  std::vector<double> driveVelocitiesRpm() override;
+  const units::DriveGeometry& driveGeometry() const override;
 
 private:
   static int32_t voltsToMillivolts(double volts);
@@ -161,6 +187,8 @@ private:
   device::MotorGroup m_right;
   std::shared_ptr<device::Inertial> m_imu;
   ChassisDimensions m_dimensions;
+  double m_encoder_heading_offset_deg = 0.0;
+  double encoderHeadingDeg();
 };
 
 }  // namespace mclib

@@ -1,7 +1,13 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/command.h"
+
+#include <memory>
 
 /**
  * @brief Makes a \refitem Command repeat each time after it is run
@@ -43,7 +49,7 @@ public:
 	 *
 	 * @param interrupted Ignored, if the command is ended it must be interrupted because it is always restarting
 	 */
-	void end(bool interrupted) override {
+	void end(bool /*interrupted*/) override {
 		command->end(true);
 	}
 
@@ -53,13 +59,13 @@ public:
 	 * @return The requirements of the \refitem Command that was passed in
 	 */
 	std::vector<Subsystem *> getRequirements() override {
-		return std::move(command->getRequirements());
+		return command->getRequirements();
 	}
 
 	~RepeatCommand() override = default;
 };
 
-inline Command *Command::repeatedly() {
-	return new RepeatCommand(this);
+inline std::unique_ptr<Command> Command::repeatedly() {
+	return std::make_unique<RepeatCommand>(this);
 }
 

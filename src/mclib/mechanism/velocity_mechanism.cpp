@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/mechanism/velocity_mechanism.hpp"
 
 #include "mclib/time.hpp"
@@ -83,6 +87,14 @@ void VelocityMechanism::stop() {
   setTargetRpm(0.0);
 }
 
+void VelocityMechanism::onDisabled() {
+  stop();
+  m_pid.reset();
+  m_at_speed = false;
+  m_in_tolerance = false;
+  if (m_voltage_sink) m_voltage_sink(0.0);
+}
+
 const VelocityMechanismConfig& VelocityMechanism::getConfig() const {
   return m_config;
 }
@@ -121,6 +133,14 @@ void VelocityMechanism::applyState(const double& target_rpm) {
   // same space, which is what the user quoted tolerance_rpm in.
   const double current_motor_rpm = getCurrentMotorRpm();
   const double current_rpm = current_motor_rpm * m_config.ratio;
+  m_sensor_fault = !std::isfinite(current_rpm) || !std::isfinite(target_rpm);
+  if (m_sensor_fault) {
+    m_at_speed = false;
+    m_in_tolerance = false;
+    m_pid.reset();
+    if (m_voltage_sink) m_voltage_sink(0.0);
+    return;
+  }
   updateAtSpeed(target_rpm - current_rpm, target_rpm);
 
   if (!m_voltage_sink) {
@@ -146,6 +166,15 @@ void VelocityMechanism::applyState(const double& target_rpm) {
   const double correction = m_pid.update(current_motor_rpm);
   const double feedforward = m_config.kv * target_motor_rpm;
   double output = feedforward + correction;
+  if (!std::isfinite(output) || !std::isfinite(m_config.max_voltage) ||
+      m_config.max_voltage < 0) {
+    m_sensor_fault = true;
+    m_at_speed = false;
+    m_in_tolerance = false;
+    m_pid.reset();
+    m_voltage_sink(0.0);
+    return;
+  }
 
   // Clamp to the sign of the target for the same reason: the loop may only
   // push the mechanism towards the target, never brake it.
@@ -177,7 +206,7 @@ void VelocityMechanism::updateAtSpeed(double error_rpm, double target_rpm) {
   // tolerance against a motor-space error is the bug this mechanism is built to
   // avoid: at ratio 2.0 it would latch at twice the speed error the user asked
   // for, and nothing would look wrong.
-  if (std::fabs(error_rpm) > m_config.tolerance_rpm) {
+  if (!std::isfinite(error_rpm) || std::fabs(error_rpm) > m_config.tolerance_rpm) {
     m_at_speed = false;
     m_in_tolerance = false;
     return;

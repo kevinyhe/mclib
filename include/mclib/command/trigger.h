@@ -1,8 +1,14 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/commandScheduler.h"
 #include "mclib/command/eventLoop.h"
+
+#include <memory>
 
 /**
  * This class allows for easy triggering of Commands based on boolean inputs
@@ -191,15 +197,33 @@ public:
 		return this;
 	}
 
-	Trigger* andOther(Trigger* trigger) const {
-		return new Trigger([trigger, this] () {return trigger->condition() && this->condition();});
+	/**
+	 * @brief A Trigger that fires when both this and @p trigger are true
+	 *
+	 * @details The caller owns the result. Both source Triggers are
+	 * captured by pointer, so they must outlive it.
+	 */
+	[[nodiscard]] std::unique_ptr<Trigger> andOther(Trigger* trigger) const {
+		return std::make_unique<Trigger>([trigger, this] () {return trigger->condition() && this->condition();});
 	}
 
-	Trigger* orOther(Trigger* trigger) const {
-		return new Trigger([trigger, this] () {return trigger->condition() || this->condition();});
+	/**
+	 * @brief A Trigger that fires when either this or @p trigger is true
+	 *
+	 * @details The caller owns the result. Both source Triggers are
+	 * captured by pointer, so they must outlive it.
+	 */
+	[[nodiscard]] std::unique_ptr<Trigger> orOther(Trigger* trigger) const {
+		return std::make_unique<Trigger>([trigger, this] () {return trigger->condition() || this->condition();});
 	}
 
-	Trigger* negate() const {
-		return new Trigger([this] () {return !this->condition();});
+	/**
+	 * @brief A Trigger that fires when this one does not
+	 *
+	 * @details The caller owns the result. This Trigger is captured by
+	 * pointer, so it must outlive the result.
+	 */
+	[[nodiscard]] std::unique_ptr<Trigger> negate() const {
+		return std::make_unique<Trigger>([this] () {return !this->condition();});
 	}
 };

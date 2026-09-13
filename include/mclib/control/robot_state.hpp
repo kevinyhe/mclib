@@ -1,9 +1,15 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/math.hpp"
 #include "mclib/sync.hpp"
 #include "mclib/units/units.hpp"
+
+#include <limits>
 
 /**
  * @file robot_state.hpp
@@ -45,6 +51,42 @@
 
 namespace mclib {
 namespace control {
+
+/// @brief The active blocking controller branch; idle has no active request.
+enum class MotionPhase {
+  Idle = 0, Drive = 1, Turn = 2, Arc = 3, Swing = 4, Point = 5,
+  Pursuit = 6, Pivot = 7, FinalAlign = 8, Decelerate = 9, Wall = 10,
+};
+
+/**
+ * @brief Read-only observation of the most recent blocking controller tick.
+ *
+ * Targets/errors come from the controller's actual PID inputs, in compass
+ * degrees; they are not the between-motion heading hold or simulator truth.
+ * Remaining is signed encoder travel for drive/arc, Euclidean endpoint
+ * distance for point/boomerang, and unavailable for turn/swing/wall.
+ * Drive/yaw are the requested translation/clockwise rotation volts before
+ * wheel mixing and voltage/slew limits, after geometric shaping and any
+ * minimum-output floor. A swing/arc includes its asymmetric wheel geometry.
+ * Boomerang drive includes its slip-speed cap; point yaw precedes its steering
+ * cap. Deceleration requests zero.
+ * Limit flags indicate an actual limiter intervention on this tick, including
+ * the 12 V actuator rail. The slip-speed cap is not a voltage-rail limit.
+ * Missing fields, including flags before the first tick, are quiet NaNs.
+ * Every motion entry and return resets the snapshot; no control reads it.
+ */
+struct MotionTelemetry {
+  MotionPhase phase = MotionPhase::Idle;
+  double target_heading_deg = std::numeric_limits<double>::quiet_NaN();
+  double heading_error_deg = std::numeric_limits<double>::quiet_NaN();
+  double remaining_in = std::numeric_limits<double>::quiet_NaN();
+  double carrot_x = std::numeric_limits<double>::quiet_NaN();
+  double carrot_y = std::numeric_limits<double>::quiet_NaN();
+  double drive_volts = std::numeric_limits<double>::quiet_NaN();
+  double yaw_volts = std::numeric_limits<double>::quiet_NaN();
+  double slew_limited = std::numeric_limits<double>::quiet_NaN();
+  double voltage_limited = std::numeric_limits<double>::quiet_NaN();
+};
 
 /**
  * @brief Robot pose plus the scalars the blocking motion routines share.
@@ -104,6 +146,11 @@ class RobotState {
   /// @brief Store both slew-limiter outputs in one locked write.
   void setPrevOutputs(double left, double right);
 
+  /// @brief Copy the complete controller observation under one short lock.
+  MotionTelemetry motionTelemetry() const;
+  /// @brief Publish an observation; only blocking motion instrumentation writes it.
+  void setMotionTelemetry(const MotionTelemetry& telemetry);
+
   /**
    * @brief Put the motion-owned scalars back to rest.
    *
@@ -120,6 +167,7 @@ class RobotState {
   double m_correct_angle_deg = 0.0;
   double m_prev_left_output = 0.0;
   double m_prev_right_output = 0.0;
+  MotionTelemetry m_motion_telemetry{};
 };
 
 /**

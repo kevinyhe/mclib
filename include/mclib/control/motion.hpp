@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/units/units.hpp"
@@ -12,6 +16,9 @@
  * These are the primitives an autonomous is written out of. Each one blocks on
  * its own task until it settles, times out, or someone calls
  * `mclib::control::requestCancel(CancelToken::Motion)`.
+ * Chaining (`exit=false`) retains voltage only on successful completion.
+ * Timeout, cancellation, disable, and nonfinite sensor data always stop the
+ * drive and clear its stored slew output. Callers must serialize motions.
  *
  * ## Frame
  *
@@ -94,12 +101,16 @@ void driveTo(QLength distance,
 /**
  * @brief Drive a constant-radius arc to an absolute field heading.
  *
+ * The arc begins at the measured heading. Stopped arcs settle outer-wheel
+ * distance using `MotionConfig::arc_exit`; chained arcs keep controlling until
+ * that distance crosses the endpoint and preserve the live drive output.
+ * Wheel slip can make the measured arc differ from the body's field path.
+ *
  * @param result_angle The **absolute** compass heading to finish on.
  * @param center_radius Radius of the arc, measured to the centre of the robot.
  *                      **Its sign selects the direction**: positive curves
- *                      right, negative curves left. The magnitude must exceed
- *                      half the track width or the inner wheel arc goes
- *                      negative.
+ *                      right, negative curves left. Below half the track
+ *                      width the inner wheel reverses; zero turns in place.
  * @param time_limit   Give up after this long.
  * @param exit         True stops and holds at the end.
  * @param max_output   Voltage cap.
@@ -162,12 +173,16 @@ void correctHeading();
  * @param reset_heading      Absolute heading to stamp onto the IMU, or
  *                           #keep_current_heading to leave the IMU alone.
  * @param drive_power        Voltage to push with. Negative drives backward.
- * @param time_limit         Give up after this long and reset anyway.
- * @param current_threshold  Stall is declared above this average motor current.
+ * @param time_limit         Give up after this long without changing pose.
+ * @param current_threshold  Stall requires at least this average motor current.
+ *                           Tune below the available current at the chosen
+ *                           voltage and motor temperature/current limit.
  * @param velocity_threshold ...and below this average motor speed, for five
  *                           consecutive 10 ms ticks.
+ * @return True only after sustained contact and a pose reset. False on timeout,
+ *         cancellation, disable, missing telemetry, or invalid readings.
  */
-void wallReset(QLength reset_x,
+bool wallReset(QLength reset_x,
                QLength reset_y,
                QAngle reset_heading,
                QVoltage drive_power,
@@ -224,13 +239,27 @@ void moveToPoint(QLength x,
  * @p final_heading, so the path curves into the target rather than arriving at
  * an arbitrary angle.
  *
+ * With `exit=true`, position must settle using `MotionConfig::distance_exit`,
+ * then heading must settle using `turn_exit`. A positional drift outside the
+ * distance band resumes approach. With `exit=false`, entering that distance
+ * band hands a moving chassis to the next motion without waiting for position
+ * or heading settlement. An already-reached
+ * chained pose preserves the preceding wheel commands.
+ * Chaining uses the configured minimum drive voltage outside the endpoint band;
+ * explicitly disabling that floor can stall a high-friction drivetrain early.
+ * When the carrot is behind the selected travel direction and the endpoint
+ * is outside the position band, pivot before translating. Translation slew
+ * precedes yaw mixing so steering cannot turn a pivot into reverse travel.
+ * Braking voltage and small endpoint corrections may oppose the travel flag.
+ *
  * @param x              Field X of the target.
  * @param y              Field Y of the target.
  * @param dir            +1 arrives forward, -1 arrives backward. A sign flag.
- * @param final_heading  The **absolute** compass heading to arrive on.
+ * @param final_heading  The **absolute body** compass heading to arrive on;
+ *                       reverse travel does not add 180 degrees to this goal.
  * @param dlead          Lead factor, dimensionless, sensibly 0..1. 0 collapses
  *                       the carrot onto the target and makes this
- *                       `moveToPoint()`; larger values swing wider.
+ *                       approach a point and then align; larger values swing wider.
  * @param time_limit     Give up after this long.
  * @param exit           True ramps to 0 V and holds at the end.
  * @param max_output     Voltage cap.

@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/chassis/chassis.hpp"
 
 #include "mclib/chassis/chassis_math.hpp"
@@ -8,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 namespace mclib {
 
@@ -72,6 +77,7 @@ void Chassis::tare() {
   const Pose2D pose = control::robotState().pose();
   m_left.tarePosition();
   m_right.tarePosition();
+  if (m_imu == nullptr) m_encoder_heading_offset_deg = pose.theta * 180.0 / kPi;
   control::resetOdometry(pose);
 }
 
@@ -119,7 +125,12 @@ double Chassis::headingDeg() {
   if (m_imu != nullptr) {
     return m_imu->getRotationDeg();
   }
-  return control::robotState().pose().theta * 180.0 / kPi;
+  return encoderHeadingDeg() + m_encoder_heading_offset_deg;
+}
+
+double Chassis::encoderHeadingDeg() {
+  return chassis_math::encoderHeadingDeg(
+      leftDistanceIn(), rightDistanceIn(), m_dimensions.track_width.in());
 }
 
 void Chassis::setPose(const Pose2D& pose) {
@@ -127,9 +138,7 @@ void Chassis::setPose(const Pose2D& pose) {
   // reset to, while the motion routines steer on raw IMU degrees. Move the IMU
   // too, or the two frames drift apart by exactly the offset introduced here
   // and every subsequent moveToPoint aims wrong.
-  if (m_imu != nullptr) {
-    m_imu->setRotationDeg(wrapAngle(pose.theta) * 180.0 / kPi);
-  }
+  setHeadingDeg(wrapAngle(pose.theta) * 180.0 / kPi);
   control::resetOdometry(pose);
 }
 
@@ -151,6 +160,62 @@ device::MotorGroup& Chassis::rightMotors() {
 
 device::Inertial* Chassis::imu() {
   return m_imu.get();
+}
+
+void Chassis::setDriveVoltage(double left_volts, double right_volts) {
+  m_left.setVoltage(left_volts);
+  m_right.setVoltage(right_volts);
+}
+
+void Chassis::setSideVoltage(bool left_side, double volts) {
+  (left_side ? m_left : m_right).setVoltage(volts);
+}
+
+void Chassis::brakeDrive(device::BrakeMode mode) {
+  stop(mode);
+}
+
+void Chassis::brakeSide(bool left_side, device::BrakeMode mode) {
+  device::MotorGroup& side = left_side ? m_left : m_right;
+  side.setBrakeMode(mode);
+  side.brake();
+}
+
+void Chassis::tareDrive() {
+  // Not tare(): that one also re-seeds the odometry, and resetChassis() -
+  // the caller on this path - does that itself, in the right order.
+  const double heading = headingDeg();
+  m_left.tarePosition();
+  m_right.tarePosition();
+  if (m_imu == nullptr && std::isfinite(heading)) m_encoder_heading_offset_deg = heading;
+}
+
+void Chassis::setHeadingDeg(double heading_deg) {
+  if (m_imu != nullptr) {
+    m_imu->setRotationDeg(heading_deg);
+  } else {
+    const double raw = encoderHeadingDeg();
+    if (std::isfinite(raw) && std::isfinite(heading_deg))
+      m_encoder_heading_offset_deg = heading_deg - raw;
+  }
+}
+
+std::vector<double> Chassis::driveCurrentsMa() {
+  std::vector<double> all = m_left.getCurrentDraws();
+  const std::vector<double> right = m_right.getCurrentDraws();
+  all.insert(all.end(), right.begin(), right.end());
+  return all;
+}
+
+std::vector<double> Chassis::driveVelocitiesRpm() {
+  std::vector<double> all = m_left.getActualVelocities();
+  const std::vector<double> right = m_right.getActualVelocities();
+  all.insert(all.end(), right.begin(), right.end());
+  return all;
+}
+
+const units::DriveGeometry& Chassis::driveGeometry() const {
+  return m_dimensions;
 }
 
 int32_t Chassis::voltsToMillivolts(double volts) {

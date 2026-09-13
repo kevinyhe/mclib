@@ -1,5 +1,9 @@
 // mclib
 //
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
 // Numeric tests for PIDController. This unit is pure arithmetic, so the whole
 // verification is numbers: a recorded output trace pinned against the
 // pre-template implementation, plus the specific edge semantics that callers in

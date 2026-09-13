@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/chassis/chassis_controller.hpp"
 
 #include "mclib/chassis/chassis_math.hpp"
@@ -163,10 +167,15 @@ ChassisController::ChassisController(Chassis& chassis,
   applyExit(m_distance_pid, m_config.distance_exit);
   applyExit(m_turn_pid, m_config.turn_exit);
   m_heading_pid.setArrive(false);
+  // This Chassis is now the drivetrain the blocking routines in motion.hpp
+  // and the odometry task run on, and this config is their tuning.
+  control::bindDrive(&m_chassis);
+  control::setMotionConfig(m_config);
 }
 
 void ChassisController::setConfig(const ChassisControllerConfig& config) {
   m_config = config;
+  control::setMotionConfig(m_config);
   m_distance_pid.setCoefficient(config.distance_pid.kp,
                                 config.distance_pid.ki,
                                 config.distance_pid.kd);
@@ -215,24 +224,9 @@ void ChassisController::turnToHeading(QAngle heading,
   const double heading_deg = heading.deg();
   const double max_voltage_volts = max_voltage.volts();
 
-  // With an IMU, headingDeg() is getRotationDeg(): accumulated rotation, not a
-  // wrapped heading. After two clockwise turns it reads 720, so an absolute
-  // target of 0 would be an error of -720 to be unwound the long way round.
-  // Shift the target by whole turns onto the branch the robot is actually on,
-  // exactly as control::normalizeTarget() does for motion.cpp's turnToAngle().
-  //
-  // Without one it is the odometry pose angle, which Odometry wraps to
-  // [-180, 180]. Normalising against a wrapped measurement can put the target
-  // outside the range that measurement can ever report -- at theta = 170 deg,
-  // a target of -170 would normalise to 190, an error that bottoms out at
-  // 10 deg and never clears the exit tolerance. Since turnToHeading()'s
-  // default timeout is zero (no timeout), that hangs. A wrapped source is
-  // already on the only branch there is, so leave the target alone.
+  // Both the IMU and encoder-derived heading accumulate unwrapped rotation.
   const double target_deg =
-      m_chassis.imu() != nullptr
-          ? chassis_math::normalizeHeadingTarget(heading_deg,
-                                                 m_chassis.headingDeg())
-          : heading_deg;
+      chassis_math::normalizeHeadingTarget(heading_deg, m_chassis.headingDeg());
 
   m_mode = Mode::TurnToHeading;
   m_goal = target_deg;
@@ -248,11 +242,8 @@ void ChassisController::turnToHeading(QAngle heading,
 }
 
 void ChassisController::cancel() {
-  // Nothing to cancel, and nothing to grab. ParallelCommandGroup::end(true)
-  // calls end(true) on children that already finished, so a settled goal's
-  // command reaches here routinely -- and by then an async motion.cpp routine
-  // on another task may own the motors. Braking them from under it is not this
-  // controller's business.
+  // A repeated cancellation of an idle controller must not brake an unrelated
+  // async motion that has since taken ownership of the drivetrain.
   if (m_mode == Mode::Idle) {
     return;
   }
@@ -490,15 +481,77 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(
 
 std::unique_ptr<Command> ChassisController::makeArcadeDriveCommand(
     device::Controller& controller,
+    control::DriveCurveConfig forward_curve,
+    control::DriveCurveConfig turn_curve,
     device::AnalogAxis forward_axis,
-    device::AnalogAxis turn_axis,
-    double scale) {
-  return run(
-      [this, &controller, forward_axis, turn_axis, scale]() {
-        const double forward = controller.getAnalog(forward_axis) / scale;
-        const double turn = controller.getAnalog(turn_axis) / scale;
-        m_chassis.arcade(forward, turn);
-      });
+    device::AnalogAxis turn_axis) {
+  return makeTeleopCommand(controller, forward_curve, turn_curve, forward_axis,
+                           turn_axis, [](double forward, double turn) {
+                             return chassis_math::arcadeMix(forward, turn);
+                           });
+}
+
+std::unique_ptr<Command> ChassisController::makeCurvatureDriveCommand(
+    device::Controller& controller,
+    control::DriveCurveConfig forward_curve,
+    control::DriveCurveConfig turn_curve,
+    device::AnalogAxis forward_axis,
+    device::AnalogAxis turn_axis) {
+  return makeTeleopCommand(controller, forward_curve, turn_curve, forward_axis,
+                           turn_axis, [](double forward, double turn) {
+                             return chassis_math::curvatureMix(forward, turn);
+                           });
+}
+
+std::unique_ptr<Command> ChassisController::makeTankDriveCommand(
+    device::Controller& controller,
+    control::DriveCurveConfig curve,
+    device::AnalogAxis left_axis,
+    device::AnalogAxis right_axis) {
+  return makeTeleopCommand(controller, curve, curve, left_axis, right_axis,
+                           [](double left, double right) {
+                             return chassis_math::DrivePair{left, right};
+                           });
+}
+
+std::unique_ptr<Command> ChassisController::makeTeleopCommand(
+    device::Controller& controller,
+    control::DriveCurveConfig first_curve,
+    control::DriveCurveConfig second_curve,
+    device::AnalogAxis first_axis,
+    device::AnalogAxis second_axis,
+    std::function<chassis_math::DrivePair(double, double)> mix) {
+  // The curves carry slew state, so they live as long as the command does.
+  // shared_ptr because the four lambdas below each need them and a
+  // FunctionalCommand copies its callables.
+  struct Curves {
+    control::DriveCurve first;
+    control::DriveCurve second;
+  };
+  auto curves = std::make_shared<Curves>(
+      Curves{control::DriveCurve(first_curve), control::DriveCurve(second_curve)});
+  return std::make_unique<FunctionalCommand>(
+      [curves]() {
+        curves->first.reset();
+        curves->second.reset();
+      },
+      [this, &controller, curves, first_axis, second_axis, mix]() {
+        // Raw stick counts are -127..127. Shape as a fraction of full
+        // deflection so the curve config means the same thing on any axis.
+        const double first =
+            curves->first.apply(controller.getAnalog(first_axis) / 127.0);
+        const double second =
+            curves->second.apply(controller.getAnalog(second_axis) / 127.0);
+        const chassis_math::DrivePair pair = mix(first, second);
+        m_chassis.tank(pair.left, pair.right);
+      },
+      [this](bool) {
+        // Whatever takes the drive next writes the motors itself, but if
+        // nothing does the sticks must not stay latched at their last value.
+        m_chassis.tank(0.0, 0.0);
+      },
+      []() { return false; },
+      std::initializer_list<Subsystem*>{this});
 }
 
 double ChassisController::clampVoltage(double volts, double max_voltage) {
@@ -513,6 +566,12 @@ void ChassisController::applyExit(PID& pid, const PIDExit& exit) {
 
 void ChassisController::runDriveDistance() {
   const double travelled = m_chassis.averageDistanceIn() - m_start_distance_in;
+  const double heading = m_chassis.headingDeg();
+  if (!std::isfinite(travelled) || !std::isfinite(m_goal) ||
+      (m_config.heading_correction && !std::isfinite(heading))) {
+    finishGoal(true);
+    return;
+  }
   double output = m_distance_pid.update(travelled);
 
   const double min_voltage = m_config.min_voltage.volts();
@@ -523,7 +582,7 @@ void ChassisController::runDriveDistance() {
 
   double correction = 0.0;
   if (m_config.heading_correction) {
-    correction = m_heading_pid.update(m_chassis.headingDeg());
+    correction = m_heading_pid.update(heading);
   }
 
   // Clamp the drive term first -- PIDController does not bound its own output,
@@ -544,7 +603,12 @@ void ChassisController::runDriveDistance() {
 }
 
 void ChassisController::runTurnToHeading() {
-  const double output = clampVoltage(m_turn_pid.update(m_chassis.headingDeg()),
+  const double heading = m_chassis.headingDeg();
+  if (!std::isfinite(heading) || !std::isfinite(m_goal)) {
+    finishGoal(true);
+    return;
+  }
+  const double output = clampVoltage(m_turn_pid.update(heading),
                                      m_goal_max_voltage);
   m_chassis.tankVoltage(output * units::volt, -output * units::volt);
 

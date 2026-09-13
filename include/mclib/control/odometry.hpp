@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/math.hpp"
@@ -149,7 +153,9 @@ class Odometry {
  public:
   explicit Odometry(OdometryConfig config = {});
 
-  /// @brief Replace the configuration. Does not disturb the pose.
+  /// @brief Replace the configuration without moving the pose. A changed
+  ///        layout/geometry re-seeds on the next valid sample; an identical
+  ///        configuration preserves the baseline and pending travel.
   void setConfig(const OdometryConfig& config);
   /// @brief The configuration in use.
   OdometryConfig getConfig() const;
@@ -170,6 +176,9 @@ class Odometry {
    * A non-finite `pose.theta` is refused and the current heading kept.
    */
   void reset(const Pose2D& pose);
+
+  /// Correct field position without changing heading or discarding encoder travel.
+  bool correctPosition(double x_in, double y_in);
 
   /**
    * @brief Fold one sample into the pose.
@@ -225,6 +234,10 @@ Pose2D odometryTick(const OdometrySample& sample);
 
 /// @brief Teleport the odometry and `robotState()` to a known pose.
 void resetOdometry(const Pose2D& pose);
+
+/// Correct the integrator and published position under the same lock.
+/// Encoder baselines are preserved, so the next tick includes pending travel.
+bool correctOdometryPosition(double x_in, double y_in);
 
 /// @brief Configure the library's odometry instance.
 void setOdometryConfig(const OdometryConfig& config);

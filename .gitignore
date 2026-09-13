@@ -17,3 +17,14 @@ temp.errors
 .d/
 # Claude Code agent worktrees and session state
 .claude/
+
+# PROS library template output
+/template/
+mclib@*.zip
+
+# Doxygen output
+docs/api/
+
+# Python bytecode
+__pycache__/
+*.pyc

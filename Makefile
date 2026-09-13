@@ -47,14 +47,15 @@ TEMPLATE_FILES=$(INCDIR)/mclib/*.hpp \
 	$(INCDIR)/mclib/path/*.hpp \
 	$(INCDIR)/mclib/snapshot/*.hpp \
 	$(INCDIR)/mclib/telemetry/*.hpp \
-	$(INCDIR)/mclib/units/*.hpp
+	$(INCDIR)/mclib/units/*.hpp \
+	$(shell find $(INCDIR)/Eigen -type f)
 
 .DEFAULT_GOAL=quick
 
 ################################################################################
 ############################# Host-side unit tests #############################
 # `make test` compiles every tests/*.cpp into its own host binary with the
-# system g++ and runs it. It never touches the ARM toolchain or PROS headers.
+# system g++ and runs it. It uses the SDK headers but never the ARM toolchain.
 # tests/ lives outside src/, so the firmware build never sees it.
 TESTDIR:=$(ROOT)/tests
 TESTBINDIR:=$(BINDIR)/tests
@@ -78,6 +79,9 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
 	$(SRCDIR)/mclib/chassis/chassis_math.cpp \
 	$(SRCDIR)/mclib/control/scaling.cpp \
+	$(SRCDIR)/mclib/control/motion_config.cpp \
+	$(SRCDIR)/mclib/control/drive_curve.cpp \
+	$(SRCDIR)/mclib/chassis/holonomic_math.cpp \
 	$(SRCDIR)/mclib/control/motion_math.cpp \
 	$(SRCDIR)/mclib/control/robot_state.cpp \
 	$(SRCDIR)/mclib/control/odometry.cpp \
@@ -94,27 +98,59 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/mechanism/homing_mechanism.cpp \
 	$(SRCDIR)/mclib/mechanism/auto_trigger_mechanism.cpp \
 	$(SRCDIR)/mclib/mechanism/mechanism_manager.cpp \
+	$(SRCDIR)/mclib/mechanism/velocity_mechanism.cpp \
+	$(SRCDIR)/mclib/mechanism/toggle_mechanism.cpp \
+	$(SRCDIR)/mclib/mechanism/toggle_group_mechanism.cpp \
+	$(SRCDIR)/mclib/mechanism/pneumatic_subsystem.cpp \
+	$(SRCDIR)/mclib/telemetry/sd_sink.cpp \
+	$(SRCDIR)/mclib/telemetry/file_sink.cpp \
 	$(TESTDIR)/support/host_time.cpp \
-	$(TESTDIR)/support/host_pros.cpp
+	$(TESTDIR)/support/host_pros.cpp \
+	$(TESTDIR)/support/host_pneumatic.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on
 # success. No registration, no framework.
 TEST_SRCS:=$(wildcard $(TESTDIR)/*.cpp)
+TEST_BINS:=$(patsubst $(TESTDIR)/%.cpp,$(TESTBINDIR)/%,$(TEST_SRCS))
 
-.PHONY: test
-test:
+# The library sources are compiled once into objects and linked into every
+# test binary. They used to be recompiled from source for each of the ~30
+# tests, which made `make test` a five-minute wait; now `make -j test` builds
+# the objects in parallel and links each test in well under a minute.
+HOST_OBJDIR:=$(TESTBINDIR)/obj
+HOST_TEST_OBJS:=$(patsubst %.cpp,$(HOST_OBJDIR)/%.o,$(HOST_TEST_SRC))
+HOST_DEPS:=$(HOST_TEST_OBJS:.o=.d) $(TEST_BINS:=.d)
+
+$(HOST_OBJDIR)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	@echo "Compiling $<"
+	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -c -o $@ $<
+
+$(TESTBINDIR)/%: $(TESTDIR)/%.cpp $(HOST_TEST_OBJS)
 	@mkdir -p $(TESTBINDIR)
+	@echo "Linking $@"
+	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(HOST_LDFLAGS)
+
+# Only the hardware-loop regression supplies a PROS clock and DriveHardware.
+MOTION_TEST_OBJS:=$(HOST_OBJDIR)/$(SRCDIR)/mclib/control/motion.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/control/chassis_io.o
+$(TESTBINDIR)/motion_safety_test: $(TESTDIR)/motion_safety_test.cpp $(HOST_TEST_OBJS) $(MOTION_TEST_OBJS)
+	@mkdir -p $(dir $@)
+	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(MOTION_TEST_OBJS) $(HOST_LDFLAGS)
+
+-include $(MOTION_TEST_OBJS:.o=.d)
+
+-include $(HOST_DEPS)
+
+.PHONY: test test-build
+test-build: $(TEST_BINS)
+
+test: test-build
 	@if [ -z "$(strip $(TEST_SRCS))" ]; then echo "No tests found in $(TESTDIR)"; exit 1; fi
 	@failed=""; passed=0; \
-	for src in $(TEST_SRCS); do \
-	  name=`basename $$src .cpp`; \
-	  bin=$(TESTBINDIR)/$$name; \
+	for bin in $(TEST_BINS); do \
+	  name=`basename $$bin`; \
 	  echo "== $$name"; \
-	  if ! $(HOST_CXX) $(HOST_CXXFLAGS) -o $$bin $$src $(HOST_TEST_SRC) $(HOST_LDFLAGS); then \
-	    echo "FAIL $$name (compile error)"; \
-	    failed="$$failed $$name"; \
-	    continue; \
-	  fi; \
 	  if $$bin; then passed=`expr $$passed + 1`; else failed="$$failed $$name"; fi; \
 	done; \
 	echo; \

@@ -1,7 +1,12 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/command.h"
+#include <algorithm>
 
 /**
  * This class creates a conditional command that changes what runs based on a conditional input
@@ -60,12 +65,15 @@ public:
 	}
 
 	/**
-	 * @brief This class only captures the requirements of the running command
+	 * @brief Reserve both branches; selection can change before initialization.
 	 */
 	std::vector<Subsystem *> getRequirements() override {
-		if (runPrimary()) {
-			return primary->getRequirements();
+		auto requirements = primary->getRequirements();
+		for (auto* subsystem : secondary->getRequirements()) {
+			if (std::find(requirements.begin(), requirements.end(), subsystem) == requirements.end()) {
+				requirements.push_back(subsystem);
+			}
 		}
-		return secondary->getRequirements();
+		return requirements;
 	}
 };

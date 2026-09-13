@@ -1,8 +1,13 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/command.h"
 #include <algorithm>
+#include <memory>
 
 /**
  * @brief This \refitem Command that runs multiple \refitem Command s in a row.
@@ -85,6 +90,6 @@ public:
 	}
 };
 
-inline Command *Command::andThen(Command *other) {
-	return new Sequence({this, other});
+inline std::unique_ptr<Command> Command::andThen(Command *other) {
+	return std::unique_ptr<Command>(new Sequence({this, other}));
 }

@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 /**
@@ -84,6 +88,8 @@ class Path {
    * @brief Adopt an already-built sample list.
    * @param points Samples in order. `distance` is recomputed from the chord
    *        lengths, so callers only have to get the positions right.
+   *        Consecutive positions closer than 1e-9 inches are collapsed,
+   *        retaining the first sample's metadata.
    */
   explicit Path(std::vector<PathPoint> points);
 

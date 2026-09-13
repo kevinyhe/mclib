@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  ARM_TOOLCHAIN_URL: https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz
+  ARM_TOOLCHAIN_DIR: arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the test suite
+        run: make -j"$(nproc)" test
+
+  sanitizers:
+    name: Host tests under ASan and UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # -fno-sanitize=vptr: UBSan's vptr check needs typeinfo that the
+      # header-only command classes have no key function to emit.
+      - name: Build and run with sanitizers
+        run: |
+          make -j"$(nproc)" test \
+            TESTBINDIR=bin/tests-asan \
+            HOST_CXXFLAGS="-std=gnu++20 -Iinclude -Itests -DMCLIB_HOST_BUILD -Wall -Wextra -g -O1 -fsanitize=address,undefined -fno-sanitize=vptr" \
+            HOST_LDFLAGS="-pthread -fsanitize=address,undefined -fno-sanitize=vptr"
+        env:
+          ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+  firmware:
+    name: ARM firmware build and template package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the Arm GNU toolchain
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/toolchain
+          key: arm-gnu-14.2.rel1
+
+      - name: Download the Arm GNU toolchain
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p toolchain
+          curl -sL "$ARM_TOOLCHAIN_URL" | tar xJ -C toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the PROS CLI
+        run: |
+          pip install pros-cli
+          # pros-cli 3.5.6 cannot find its own version on modern Pythons
+          # because pkg_resources is gone. Its first lookup is a `version`
+          # file next to the package, so write one.
+          python -c "import pros, os, importlib.metadata as m; open(os.path.join(os.path.dirname(pros.__file__), '..', 'version'), 'w').write(m.version('pros-cli'))"
+
+      - name: Build the firmware
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchain/$ARM_TOOLCHAIN_DIR/bin:$PATH"
+          arm-none-eabi-g++ --version | head -1
+          make -j"$(nproc)"
+
+      - name: Package the PROS template
+        run: |
+          export PATH="$GITHUB_WORKSPACE/toolchain/$ARM_TOOLCHAIN_DIR/bin:$PATH"
+          make template
+          ls -la mclib@*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mclib-template
+          path: mclib@*.zip

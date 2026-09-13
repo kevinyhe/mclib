@@ -1,10 +1,15 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/subsystem.h"
 #include "mclib/units/units.hpp"
-#include <vector>
 #include <functional>
+#include <memory>
+#include <vector>
 
 /**
  * @brief Enum for different cancel behaviors for Commands
@@ -174,55 +179,76 @@ public:
     /**
      * @brief Create a \refitem Sequence with 2 commands
      *
+     * @details The caller owns the returned command. `other` is
+     * borrowed, not adopted, so it must outlive the sequence.
+     *
+     * @warning Do not chain decorators off a temporary. Store the
+     * result in a named variable first, because the next decorator
+     * borrows a raw pointer into it.
+     *
      * @param other The command to run after the current command
      * @return A \refitem Sequence with this running first and other
      * running after
      */
-    Command *andThen(Command *other);
+    [[nodiscard]] std::unique_ptr<Command> andThen(Command *other);
 
     /**
      * @brief Make a timeout on this command
+     *
+     * @details The caller owns the returned command, which also owns
+     * the \refitem WaitCommand it creates internally.
      *
      * @param duration The maximum running duration of the Command
      * @return \refitem ParallelRaceGroup with this and \refitem
      * WaitCommand of the desired duration
      */
-    Command *withTimeout(QTime duration);
+    [[nodiscard]] std::unique_ptr<Command> withTimeout(QTime duration);
 
     /**
      * @brief Run the command until a condition is met
      *
      * @param isFinish When this condition returns true the command
      * will stop
+     * @details The caller owns the returned command, which also owns
+     * the \refitem WaitUntilCommand it creates internally.
+     *
      * @return \refitem ParallelRaceGroup with this and \refitem
      * WaitUntilCommand with the desired isFinish
      */
-    Command *until(const std::function<bool()> &isFinish);
+    [[nodiscard]] std::unique_ptr<Command> until(const std::function<bool()> &isFinish);
 
     /**
      * @brief Create a \refitem ParallelCommandGroup with this and
      * other
      *
+     * @details The caller owns the returned command. `other` is
+     * borrowed, not adopted, so it must outlive the group.
+     *
      * @param other Other command for the \refitem
      * ParallelCommandGroup
      * @return \refitem ParallelCommandGroup with this and other
      */
-    Command *with(Command *other);
+    [[nodiscard]] std::unique_ptr<Command> with(Command *other);
 
     /**
      * @brief Create a \refitem ParallelRaceGroup with this and other
      *
+     * @details The caller owns the returned command. `other` is
+     * borrowed, not adopted, so it must outlive the group.
+     *
      * @param other Other command for the \refitem ParallelRaceGroup
      * @return \refitem ParallelRaceGroup with this and other
      */
-    Command *race(Command *other);
+    [[nodiscard]] std::unique_ptr<Command> race(Command *other);
 
     /**
      * @brief Create a \refitem RepeatCommand with this
      *
+     * @details The caller owns the returned command.
+     *
      * @return \refitem RepeatCommand with this
      */
-    Command *repeatedly();
+    [[nodiscard]] std::unique_ptr<Command> repeatedly();
 
     /**
      * @brief Create a \refitem ProxyCommand with this
@@ -230,9 +256,25 @@ public:
      * @warning Only use \refitem ProxyCommand where ABSOLUTELY
      * necessary, it can have unintended side effects. The side
      * effects are listed in the class documentation
+     * @details The caller owns the returned command.
+     *
      * @return \refitem ProxyCommand with this
      */
-    Command *asProxy();
+    [[nodiscard]] std::unique_ptr<Command> asProxy();
 
     virtual ~Command() = default;
+
+protected:
+    /**
+     * @brief Commands this one allocated for itself, destroyed with it
+     *
+     * @details Only the decorators use this, and only for the helper
+     * commands they build internally - the \refitem WaitCommand inside
+     * withTimeout(), the \refitem WaitUntilCommand inside until().
+     * Those have no other owner, so without this they would leak.
+     *
+     * Commands the caller passes in are never adopted here. The caller
+     * keeps owning those, and they must outlive this command.
+     */
+    std::vector<std::unique_ptr<Command>> ownedHelpers;
 };

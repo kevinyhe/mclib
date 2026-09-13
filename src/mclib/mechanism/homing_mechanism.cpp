@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/mechanism/homing_mechanism.hpp"
 
 #include "mclib/time.hpp"
@@ -125,8 +129,6 @@ void HomingMechanism::applyState(const HomingState& state) {
         return;
       }
 
-      setVoltage(m_config.homing_voltage);
-
       if (stopDetected()) {
         stopMotor();
         // Zero at the stop, before any back-off, so the recorded zero does not
@@ -137,6 +139,8 @@ void HomingMechanism::applyState(const HomingState& state) {
         } else {
           setState(HomingState::Homed);
         }
+      } else if (!hasFailed()) {
+        setVoltage(m_config.homing_voltage);
       }
       return;
     }
@@ -192,7 +196,13 @@ bool HomingMechanism::stopDetected() {
   // in the middle of its range. startup_grace_ms only covers the first
   // startup_grace_ms of a run; the dwell covers every spike after it.
   if (m_current_source && m_config.current_threshold_amps > 0.0) {
-    const bool over = m_current_source() >= m_config.current_threshold_amps;
+    const double current = m_current_source();
+    if (!std::isfinite(current) || current < 0) {
+      stopMotor();
+      setState(HomingState::Failed);
+      return false;
+    }
+    const bool over = current >= m_config.current_threshold_amps;
     if (!over || !past_grace) {
       // Below threshold, or still inside the ramp-up window where the reading
       // means nothing. Either way any timer in progress is stale.
@@ -211,6 +221,11 @@ bool HomingMechanism::stopDetected() {
 
   if (m_velocity_source && m_config.velocity_threshold_rpm > 0.0) {
     const double speed = std::abs(m_velocity_source());
+    if (!std::isfinite(speed)) {
+      stopMotor();
+      setState(HomingState::Failed);
+      return false;
+    }
     if (speed >= m_config.velocity_threshold_rpm) {
       // The mechanism is moving, so the stall detector is armed from here on
       // and any stall timer in progress is stale.
@@ -241,7 +256,7 @@ bool HomingMechanism::stopDetected() {
 
 void HomingMechanism::setVoltage(double volts) {
   if (m_voltage_sink) {
-    m_voltage_sink(volts);
+    m_voltage_sink(std::isfinite(volts) ? volts : 0.0);
   }
 }
 

@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/device/motor.hpp"
 
 #include "pros/error.h"
@@ -10,7 +14,7 @@ namespace mclib {
 namespace device {
 
 Motor::Motor(std::int8_t port, Gearset gearset)
-    : m_motor(port, toProsGearset(gearset)) {}
+    : m_motor(port, toProsGearset(gearset), pros::MotorUnits::degrees) {}
 
 void Motor::setVoltage(double volts) {
   m_motor.move_voltage(voltsToMillivolts(volts));
@@ -77,10 +81,12 @@ std::optional<units::QCurrent> Motor::current() const {
 }
 
 std::int32_t Motor::voltsToMillivolts(double volts) {
+  if (!std::isfinite(volts)) return 0;
   return static_cast<std::int32_t>(std::clamp(volts, -12.0, 12.0) * 1000.0);
 }
 
 std::int32_t Motor::percentToPower(double percent) {
+  if (!std::isfinite(percent)) return 0;
   return static_cast<std::int32_t>(std::clamp(percent, -1.0, 1.0) * 127.0);
 }
 

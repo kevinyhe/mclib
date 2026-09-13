@@ -1,9 +1,14 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/command.h"
 
 #include <cassert>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -14,6 +19,8 @@ class ParallelRaceGroup : public Command {
 private:
 	std::vector<Command*> commands;
 	bool isDone = false;
+	std::vector<bool> finished;
+	bool running = false;
 public:
 	/**
 	 * @brief Create a new ParallelRaceGroup given a initializer list of commands
@@ -37,7 +44,9 @@ public:
 	 * Initialize all commands in the ParallelRaceGroup
 	 */
 	void initialize() override {
-		this->isDone = false;
+		this->isDone = commands.empty();
+		finished.assign(commands.size(), false);
+		running = true;
 
 		for (const auto command : commands) {
 			command->initialize();
@@ -48,12 +57,14 @@ public:
 	 * Runs all the active commands in the ParallelRaceGroup and check if any are done
 	 */
 	void execute() override {
-		for (auto command : commands) {
+		if (!running || isDone) return;
+		for (std::size_t i = 0; i < commands.size(); ++i) {
+			auto* command = commands[i];
 			command->execute();
 
 			if (command->isFinished()) {
 				this->isDone = true;
-				command->end(false);
+				finished[i] = true;
 			}
 		}
 	}
@@ -70,12 +81,14 @@ public:
 	/**
 	 * @brief Ends all commands with the ones that should be interrupted being interrupted
 	 *
-	 * @param interrupted Ignored. Each member command is told whether IT was
-	 * interrupted, which is what isFinished() answers, not whether the group was.
+	 * @param interrupted True cancels every child. Otherwise only unfinished
+	 * children are interrupted. Each child is ended exactly once.
 	 */
-	void end(bool /*interrupted*/) override {
-		for (auto command : this->commands) {
-			command->end(!command->isFinished());
+	void end(bool interrupted) override {
+		if (!running) return;
+		running = false;
+		for (std::size_t i = 0; i < commands.size(); ++i) {
+			commands[i]->end(interrupted || !finished[i]);
 		}
 	}
 
@@ -97,7 +110,6 @@ public:
 	}
 };
 
-inline Command *Command::race(Command *other) {
-	return new ParallelRaceGroup({this, other});
+inline std::unique_ptr<Command> Command::race(Command *other) {
+	return std::unique_ptr<Command>(new ParallelRaceGroup({this, other}));
 }
-
