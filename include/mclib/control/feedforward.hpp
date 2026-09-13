@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/control/profile.hpp"
@@ -33,9 +37,9 @@
  *
  * **Identifying the gains.** See `fitVelocityGains()` and
  * `fitAccelerationGain()` below for the procedure; there is a worked version
- * in the README. Short form: drive at a series of fixed voltages, record the
- * steady-state speed at each, fit a line, and the intercept is kS while the
- * slope's reciprocal is kV.
+ * in `docs/motion.md`. Short form: drive at a series of fixed voltages,
+ * record the steady-state speed at each, fit a line, and the intercept is kS
+ * while the slope's reciprocal is kV.
  */
 
 namespace mclib {

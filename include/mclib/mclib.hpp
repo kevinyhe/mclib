@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/units/units.hpp"
@@ -8,21 +12,38 @@
 #include "mclib/utils.hpp"
 #include "mclib/pid.hpp"
 #include "mclib/auton/autonomous_routine.hpp"
-#include "mclib/config.hpp"
+#include "mclib/auton/selector.hpp"
+#include "mclib/auton/selector_model.hpp"
+#include "mclib/robot_geometry.hpp"
 #include "mclib/control.hpp"
 #include "mclib/chassis/chassis.hpp"
 #include "mclib/chassis/chassis_controller.hpp"
+#include "mclib/chassis/holonomic_chassis.hpp"
+#include "mclib/chassis/holonomic_controller.hpp"
+#include "mclib/chassis/holonomic_math.hpp"
+#include "mclib/control/drive_curve.hpp"
+#include "mclib/control/motion_config.hpp"
 #include "mclib/command/includes.h"
+#include "mclib/device/adi_analog_in.hpp"
+#include "mclib/device/adi_digital_in.hpp"
+#include "mclib/device/adi_encoder.hpp"
+#include "mclib/device/adi_led.hpp"
+#include "mclib/device/adi_potentiometer.hpp"
+#include "mclib/device/adi_ultrasonic.hpp"
+#include "mclib/device/ai_vision.hpp"
 #include "mclib/device/controller.hpp"
 #include "mclib/device/distance.hpp"
+#include "mclib/device/gps.hpp"
 #include "mclib/device/imu.hpp"
 #include "mclib/device/inertial.hpp"
 #include "mclib/device/line.hpp"
 #include "mclib/device/motor.hpp"
 #include "mclib/device/motor_group.hpp"
+#include "mclib/device/optical.hpp"
 #include "mclib/device/pneumatic.hpp"
 #include "mclib/device/rotation.hpp"
 #include "mclib/device/types.hpp"
+#include "mclib/device/vision.hpp"
 #include "mclib/mechanism/auto_trigger_mechanism.hpp"
 #include "mclib/mechanism/conveyor_mechanism.hpp"
 #include "mclib/mechanism/discrete_actuator_mechanism.hpp"
@@ -43,6 +64,7 @@
 #include "mclib/path/pure_pursuit.hpp"
 #include "mclib/path/spline.hpp"
 #include "mclib/snapshot/snapshot_config.hpp"
+#include "mclib/telemetry/file_sink.hpp"
 #include "mclib/telemetry/telemetry.hpp"
 
 #ifndef MCLIB_NO_ALIAS

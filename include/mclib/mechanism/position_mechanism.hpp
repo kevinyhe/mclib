@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/mechanism/mechanism.hpp"
@@ -85,6 +89,8 @@ struct PositionMechanismConfig {
  */
 class PositionMechanism : public StateMechanism<double> {
 public:
+  /// True after the last closed-loop tick rejected a nonfinite measurement/target.
+  bool hasSensorFault() const { return m_sensor_fault; }
   /// Reads the current position.
   using PositionSource = std::function<double()>;
   /// Applies a voltage, in volts.
@@ -134,6 +140,7 @@ public:
    * move.
    */
   void stop();
+  void onDisabled() override;
 
   double position() const;
   double target() const;
@@ -192,6 +199,7 @@ private:
   bool m_manual = true;
   double m_manual_voltage = 0.0;
   bool m_arrived = false;
+  bool m_sensor_fault = false;
 };
 
 }  // namespace mechanism

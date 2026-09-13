@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/units/units.hpp"
@@ -13,6 +17,7 @@ namespace device {
 
 class Rotation {
 public:
+  /// A negative port or reversed=true requests reversal; using both does not cancel it.
   explicit Rotation(std::int8_t port, bool reversed = false);
 
   double getPositionDeg() const;

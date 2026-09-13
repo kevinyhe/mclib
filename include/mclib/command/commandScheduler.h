@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include <algorithm>
@@ -23,6 +27,9 @@ private:
 	EventLoop eventLoop{};
 
 	bool inRunLoop = false;
+	bool inSchedule = false;
+	bool draining = false;
+	bool disabling = false;
 
 	std::vector<Command *> toSchedule;
 	std::vector<Command *> toCancel;
@@ -34,6 +41,31 @@ private:
 	std::vector<Command *> activeStack;
 
 	CommandScheduler() = default;
+
+	static void drainPending()
+	{
+		auto &s = getInstance();
+		if (s.inRunLoop || s.inSchedule || s.draining || s.disabling) return;
+		s.draining = true;
+		while (!s.toCancel.empty() || !s.toSchedule.empty()) {
+			if (!s.toCancel.empty()) {
+				auto *command = s.toCancel.front();
+				s.toCancel.erase(s.toCancel.begin());
+				cancel(command);
+			} else {
+				auto *command = s.toSchedule.front();
+				s.toSchedule.erase(s.toSchedule.begin());
+				schedule(command);
+			}
+		}
+		s.draining = false;
+	}
+
+	class ScheduleScope {
+	public:
+		ScheduleScope() { getInstance().inSchedule = true; }
+		~ScheduleScope() { getInstance().inSchedule = false; drainPending(); }
+	};
 
 	// Marks a command active for the duration of one callback into it. Nests,
 	// because a callback is allowed to schedule or cancel other commands
@@ -108,16 +140,14 @@ private:
 	{
 		CommandScheduler &instance = getInstance();
 
-		// Read before anything is released, so the release covers what the
-		// command actually held on the way in
-		auto held = command->getRequirements();
-
 		// Read before the erase below, which is what would make it false
 		const bool was_scheduled = scheduled(command);
 
 		std::erase(instance.scheduledCommands, command);
 
-		releaseRequirements(command, held);
+		std::erase_if(instance.requirements, [command](const auto &entry) {
+			return entry.second == command;
+		});
 
 		if (!was_scheduled)
 		{
@@ -416,12 +446,12 @@ public:
 		}
 
 		// return if competition is disabled
-		if (pros::competition::is_disabled())
+		if (pros::competition::is_disabled() || instance.disabling)
 		{
 			return;
 		}
 
-		if (instance.inRunLoop)
+		if (instance.inRunLoop || instance.inSchedule)
 		{
 			if (std::find(instance.toSchedule.begin(), instance.toSchedule.end(), command) == instance.toSchedule.end())
 			{
@@ -430,6 +460,9 @@ public:
 			return;
 		}
 
+		// Requirement transfer, interruption and initialization are one transaction.
+		// Commands requested by these callbacks compete only after it completes.
+		ScheduleScope transaction;
 		std::vector<Command *> intersection;
 
 		bool all_interruptible = true;
@@ -469,13 +502,12 @@ public:
 				instance.requirements[requirement] = command;
 			}
 
+			instance.scheduledCommands.push_back(command);
 			{
 				ActiveScope active(command);
 
 				command->initialize();
 			}
-
-			instance.scheduledCommands.push_back(command);
 		}
 	}
 
@@ -494,6 +526,10 @@ public:
 	static void run()
 	{
 		CommandScheduler &instance = getInstance();
+		if (pros::competition::is_disabled()) {
+			disable();
+			return;
+		}
 
 		// Run the periodic for all registered subsystems. runPeriodic is non
 		// virtual and skips disabled subsystems before calling periodic().
@@ -560,35 +596,7 @@ public:
 
 		instance.inRunLoop = false;
 
-		// Drain destructively, one entry at a time. With inRunLoop false again
-		// these cancel() and schedule() calls run user callbacks, and a callback
-		// is allowed to cancel, schedule or forget a command. Popping the front
-		// keeps forgetCommand() able to scrub entries that have not run yet:
-		// copying the queue aside would leave this loop acting on commands that
-		// were forgotten, or destroyed, part-way through the drain. It also never
-		// walks a vector that is being written.
-		//
-		// Neither queue can grow here. With inRunLoop false, schedule() and
-		// cancel() act immediately instead of queueing, so each pop shrinks the
-		// queue for good and the loops terminate.
-		while (!instance.toCancel.empty())
-		{
-			Command *command = instance.toCancel.front();
-
-			instance.toCancel.erase(instance.toCancel.begin());
-
-			// A no-op on a command an earlier cancel already forgot
-			cancel(command);
-		}
-
-		while (!instance.toSchedule.empty())
-		{
-			Command *command = instance.toSchedule.front();
-
-			instance.toSchedule.erase(instance.toSchedule.begin());
-
-			schedule(command);
-		}
+		drainPending();
 
 		// Copy again, schedule() runs command callbacks that may unregister a
 		// subsystem and invalidate this iteration
@@ -730,7 +738,7 @@ public:
 			return;
 		}
 
-		if (instance.inRunLoop)
+		if (instance.inRunLoop || instance.inSchedule)
 		{
 			if (std::find(instance.toCancel.begin(), instance.toCancel.end(), command) == instance.toCancel.end())
 			{
@@ -740,6 +748,22 @@ public:
 		}
 
 		retire(command, true);
+	}
+
+	/// Call from the scheduler's task on competition disable. Repeated calls are
+	/// safe. Custom subsystems should override onDisabled() to clear latched output.
+	static void disable()
+	{
+		auto &s = getInstance();
+		if (s.disabling) return;
+		s.disabling = true;
+		s.toSchedule.clear();
+		s.toCancel.clear();
+		for (auto *command : std::vector<Command *>(s.scheduledCommands))
+			retire(command, true);
+		for (auto *subsystem : registeredSubsystems())
+			if (s.subsystems.contains(subsystem)) subsystem->onDisabled();
+		s.disabling = false;
 	}
 };
 

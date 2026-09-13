@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 /**
  * @file path_test.cpp
  * @brief Host tests for mclib/path: Path, generateSpline() and PurePursuit.
@@ -659,6 +663,18 @@ void pathQueries() {
 // 14. Overshooting the end of the path is a stop, not a lap.
 // ---------------------------------------------------------------------------
 void pastTheEnd() {
+  PathPoint origin;
+  PathPoint east;
+  east.x = 24.0 * inch;
+  Path raw_duplicates({origin, origin, east});
+  CHECK_EQ(raw_duplicates.size(), 2u);
+  PurePursuit raw_follower(raw_duplicates);
+  CHECK_NEAR(raw_follower.update(Pose2D{0, 3, 0}).cross_track_error.in(), -3.0, 1e-9);
+  Path degenerate({origin, origin, origin});
+  CHECK(!degenerate.valid());
+  PurePursuit degenerate_follower(degenerate);
+  CHECK_EQ(degenerate_follower.update(Pose2D{}).velocity.inps(), 0.0);
+
   std::printf("-- past the end of the path\n");
   // A 24 in path along +Y, the robot 16 in past its end, still facing +Y. 16 in
   // is more than the 12 in lookahead, so off_path is true and the projection is

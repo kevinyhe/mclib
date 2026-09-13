@@ -1,5 +1,9 @@
 // mclib
 //
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
 // The host-side definition of mclib::time::systemMillis(). On the robot this
 // symbol comes from src/mclib/time.cpp, the one translation unit that includes
 // a PROS header; a host test cannot link that, so it links this instead.

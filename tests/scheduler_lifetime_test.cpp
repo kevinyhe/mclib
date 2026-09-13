@@ -1,5 +1,9 @@
 // mclib
 //
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
 // Object lifetime around CommandScheduler.
 //
 //   1. A MechanismManager that goes out of scope must not leave the scheduler

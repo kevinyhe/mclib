@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/control/robot_state.hpp"
 
 #include <atomic>
@@ -76,6 +80,17 @@ void RobotState::clearMotionOutputs() {
   m_is_turning = false;
   m_prev_left_output = 0.0;
   m_prev_right_output = 0.0;
+  m_motion_telemetry = {};
+}
+
+MotionTelemetry RobotState::motionTelemetry() const {
+  sync::LockGuard lock(m_mutex);
+  return m_motion_telemetry;
+}
+
+void RobotState::setMotionTelemetry(const MotionTelemetry& telemetry) {
+  sync::LockGuard lock(m_mutex);
+  m_motion_telemetry = telemetry;
 }
 
 RobotState& robotState() {

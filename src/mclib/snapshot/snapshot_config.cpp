@@ -1,8 +1,12 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/snapshot/snapshot_config.hpp"
 
-#include "mclib/config.hpp"
 #include "mclib/control/robot_state.hpp"
+#include "mclib/control/odometry.hpp"
 #include "mclib/utils.hpp"
 
 #include <algorithm>
@@ -13,23 +17,14 @@ namespace snapshot
   namespace
   {
 
-    // The sensors these defaults read are the ones config.cpp already owns:
-    // left_reset on port 10, right_reset on port 9. They used to be locally
-    // constructed on ports 1 and 2, which are not distance sensors at all -
-    // port 2 is one of the intake motors - so every default read came back as a
-    // bad port and snapshot_setpose_quadrant() answered TOO_FEW_SENSORS on
-    // every call. Taking the externs means there is one place the port numbers
-    // live, which is what stopped these two from drifting apart again.
-    //
-    // Which physical sensor plays which role below is a PLACEHOLDER, and so are
-    // the mounting offsets. Only the team that built the robot knows where the
-    // sensors are bolted and which way they point. Measure them and call
-    // snapshot_config_set_sensors(). What must not change is that the two
-    // sensors look along *different* field axes. A pair that faces exactly
-    // opposite ways only ever pins down one axis: SnapshotConfig::damping then
-    // holds the other at the odometry guess, by design, and the solve reports
-    // success having corrected half the pose.
-
+    // There are no default sensors. Which physical sensor plays which role,
+    // and where it is mounted, is something only the team that built the
+    // robot knows: measure the offsets and call
+    // snapshot_config_set_sensors(). Two sensors must look along *different*
+    // field axes. A pair that faces exactly opposite ways only ever pins down
+    // one axis: SnapshotConfig::damping then holds the other at the odometry
+    // guess, by design, and the solve reports success having corrected half
+    // the pose.
     SnapshotConfig g_cfg{};
     std::vector<DistanceSensorConfig> g_sensors;
     SnapshotPoseRuntime g_runtime{};
@@ -141,33 +136,11 @@ namespace snapshot
         g_cfg.quadrant_margin_in = 2.0f;
       }
 
-      if (!g_sensors_custom)
-      {
-        g_sensors.clear();
-        g_sensors.reserve(2);
-
-        // Forward-facing. Together with the sideways sensor below this spans
-        // both field axes, which is what makes (x, y) observable at all.
-        DistanceSensorConfig front{};
-        front.dev = &left_reset;
-        front.x_right_in = 0.0f;
-        front.y_fwd_in = 7.0f;
-        front.rel_deg = 0.0f;
-        front.field_mask_override = MAP_PERIMETER;
-        front.use_confidence_gate = true;
-        front.min_confidence = 35;
-        g_sensors.push_back(front);
-
-        DistanceSensorConfig right{};
-        right.dev = &right_reset;
-        right.x_right_in = 7.0f;
-        right.y_fwd_in = 0.0f;
-        right.rel_deg = 90.0f;
-        right.field_mask_override = MAP_PERIMETER | MAP_LONG_GOALS_ALL;
-        right.use_confidence_gate = true;
-        right.min_confidence = 35;
-        g_sensors.push_back(right);
-      }
+      // No default sensors. The library used to seed two distance sensors
+      // on one robot's ports here, which meant every other robot's snapshot
+      // silently read empty ports. Call snapshot_config_set_sensors() with
+      // your own layout; until then every solve answers TOO_FEW_SENSORS.
+      (void)g_sensors_custom;
 
     }
 
@@ -259,8 +232,8 @@ namespace snapshot
     // leaves the IMU's theta in place - the same split as wallReset().
     runtime.apply_pose = [](void *, float x_in, float y_in, float, float, float)
     {
-      mclib::control::robotState().setPosition(static_cast<double>(x_in),
-                                               static_cast<double>(y_in));
+      mclib::control::correctOdometryPosition(static_cast<double>(x_in),
+                                             static_cast<double>(y_in));
     };
     g_runtime = runtime;
     return true;

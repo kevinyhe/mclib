@@ -1,11 +1,18 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/chassis/chassis.hpp"
+#include "mclib/chassis/chassis_math.hpp"
 #include "mclib/command/functionalCommand.h"
 #include "mclib/command/runCommand.h"
 #include "mclib/command/subsystem.h"
 #include "mclib/control/motion.hpp"
+#include "mclib/control/drive_curve.hpp"
+#include "mclib/control/motion_config.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/device/controller.hpp"
 #include "mclib/pid.hpp"
@@ -17,46 +24,15 @@
 namespace mclib {
 
 /**
- * @brief PID coefficients for one loop.
+ * @brief The tuning record for a ChassisController.
  *
- * Deliberately `double`. A gain's dimension is output over input, and the same
- * struct serves a distance loop (volts per inch) and a turn loop (volts per
- * degree). There is no one type that is right for both.
+ * The same struct every drive loop in mclib reads - see
+ * `control/motion_config.hpp`. `ChassisController::setConfig()` installs it
+ * as the active `control::motionConfig()`, so the scheduler-driven loops in
+ * this class and the blocking routines in `control/motion.hpp` cannot be
+ * tuned differently by accident.
  */
-struct PIDGains {
-  double kp = 0.0;
-  double ki = 0.0;
-  double kd = 0.0;
-};
-
-/**
- * @brief When a PID loop is allowed to declare itself settled.
- *
- * The two error tolerances and the derivative tolerance are in the units of
- * whichever loop this configures - inches for the distance loop, degrees for
- * the turn loop - so they stay `double` for the same reason PIDGains does. The
- * durations are times and say so.
- */
-struct PIDExit {
-  double small_error = 1.0;  ///< Inches or degrees, per the loop.
-  double big_error = 3.0;    ///< Inches or degrees, per the loop.
-  QTime small_duration = 50.0 * units::millisecond;
-  QTime big_duration = 250.0 * units::millisecond;
-  double derivative = 5.0;  ///< Inches or degrees per tick, per the loop.
-};
-
-struct ChassisControllerConfig {
-  PIDGains distance_pid{0.4, 0.0, 3.0};
-  PIDGains turn_pid{0.3, 0.0, 1.5};
-  PIDGains heading_pid{0.3, 0.0, 1.5};
-  PIDExit distance_exit{};
-  PIDExit turn_exit{1.0, 3.0, 50.0 * units::millisecond, 250.0 * units::millisecond, 4.5};
-  /// @brief Voltage cap for the built-in loops when a goal does not override it.
-  QVoltage max_voltage = 12.0 * units::volt;
-  /// @brief Voltage floor for the built-in distance loop. Zero disables it.
-  QVoltage min_voltage = 0.0 * units::volt;
-  bool heading_correction = true;
-};
+using ChassisControllerConfig = control::MotionConfig;
 
 /**
  * @brief The drive subsystem: two built-in scheduler loops, plus commands that
@@ -66,6 +42,10 @@ struct ChassisControllerConfig {
  * scheduler pass. Everything named `makeXxxCommand()` instead launches the
  * corresponding free function from `motion.hpp` on its own task and cancels it
  * cooperatively; those are the routines an autonomous is normally built from.
+ *
+ * Constructing a ChassisController binds its Chassis as the drivetrain those
+ * free functions run on (`control::bindDrive()`) and installs its config as
+ * the active `control::motionConfig()`. One ChassisController per program.
  */
 class ChassisController : public Subsystem {
 public:
@@ -107,6 +87,7 @@ public:
                      bool stop_at_end = true,
                      QVoltage max_voltage = -1.0 * units::volt);
   void cancel();
+  void onDisabled() override { cancel(); m_chassis.stop(); }
 
   bool isSettled() const;
   bool isActive() const;
@@ -196,11 +177,48 @@ public:
       QVoltage max_output = 12.0 * units::volt,
       bool overturn = true,
       QVoltage min_speed = -1.0 * units::volt);
+  // Driver control. Each returns a command meant to be the subsystem's
+  // default: it runs whenever no autonomous command owns the drive, reads
+  // the sticks every scheduler pass, shapes them through the curves in
+  // `control/drive_curve.hpp`, and writes the motors. The curves' slew state
+  // is reset each time the command starts, so a hand-back from autonomous
+  // never begins with a stale ramp.
+
+  /**
+   * @brief Arcade: one stick axis drives, one turns.
+   *
+   * @param forward_curve Deadzone, expo gain, stiction floor and slew for the
+   *                      drive axis.
+   * @param turn_curve    The same for the turn axis. Turning usually wants
+   *                      a larger gain than driving.
+   */
   std::unique_ptr<Command> makeArcadeDriveCommand(
       device::Controller& controller,
+      control::DriveCurveConfig forward_curve = {},
+      control::DriveCurveConfig turn_curve = {},
       device::AnalogAxis forward_axis = device::AnalogAxis::LeftY,
-      device::AnalogAxis turn_axis = device::AnalogAxis::RightX,
-      double scale = 127.0);
+      device::AnalogAxis turn_axis = device::AnalogAxis::RightX);
+
+  /**
+   * @brief Curvature ("cheesy") drive: the turn stick sets the curvature of
+   *        the path rather than a wheel speed difference, so the same stick
+   *        deflection bends the path the same amount at any speed.
+   *
+   * With the drive stick centred it falls back to turning in place.
+   */
+  std::unique_ptr<Command> makeCurvatureDriveCommand(
+      device::Controller& controller,
+      control::DriveCurveConfig forward_curve = {},
+      control::DriveCurveConfig turn_curve = {},
+      device::AnalogAxis forward_axis = device::AnalogAxis::LeftY,
+      device::AnalogAxis turn_axis = device::AnalogAxis::RightX);
+
+  /// @brief Tank: each stick drives its own side.
+  std::unique_ptr<Command> makeTankDriveCommand(
+      device::Controller& controller,
+      control::DriveCurveConfig curve = {},
+      device::AnalogAxis left_axis = device::AnalogAxis::LeftY,
+      device::AnalogAxis right_axis = device::AnalogAxis::RightY);
 
 private:
   static double clampVoltage(double volts, double max_voltage);
@@ -220,6 +238,19 @@ private:
   std::unique_ptr<Command> makeAsyncControlCommand(
       std::function<void()> action,
       control::CancelToken token = control::CancelToken::Motion);
+  /**
+   * @brief The shared shape of the three teleop commands.
+   *
+   * @param mix Turns the two shaped stick values into a left/right pair. For
+   *            tank it is the identity.
+   */
+  std::unique_ptr<Command> makeTeleopCommand(
+      device::Controller& controller,
+      control::DriveCurveConfig first_curve,
+      control::DriveCurveConfig second_curve,
+      device::AnalogAxis first_axis,
+      device::AnalogAxis second_axis,
+      std::function<chassis_math::DrivePair(double, double)> mix);
 
   Chassis& m_chassis;
   ChassisControllerConfig m_config;

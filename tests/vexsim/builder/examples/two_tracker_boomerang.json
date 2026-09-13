@@ -1,0 +1,12 @@
+{
+  "name": "Sensor variant / two-tracker boomerang",
+  "preset": "six_motor_450",
+  "tracking_mode": "two",
+  "start_pose": {"x": 0, "y": 0, "heading": 0},
+  "environment": {"soc": 1, "friction": 1, "seed": 1},
+  "stop_on_failure": true,
+  "steps": [
+    {"type": "boomerang", "x": 24, "y": 24, "heading": 90,
+     "direction": 1, "lead": 0.5, "timeout_ms": 4000, "volts": 12}
+  ]
+}

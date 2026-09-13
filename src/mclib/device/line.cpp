@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/device/line.hpp"
 
 #include <algorithm>
@@ -10,7 +14,7 @@ Line::Line(std::uint8_t adi_port,
       threshold_value(clamp_raw(threshold)),
       dark_line(detect_dark_line) {}
 
-Line::Line(pros::ADIAnalogIn adi_port,
+Line::Line(pros::adi::AnalogIn adi_port,
            std::int32_t threshold,
            bool detect_dark_line)
     : sensor(adi_port),

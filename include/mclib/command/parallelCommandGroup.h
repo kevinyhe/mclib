@@ -1,10 +1,15 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/command.h"
 
 #include <algorithm>
 #include <cassert>
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -80,8 +85,10 @@ public:
     void end(bool interrupted) override {
         if (interrupted) {
             for (auto &[command, running]: commands) {
-                command->end(true);
-                running = true;
+                if (running) {
+                    running = false;
+                    command->end(true);
+                }
             }
         }
     }
@@ -105,4 +112,6 @@ public:
     }
 };
 
-inline Command *Command::with(Command *other) { return new ParallelCommandGroup({this, other}); }
+inline std::unique_ptr<Command> Command::with(Command *other) {
+    return std::unique_ptr<Command>(new ParallelCommandGroup({this, other}));
+}

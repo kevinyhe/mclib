@@ -1,57 +1,44 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/units/geometry.hpp"
 
 /**
  * @file robot_geometry.hpp
- * @brief YOUR ROBOT'S DRIVETRAIN GEOMETRY. Measure it and edit it.
+ * @brief A place to write down your drivetrain geometry once.
  *
- * This is the one place mclib learns how big your robot is. Everything that
- * converts encoder degrees into inches goes through the two constants below:
- * `motion.cpp`'s `driveTo()` and `curveCircle()`, the odometry task, and
- * `Chassis` (whose `ChassisDimensions` is `units::DriveGeometry`, the same
- * type as `robot_drive_geometry`).
+ * Nothing in the library reads these constants. They exist so a robot program
+ * has one named value to hand to `mclib::Chassis` and to the odometry setup,
+ * instead of repeating a wheel size in two places that can drift apart:
  *
- * It used to be described three times, in three conventions, with three
- * numbers:
+ * @code
+ * mclib::Chassis chassis({-11, 13, 14}, {-16, 17, -18},
+ *                        mclib::device::Gearset::Blue,
+ *                        mclib::config::robot_drive_geometry, imu);
+ * @endcode
  *
- *     config.cpp   wheel_distance_in = 9.06          a CIRCUMFERENCE, misnamed
- *     config.cpp   vertical_tracker_diameter = 2     a DIAMETER
- *     chassis.hpp  wheel_diameter_in = 2.75          a DIAMETER, a third value
- *
- * 9.06 in of circumference is a 2.8839 in wheel, so the drive path and the
- * `Chassis` path disagreed by 4.87% on distance and 1.1% on turn arc - about
- * half an inch of error per ten inches driven, depending which code path you
- * happened to be on. The four `double` globals that carried those numbers are
- * gone; see the note in `config.cpp`.
- *
- * `units::Wheel`'s two named factories are what stops it happening again.
- * There is no constructor taking a bare number, so you have to say which
- * measurement you have:
+ * `units::Wheel` has two named factories and no constructor taking a bare
+ * number, so you have to say which measurement you took:
  *
  *     Wheel::fromCircumference(9.06 * units::inch)   tape around the tread
  *     Wheel::fromDiameter(2.75 * units::inch)        calipers across the wheel
  *
- * The values here are the ones this robot's autonomous was tuned against:
- * 9.06 in measured around a compressed tread, 11.375 in between the wheel
- * contact patches. **If you copy this template, put your own numbers in.**
+ * A wrong wheel size is a silent 5% scaling error on every autonomous. The
+ * values here are one competition robot's: 9.06 in measured around a
+ * compressed tread, 11.375 in between the wheel contact patches. **Put your
+ * own numbers in**, or ignore this file and state the geometry inline where
+ * you build the Chassis.
  *
  * `gear_ratio` is wheel revolutions per **motor** revolution, because the drive
- * encoders mclib reads are the V5 motors' own: `getLeftRotationDegree()` goes
- * to `left_chassis.getPositionsDeg()`, and `Chassis::leftPositionDeg()` reads
- * the same motors. Direct drive is 1.0; a 36:48 external gearing is 36.0/48.0.
+ * encoders mclib reads are the V5 motors' own. Direct drive is 1.0; a 36:48
+ * external gearing is 36.0/48.0.
  *
- * If you installed mclib as a PROS template, editing this header is not enough
- * on its own - `motion.cpp` and the odometry task are already compiled into
- * `mclib.a`. Assign to `robot_drive_geometry` in `initialize()` instead; see
- * its doc comment below.
- *
- * This header exists separately from `config.hpp` only because `config.hpp`
- * pulls in the PROS device wrappers, which do not build on the host. Splitting
- * the geometry out lets `tests/geometry_test.cpp` assert against the real
- * values rather than a restated copy of them. `config.hpp` includes this, so
- * there is still one file to edit.
+ * This header has no PROS dependency, so `tests/geometry_test.cpp` can assert
+ * against the real values.
  */
 
 namespace mclib {
@@ -59,8 +46,8 @@ namespace config {
 
 namespace detail {
 
-// The numbers, written once. These are `constexpr` so the static_asserts below
-// can see them; they are not what the rest of the library reads. Edit here.
+// The numbers, written once, `constexpr` so the static_asserts below can see
+// them.
 inline constexpr units::DriveGeometry declared_drive_geometry{
     units::Wheel::fromCircumference(9.06 * units::inch),
     11.375 * units::inch,
@@ -73,10 +60,9 @@ inline constexpr units::TrackingWheel declared_vertical_tracking_wheel{
     1.0,
 };
 
-// Sanity, not tuning. These no longer pin the geometry to one team's numbers -
-// you are supposed to edit them - but a zero or negative wheel, track width or
-// gear ratio is a typo in every case, and it would otherwise show up as an
-// autonomous that never moves or that drives backwards.
+// Sanity, not tuning. A zero or negative wheel, track width or gear ratio is
+// a typo in every case, and it would otherwise show up as an autonomous that
+// never moves or that drives backwards.
 static_assert(declared_drive_geometry.wheel.diameter() > 0.0 * units::inch,
               "drive geometry wheel must have a positive diameter");
 static_assert(declared_drive_geometry.track_width > 0.0 * units::inch,
@@ -91,40 +77,17 @@ static_assert(declared_vertical_tracking_wheel.gear_ratio > 0.0,
 }  // namespace detail
 
 /**
- * @brief The drive base every part of mclib measures with.
+ * @brief An example drive base: 9.06 in of rolling circumference per wheel
+ *        revolution, 11.375 in between the wheel contact patches, drive
+ *        encoders geared 1:1 to the wheels.
  *
- * Defaults to the geometry declared above: 9.06 in of rolling circumference
- * per wheel revolution, 11.375 in between the wheel contact patches, drive
- * encoders geared 1:1 to the wheels.
- *
- * Mutable on purpose. `motion.cpp` and `odometry_task.cpp` ship **precompiled**
- * inside `bin/mclib.a`, so a team that installs mclib as a PROS template and
- * edits this header only changes the translation units they compile
- * themselves - `driveTo()` and the odometry task would keep the numbers the
- * archive was built with, which is exactly the silent scaling error this file
- * exists to prevent. Assigning to it works everywhere:
- *
- * @code
- * void initialize() {
- *   using namespace mclib::units;
- *   mclib::config::robot_drive_geometry = {Wheel::fromDiameter(3.25 * inch),
- *                                          12.5 * inch, 36.0 / 48.0};
- *   mclib::control::startOdometry();
- * }
- * @endcode
- *
- * Set it once, in `initialize()`, before anything moves. `motion.cpp` reads it
- * inside its control loops and `startOdometry()` reads it when it starts, so
- * changing it mid-motion rescales a motion that is already running.
- *
- * The initialiser is a constant expression, so this is constant-initialised
- * before any static constructor runs - no static initialisation order hazard.
+ * Mutable so a program can assign its own numbers in `initialize()` before
+ * building the Chassis, if it would rather not edit a library header.
  */
 inline units::DriveGeometry robot_drive_geometry = detail::declared_drive_geometry;
 
-/// @brief The vertical (forward/back) tracking wheel: a 2 in wheel on the
-///        tracking centre. Mutable for the same reason as
-///        `robot_drive_geometry`; `startOdometry()` reads it when it starts.
+/// @brief An example vertical (forward/back) tracking wheel: a 2 in wheel on
+///        the tracking centre.
 inline units::TrackingWheel vertical_tracking_wheel =
     detail::declared_vertical_tracking_wheel;
 

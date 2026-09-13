@@ -1,7 +1,13 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 #include "mclib/command/command.h"
+
+#include <memory>
 
 /**
  * @brief Schedules a \refitem Command as a "proxy" while tracking the progress for \refitem Sequence
@@ -62,7 +68,7 @@ public:
 	~ProxyCommand() override = default;
 };
 
-inline Command *Command::asProxy() {
-	return new ProxyCommand(this);
+inline std::unique_ptr<Command> Command::asProxy() {
+	return std::make_unique<ProxyCommand>(this);
 }
 

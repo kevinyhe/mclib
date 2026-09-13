@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/mechanism/position_mechanism.hpp"
 
 #include "mclib/time.hpp"
@@ -59,6 +63,13 @@ void PositionMechanism::stop() {
   // Brake, not coast: latch the present position as the target and let the
   // loop hold it.
   moveTo(position());
+}
+
+void PositionMechanism::onDisabled() {
+  setManualVoltage(0.0);
+  m_pid.reset();
+  m_arrived = false;
+  if (m_voltage_sink) m_voltage_sink(0.0);
 }
 
 double PositionMechanism::position() const {
@@ -164,6 +175,13 @@ void PositionMechanism::applyState(const double& target) {
   }
 
   const double current = position();
+  m_sensor_fault = !std::isfinite(current) || !std::isfinite(target);
+  if (m_sensor_fault) {
+    m_arrived = false;
+    m_pid.reset();
+    m_voltage_sink(0.0);
+    return;
+  }
 
   if (m_pid.targetArrived()) {
     m_arrived = true;
@@ -209,6 +227,8 @@ void PositionMechanism::beginClosedLoop(double target) {
 }
 
 double PositionMechanism::clampVoltage(double volts) const {
+  if (!std::isfinite(volts) || !std::isfinite(m_config.max_voltage) ||
+      m_config.max_voltage < 0) return 0.0;
   return std::clamp(volts, -m_config.max_voltage, m_config.max_voltage);
 }
 

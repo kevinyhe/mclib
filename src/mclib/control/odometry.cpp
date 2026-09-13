@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/control/odometry.hpp"
 
 #include "mclib/control/robot_state.hpp"
@@ -37,6 +41,17 @@ double chordFactor(double dtheta) {
 Odometry::Odometry(OdometryConfig config) : m_config(config) {}
 
 void Odometry::setConfig(const OdometryConfig& config) {
+  // Samples from another layout/scale are not a usable delta baseline. In
+  // particular, disabled tracker fields may legitimately contain NaN.
+  if (config.drive_inches_per_revolution != m_config.drive_inches_per_revolution ||
+      config.use_vertical_tracker != m_config.use_vertical_tracker ||
+      config.vertical_circumference != m_config.vertical_circumference ||
+      config.vertical_offset_right != m_config.vertical_offset_right ||
+      config.use_horizontal_tracker != m_config.use_horizontal_tracker ||
+      config.horizontal_circumference != m_config.horizontal_circumference ||
+      config.horizontal_offset_forward != m_config.horizontal_offset_forward) {
+    m_has_baseline = false;
+  }
   m_config = config;
 }
 
@@ -52,6 +67,13 @@ void Odometry::reset(const Pose2D& pose) {
       std::isfinite(pose.theta) ? wrapAngle(pose.theta) : m_pose.theta;
   m_pose = Pose2D{pose.x, pose.y, theta};
   m_has_baseline = false;
+}
+
+bool Odometry::correctPosition(double x_in, double y_in) {
+  if (!std::isfinite(x_in) || !std::isfinite(y_in)) return false;
+  m_pose.x = x_in;
+  m_pose.y = y_in;
+  return true;
 }
 
 Pose2D Odometry::update(const OdometrySample& sample) {
@@ -188,6 +210,13 @@ void resetOdometry(const Pose2D& pose) {
   // Publish what the odometry actually took, not what was asked for: reset()
   // rejects a non-finite heading and keeps the old one.
   robotState().setPose(odometryInstance().getPose());
+}
+
+bool correctOdometryPosition(double x_in, double y_in) {
+  sync::LockGuard lock(odometryMutex());
+  if (!odometryInstance().correctPosition(x_in, y_in)) return false;
+  robotState().setPose(odometryInstance().getPose());
+  return true;
 }
 
 void setOdometryConfig(const OdometryConfig& config) {

@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/control/odometry.hpp"
 
 #include "mclib/control/robot_state.hpp"
@@ -362,6 +366,32 @@ void testHorizontalTrackingWheel() {
 }
 
 void testResetIsNotADelta() {
+  // Changing layouts must not subtract ignored NaN tracker baselines.
+  Odometry reconfigured(driveConfig());
+  OdometrySample initial;
+  initial.vertical_deg = initial.horizontal_deg = NAN;
+  reconfigured.update(initial);
+  auto trackers = driveConfig();
+  trackers.use_vertical_tracker = trackers.use_horizontal_tracker = true;
+  reconfigured.setConfig(trackers);
+  CHECK(!reconfigured.hasBaseline());
+  initial.vertical_deg = 120.0;
+  initial.horizontal_deg = 240.0;
+  const auto baseline = reconfigured.update(initial);
+  CHECK_EQ(baseline.x, 0.0);
+  CHECK_EQ(baseline.y, 0.0);
+  reconfigured.setConfig(trackers);
+  CHECK(reconfigured.hasBaseline());
+  initial.vertical_deg += 360.0;
+  initial.horizontal_deg += 360.0;
+  const auto moved = reconfigured.update(initial);
+  CHECK_NEAR(moved.x, trackers.horizontal_circumference.in(), 1e-9);
+  CHECK_NEAR(moved.y, trackers.vertical_circumference.in(), 1e-9);
+  trackers.vertical_circumference *= 2.0;
+  reconfigured.setConfig(trackers);
+  CHECK(!reconfigured.hasBaseline());
+  CHECK_NEAR(reconfigured.update(initial).y, moved.y, 1e-9);
+
   std::printf("-- reset re-seeds the encoder baseline\n");
   Odometry odom(driveConfig());
   odom.reset(Pose2D{});

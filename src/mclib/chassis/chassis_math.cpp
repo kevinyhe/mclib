@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/chassis/chassis_math.hpp"
 
 #include <algorithm>
@@ -6,6 +10,12 @@
 
 namespace mclib {
 namespace chassis_math {
+
+double encoderHeadingDeg(double left_distance, double right_distance, double track_width) {
+  if (!std::isfinite(left_distance) || !std::isfinite(right_distance) ||
+      !std::isfinite(track_width) || track_width <= 0.0) return NAN;
+  return (left_distance - right_distance) / track_width * 180.0 / std::acos(-1.0);
+}
 
 double normalizeHeadingTarget(double target_deg, double current_deg) {
   const double delta = target_deg - current_deg;
@@ -60,6 +70,34 @@ DrivePair mixDriveCorrection(double drive_volts,
 
 DrivePair arcadeMix(double forward, double turn) {
   return DrivePair{forward + turn, forward - turn};
+}
+
+DrivePair curvatureMix(double forward,
+                       double turn,
+                       bool turn_in_place_when_stopped) {
+  if (!std::isfinite(forward) || !std::isfinite(turn)) {
+    return DrivePair{0.0, 0.0};
+  }
+  if (forward == 0.0) {
+    if (!turn_in_place_when_stopped) {
+      return DrivePair{0.0, 0.0};
+    }
+    const double spin = std::clamp(turn, -1.0, 1.0);
+    return DrivePair{spin, -spin};
+  }
+
+  const double differential = std::fabs(forward) * turn;
+  double left = forward + differential;
+  double right = forward - differential;
+
+  // Fit the rail by scaling both sides by the same factor, which keeps the
+  // ratio - and so the curvature the driver asked for - intact.
+  const double peak = std::max(std::fabs(left), std::fabs(right));
+  if (peak > 1.0) {
+    left /= peak;
+    right /= peak;
+  }
+  return DrivePair{left, right};
 }
 
 }  // namespace chassis_math

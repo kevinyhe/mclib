@@ -1,4 +1,8 @@
 // mclib
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
 /**
@@ -32,6 +36,10 @@ struct DrivePair {
   double left = 0.0;
   double right = 0.0;
 };
+
+/// Unwrapped clockwise-positive heading from differential wheel travel.
+/// Distances and track width must use the same unit. Invalid geometry returns NaN.
+double encoderHeadingDeg(double left_distance, double right_distance, double track_width);
 
 /**
  * @brief Shift @p target_deg by whole turns until it is within 180 deg of
@@ -105,6 +113,39 @@ DrivePair mixDriveCorrection(double drive_volts,
  *                the right stick turned the robot left.
  */
 DrivePair arcadeMix(double forward, double turn);
+
+/**
+ * @brief The curvature ("cheesy drive") mix: turn authority scales with speed.
+ *
+ * At full forward a small stick deflection is a gentle arc; at low speed the
+ * same deflection is a tight one. The differential is `|forward| * turn`, so
+ * the turn stick sets the *curvature* of the path rather than a fixed
+ * left/right difference. A car steers this way, which is why drivers find it
+ * easier to hold a line at speed than with arcadeMix().
+ *
+ * With @p forward at exactly 0 the differential would also be 0 and the robot
+ * could not turn at all, so that case switches to a plain in-place turn when
+ * @p turn_in_place_when_stopped is true, and returns {0, 0} when it is false.
+ * The switch is on an exact zero: shape the stick with
+ * `control::shapeDriveInput()` first, so a stick resting at 0.008 reads as 0
+ * instead of giving almost no turn authority.
+ *
+ * The pair is scaled down to fit [-1, 1] preserving its ratio, the same way
+ * `control::scaleToMax()` does, so `curvatureMix(1, 1)` is {1, 0}, not {2, 0}.
+ *
+ * `|forward|`, not `forward`: the differential keeps the sign of @p turn, so
+ * a positive turn rotates the robot clockwise whether it is driving forward
+ * or backward. That matches every other turn in the library. (A car in
+ * reverse does the opposite; drivers of a robot generally do not want that.)
+ *
+ * @param forward Forward command, -1..1; positive drives forward.
+ * @param turn    Turn command, -1..1; positive turns **clockwise**.
+ * @param turn_in_place_when_stopped What `forward == 0` does: spin in place
+ *                (true) or nothing (false).
+ */
+DrivePair curvatureMix(double forward,
+                       double turn,
+                       bool turn_in_place_when_stopped = true);
 
 }  // namespace chassis_math
 }  // namespace mclib

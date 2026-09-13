@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f5f7">
+  <title>Motion debugger</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="builder.css">
+  <script src="builder.js" defer></script>
+</head>
+<body>
+  <header class="app-bar">
+    <h1>Motion debugger</h1>
+    <div id="connection" class="connection"><span class="status-dot"></span><span>CONNECTING</span></div>
+    <div class="document-tools">
+      <button id="new-project">New</button><button id="import-project">Import JSON</button><button id="export-project">Export JSON</button>
+      <input id="import-file" type="file" accept="application/json,.json" hidden>
+    </div>
+    <div class="run-actions"><button id="cancel-run" hidden>Cancel run</button><button id="run-sequence" class="primary">Build & run</button></div>
+  </header>
+  <main>
+    <section class="run-bar" aria-label="Simulation status">
+      <div class="run-status"><span id="run-status-title">READY</span><p id="run-status-detail">Run the current C++ controller in vexsim. No physical hardware is connected.</p><progress id="run-progress" max="100" value="0" hidden></progress></div>
+      <span id="save-status" class="mono">DRAFT SAVED LOCALLY</span>
+    </section>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div class="workspace">
+      <div class="editor-panel">
+        <section class="sequence-panel" aria-labelledby="sequence-title">
+          <div class="panel-heading"><h2 id="sequence-title">Sequence editor</h2><span id="step-count" class="mono">00 STEPS</span></div>
+          <label class="name-field"><span class="label">Routine name</span><input id="routine-name" maxlength="80" autocomplete="off" aria-label="Routine name"></label>
+          <div class="example-picker"><span class="label">Examples</span><div><button id="example-baseline" class="small">Slip baseline</button><button id="example-trackers" class="small">Tracking wheels</button></div></div>
+          <ol id="step-list" class="step-list" aria-label="Ordered motion steps"></ol>
+          <div class="add-step-row"><label class="sr-only" for="new-step-type">Motion to add</label><select id="new-step-type"></select><button id="add-step" aria-label="Add motion step">+ Add</button></div>
+          <div class="sequence-foot"><label class="check-label"><input id="stop-on-failure" type="checkbox" checked> Stop at first failed step</label><p>Sequential execution: each action stops, then holds for 300 ms.</p></div>
+        </section>
+        <aside class="inspector-panel" aria-labelledby="inspector-title">
+          <div class="panel-heading"><h2 id="inspector-title">Edit step</h2><span class="mono" id="selected-number">EDITOR 01</span></div>
+          <div class="inspector-section"><div id="step-inspector"></div></div>
+          <details class="inspector-section" open><summary>Robot & sensors</summary><div class="details-content">
+            <label>Drivetrain<select id="robot-preset"></select></label>
+            <label>Odometry sensors<select id="tracking-mode"><option value="drive">Drive encoders + heading</option><option value="two">Two tracking wheels + heading</option></select></label>
+            <label>Heading source<select id="heading-source"><option value="imu">Inertial sensor</option><option value="encoders">Drive encoders</option></select></label>
+            <p class="micro-copy" id="preset-detail"></p>
+          </div></details>
+          <details class="inspector-section"><summary>Start pose</summary><div class="details-content"><div id="start-pose-fields" class="input-grid three"></div><p class="micro-copy">0° faces +Y; clockwise is positive. Drag the hollow start marker.</p></div></details>
+          <details class="inspector-section"><summary>Environment</summary><div class="details-content"><div id="environment-fields" class="input-grid two"></div></div></details>
+          <details class="inspector-section"><summary>Controller gains</summary><div class="details-content" id="tuning-fields"></div></details>
+        </aside>
+      </div>
+      <section class="field-panel" aria-labelledby="field-title">
+        <div class="panel-heading field-heading"><h2 id="field-title">Field <span id="field-mode">Preview</span></h2><label class="sr-only" for="field-view">Field view</label><select id="field-view"><option value="native">Vexsim playback</option><option value="edit" selected>Edit targets</option></select><button id="fit-view" class="small">Fit draft</button></div>
+        <div class="field-toolbar"><div class="legend"><span><i class="line reference"></i>Draft reference</span><span>Numbered targets are editable</span><span>Gray dots = comparison path</span></div></div>
+        <div id="canvas-wrap" class="canvas-wrap"><canvas id="field" tabindex="0" aria-label="Motion field. Drag numbered draft targets or click to set the editor-selected point target. Arrow keys pan; mouse wheel zooms."></canvas><iframe id="native-viewer" title="Vexsim native physical simulator viewer" data-src="/native/viewer.html" hidden></iframe><div id="native-status" class="native-status" role="status" hidden>Loading native vexsim viewer…</div><div class="field-coordinate mono" id="field-coordinate">+X RIGHT · +Y FORWARD · CW+</div><div class="field-caption" id="field-caption">DRAFT REFERENCE · NOT A RECORDING</div><div id="field-empty" class="field-empty" hidden></div></div>
+        <div class="playback">
+          <button id="play-pause" class="play-button" disabled aria-label="Play recorded simulation">▶</button>
+          <div class="scrub-wrap"><label class="sr-only" for="timeline">Playback time</label><input id="timeline" type="range" min="0" max="1" value="0" step="0.001" disabled><div class="time-labels mono"><output id="current-time">0.00 s</output><span id="playback-step">NO RECORDED RUN</span><output id="end-time">0.00 s</output></div></div>
+          <label class="sr-only" for="playback-speed">Playback speed</label><select id="playback-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        </div>
+        <p id="field-help" class="field-help">Outlined step = editor selection. Blue badge = current recorded step. Editing changes the draft, not the recording.</p>
+      </section>
+      <aside class="telemetry-panel" aria-labelledby="telemetry-title">
+        <div class="panel-heading"><h2 id="telemetry-title">Telemetry</h2><span id="telemetry-mode" class="mode-badge">NO DATA</span></div>
+        <div class="telemetry" aria-label="Current telemetry">
+          <div id="telemetry-groups"></div>
+          <details class="telemetry-plots"><summary>Command & heading history</summary><div class="plot-label">L blue / R orange · ±12 V</div><canvas id="command-plot" aria-label="Recorded left and right commands over time"></canvas><div class="plot-label">Truth blue / IMU orange / steering purple<br>Continuous angle branches · degrees</div><canvas id="heading-plot" aria-label="Recorded truth, IMU and controller steering heading over time"></canvas></details>
+          <p class="micro-copy telemetry-note">— = unavailable in this recording. Truth is simulator measurement, not controller feedback.</p>
+        </div>
+      </aside>
+    </div>
+    <section class="results-section" aria-labelledby="results-title">
+      <div class="results-heading"><h2 id="results-title">Run results</h2><div class="history-controls"><label>Recorded run<select id="run-history"><option value="">No runs yet</option></select></label><label>Compare with<select id="compare-history"><option value="">No comparison</option></select></label><button id="load-recorded" class="small" disabled>Load in editor</button></div></div>
+      <p id="comparison-context" class="comparison-context" hidden></p>
+      <div id="result-summary" class="result-summary"><div class="empty-summary">No recorded run.<span>Build & run, or choose a recording. Results use physical truth, not just estimated pose.</span></div></div>
+      <div class="table-scroll"><table class="results-table"><thead><tr><th>Step / motion</th><th>Result</th><th>Duration</th><th>Position error</th><th>Heading error</th><th>Previous Δ</th><th>Inspection</th></tr></thead><tbody id="step-results"></tbody></table></div>
+      <details id="diagnostic-details" class="diagnostic-details" hidden><summary>Run diagnostics & artifacts</summary><pre id="diagnostic-output"></pre></details>
+    </section>
+  </main>
+</body>
+</html>
