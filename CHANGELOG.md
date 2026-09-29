@@ -13,6 +13,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   on the last pose. The step itself is `control::holonomicFollowStep()`.
 - `mclib::path::Trajectory`: plans speed and time along a path from limits on
   speed, acceleration, deceleration, cornering and outer-wheel speed.
+- `followTrajectory()` and `mclib::control::Ramsete`: a RAMSETE follower for
+  tank drives that corrects using the odometry pose instead of the drive
+  encoders. `RamseteConfig::track_width` takes the drive's effective track
+  width, and the commanded speed is capped at the trajectory's top speed.
+- `ChassisController::makeFollowTrajectoryCommand()` and
+  `Routine::followTrajectory()`: RAMSETE following as a command and as a
+  routine step. Both keep their own copy of the trajectory.
+  With `exit` true it finishes with a turn to the final heading
+  (`RamseteConfig::turn_to_final_heading`) and a straight drive to close any
+  miss along it (`RamseteConfig::settle_position`).
+
+### Changed
+
+- `turnToAngle`, `driveTo`, `curveCircle`, `curveCircleReverse`, `swing`,
+  `turnToPoint`, `moveToPoint` and `boomerang` return a
+  `mclib::control::MotionResult` instead of `void`, so a routine can tell a
+  reached target from a timeout, cancel, disable, bad value or missing drive.
+  Code that ignores the return value still compiles.
 
 ### Fixed
 

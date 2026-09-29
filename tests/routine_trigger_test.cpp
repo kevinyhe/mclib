@@ -467,6 +467,11 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLengt
   return nullptr;
 }
 
+std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
+    const path::Trajectory&, const control::RamseteConfig&, QTime, bool, QVoltage) {
+  return nullptr;
+}
+
 }  // namespace mclib
 
 int main() {

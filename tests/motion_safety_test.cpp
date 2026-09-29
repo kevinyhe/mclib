@@ -3,12 +3,16 @@
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion_config.hpp"
 #include "mclib/control/odometry.hpp"
+#include "mclib/control/ramsete.hpp"
 #include "mclib/control/robot_state.hpp"
+#include "mclib/path/spline.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "mclib/time.hpp"
 #include "support/host_pros.hpp"
 #include "test_assert.hpp"
 #include <functional>
 #include <limits>
+#include <string>
 
 namespace {
 std::uint32_t now_ms = 0;
@@ -54,16 +58,35 @@ int main() {
   mclib::time::ScopedClock clock(fakeClock);
   FakeDrive hw;
   bindDrive(&hw);
-  const std::vector<std::function<void()>> motions{
-    [] { turnToAngle(90_deg, 100_ms, false); },
-    [] { driveTo(24_in, 100_ms, false); },
-    [] { curveCircle(90_deg, 24_in, 100_ms, false); },
-    [] { curveCircleReverse(90_deg, 24_in, 100_ms, false); },
-    [] { swing(90_deg, 1, 100_ms, false); },
-    [] { turnToPoint(24_in, 24_in, 1, 100_ms); },
-    [] { moveToPoint(0_in, 24_in, 1, 100_ms, false); },
-    [] { boomerang(0_in, 24_in, 1, 90_deg, 0.5, 100_ms, false); }
+  using mclib::units::inps;
+  mclib::path::TrajectoryConstraints limits;
+  limits.max_velocity = 40 * inps;
+  limits.max_acceleration = 80 * inps2;
+  limits.max_lateral_acceleration = 60 * inps2;
+  limits.track_width = 12_in;
+  const mclib::path::Trajectory trajectory = mclib::path::Trajectory::generate(
+      mclib::path::generateSpline({{0_in, 0_in}, {12_in, 24_in}, {0_in, 48_in}}),
+      limits);
+  RamseteConfig ramsete_config;
+  ramsete_config.feedforward.kS = 0.5_V;
+  ramsete_config.feedforward.kV = 0.2_V / inps;
+  const std::vector<std::function<MotionResult()>> motions{
+    [] { return turnToAngle(90_deg, 100_ms, false); },
+    [] { return driveTo(24_in, 100_ms, false); },
+    [] { return curveCircle(90_deg, 24_in, 100_ms, false); },
+    [] { return curveCircleReverse(90_deg, 24_in, 100_ms, false); },
+    [] { return swing(90_deg, 1, 100_ms, false); },
+    [] { return turnToPoint(24_in, 24_in, 1, 100_ms); },
+    [] { return moveToPoint(0_in, 24_in, 1, 100_ms, false); },
+    [] { return boomerang(0_in, 24_in, 1, 90_deg, 0.5, 100_ms, false); },
+    [&] { return followTrajectory(trajectory, ramsete_config, 100_ms, false); }
   };
+  // Nothing in FakeDrive moves, so with no injected failure every motion
+  // runs out its 100 ms.
+  const MotionResult expected[] = {
+      MotionResult::TimedOut, MotionResult::Cancelled,
+      MotionResult::InvalidValue, MotionResult::InvalidValue,
+      MotionResult::Disabled};
   for (const auto& motion : motions) {
     for (int failure = 0; failure < 5; ++failure) {
       now_ms = 0;
@@ -80,7 +103,8 @@ int main() {
         if (failure == 3) hw.encoder = NAN;
         if (failure == 4) mclib::test::setCompetitionStatus(1);
       };
-      motion();
+      const MotionResult result = motion();
+      CHECK(result == expected[failure]);
       CHECK_EQ(hw.left, 0);
       CHECK_EQ(hw.right, 0);
       CHECK(!hw.invalid_output);
@@ -125,12 +149,14 @@ int main() {
   hw.heading = 0; hw.encoder = 0;
   now_ms = 0;
   on_delay = [&] { hw.heading = 100; };
-  turnToAngle(90_deg, 100_ms, false);
+  CHECK(turnToAngle(90_deg, 100_ms, false) == MotionResult::Reached);
   CHECK(std::abs(hw.left) > 0);
   CHECK(std::abs(hw.right) > 0);
   on_delay = {};
   // Invalid targets must not hang normalization or energize the drivetrain.
-  turnToAngle(QAngle::fromBase(INFINITY), 100_ms, false);
+  CHECK(turnToAngle(QAngle::fromBase(INFINITY), 100_ms, false) ==
+        MotionResult::InvalidValue);
+  CHECK(driveTo(24_in, 0_ms) == MotionResult::InvalidValue);
   CHECK_EQ(hw.left, 0);
   CHECK_EQ(hw.right, 0);
   CHECK(std::isnan(normalizeTarget(INFINITY)));
@@ -141,7 +167,7 @@ int main() {
   now_ms = 0;
   hw.heading = hw.encoder = 0;
   resetOdometry({0, 22.8, 0});
-  moveToPoint(0_in, 24_in, 1, 2_s);
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s) == MotionResult::Reached);
   CHECK(now_ms < 1000);
   CHECK_EQ(hw.left, 0);
 
@@ -155,7 +181,7 @@ int main() {
       drove_after_settle |= hw.left > 0 && hw.right > 0;
     if (now_ms >= 500) resetOdometry({0, 24.1, 0});
   };
-  moveToPoint(0_in, 24_in, 1, 2_s, false);
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s, false) == MotionResult::Reached);
   CHECK(drove_after_settle);
   CHECK(now_ms < 1000);
   CHECK(hw.left > 0 && hw.right > 0);
@@ -165,7 +191,7 @@ int main() {
   // boomerang. It must continue trying until its deadline, then stop safely.
   now_ms = 0;
   resetOdometry({0, 19.1, 0});
-  boomerang(0_in, 24_in, 1, 0_deg, 0.5, 1_s);
+  CHECK(boomerang(0_in, 24_in, 1, 0_deg, 0.5, 1_s) == MotionResult::TimedOut);
   CHECK_EQ(now_ms, 1000);
   CHECK_EQ(hw.left, 0);
   CHECK_EQ(hw.right, 0);
@@ -576,9 +602,190 @@ int main() {
   // Timeout arithmetic survives the 32-bit PROS clock rollover.
   now_ms = std::numeric_limits<std::uint32_t>::max() - 20;
   const auto start = now_ms;
-  turnToAngle(180_deg, 100_ms, false);
+  CHECK(turnToAngle(180_deg, 100_ms, false) == MotionResult::TimedOut);
   CHECK_EQ(static_cast<std::uint32_t>(now_ms - start), 100);
   CHECK_EQ(hw.left, 0);
+
+  // followTrajectory on a simulated tank drive whose left side slips 8%.
+  // Wheel speed is whatever the feedforward says the voltage buys.
+  {
+    const auto trajectory_start = trajectory.states().front().pose();
+    mclib::Pose2D pose = trajectory_start;
+    auto speed = [&](double volts) {
+      const double push = std::fabs(volts) - ramsete_config.feedforward.kS.volts();
+      if (push <= 0) return 0.0;
+      return std::copysign(push, volts) / ramsete_config.feedforward.kV.raw() /
+             (1 * inps).raw();
+    };
+    double left_slip = 0.92, right_slip = 1.0;
+    auto run = [&](bool exit, bool settle = true) {
+      pose = trajectory_start;
+      resetOdometry(pose);
+      hw.heading = pose.theta * 180 / M_PI;
+      now_ms = 0;
+      clearCancel();
+      on_delay = [&] {
+        const double wheel_l = speed(hw.left), wheel_r = speed(hw.right);
+        const double l = wheel_l * left_slip, r = wheel_r * right_slip;
+        const double v = (l + r) / 2, w = (l - r) / 12.0, dt = 0.01;
+        // Encoders count wheel turns, slip included: 4 in wheel, both sides
+        // share one encoder in FakeDrive.
+        hw.encoder += (wheel_l + wheel_r) / 2 * dt / (4 * M_PI) * 360;
+        const double mid = pose.theta + w * dt / 2;
+        pose.x += v * std::sin(mid) * dt;
+        pose.y += v * std::cos(mid) * dt;
+        pose.theta = mclib::wrapAngle(pose.theta + w * dt);
+        resetOdometry(pose);
+        hw.heading = pose.theta * 180 / M_PI;
+      };
+      RamseteConfig config = ramsete_config;
+      config.turn_to_final_heading = settle;
+      config.settle_position = settle;
+      return followTrajectory(trajectory, config, 5_s, exit);
+    };
+    const auto end = trajectory.states().back();
+    auto headingMissDeg = [&] {
+      return std::fabs(mclib::wrapAngle(pose.theta - end.heading.rad())) * 180 / M_PI;
+    };
+
+    auto missIn = [&] { return std::hypot(pose.x - end.x.in(), pose.y - end.y.in()); };
+    // The part of the miss along the final heading, the part the settle
+    // drives out.
+    auto alongIn = [&] {
+      const double h = end.heading.rad();
+      return (end.x.in() - pose.x) * std::sin(h) + (end.y.in() - pose.y) * std::cos(h);
+    };
+    const double band_in = motionConfig().distance_exit.big_error;
+
+    // Left side slips 8%: the miss is mostly sideways. Settling turns to the
+    // heading and leaves the sideways part, which a tank drive can only close
+    // by pivoting.
+    CHECK(run(true, false) == MotionResult::Reached);
+    const double unsettled_deg = headingMissDeg();
+    const double unsettled_in = missIn();
+    const std::uint32_t unsettled_ms = now_ms;
+    CHECK(now_ms >= trajectory.duration().ms());
+    CHECK(now_ms < trajectory.duration().ms() + 20);
+    CHECK(run(true) == MotionResult::Reached);
+    std::printf("followTrajectory, left side 8%% slow (plan %.0f ms): unsettled %.3f in "
+                "(%.3f along), %.2f deg, %u ms; settled %.3f in (%.3f along), %.2f deg, "
+                "%u ms\n",
+                trajectory.duration().ms(), unsettled_in, alongIn(), unsettled_deg,
+                static_cast<unsigned>(unsettled_ms), missIn(), alongIn(),
+                headingMissDeg(), static_cast<unsigned>(now_ms));
+    CHECK(missIn() < 3.0);
+    CHECK(std::fabs(alongIn()) <= band_in);
+    // turnToAngle() stops inside its own exit band, not on zero.
+    CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+    CHECK(headingMissDeg() < unsettled_deg);
+    CHECK(now_ms > unsettled_ms);
+
+    // Both sides 15% slow: the robot lags the plan and ends short of the
+    // point along its heading. The settle drives the rest.
+    left_slip = right_slip = 0.85;
+    CHECK(run(true, false) == MotionResult::Reached);
+    const double short_in = alongIn();
+    CHECK(run(true) == MotionResult::Reached);
+    std::printf("followTrajectory, both sides 15%% slow: %.3f in short unsettled, "
+                "%.3f in settled after %u ms\n",
+                short_in, alongIn(), static_cast<unsigned>(now_ms));
+    CHECK(short_in > band_in);
+    // driveTo() measures with the encoders, which count the 15% slip as
+    // travel, so it closes most of the gap rather than all of it.
+    CHECK(std::fabs(alongIn()) < short_in / 2);
+    CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+
+    // Position settling off: only the turn runs, and the lag stays.
+    {
+      RamseteConfig turn_only = ramsete_config;
+      turn_only.settle_position = false;
+      pose = trajectory_start;
+      resetOdometry(pose);
+      hw.heading = pose.theta * 180 / M_PI;
+      now_ms = 0;
+      CHECK(followTrajectory(trajectory, turn_only, 5_s) == MotionResult::Reached);
+      CHECK(alongIn() > band_in);
+      CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+    }
+    left_slip = 0.92;
+    right_slip = 1.0;
+    CHECK_EQ(hw.left, 0);
+    CHECK_EQ(hw.right, 0);
+    CHECK(!robotState().isTurning());
+    // Chained: the last voltages stay on.
+    CHECK(run(false) == MotionResult::Reached);
+    CHECK_EQ(robotState().prevLeftOutput(), hw.left);
+    on_delay = {};
+
+    // Starting 6 in behind the plan, RAMSETE asks for more speed to catch
+    // up. It must not ask for more than the plan's top speed: the average of
+    // the two sides is the feedforward for the commanded speed.
+    {
+      double top = 0;
+      for (const auto& state : trajectory.states())
+        top = std::max(top, state.velocity.inps());
+      const double cap = ramsete_config.feedforward.kS.volts() +
+                         ramsete_config.feedforward.kV.raw() * (top * inps).raw();
+      double worst_mean = 0;
+      pose = trajectory_start;
+      pose.y -= 6;
+      resetOdometry(pose);
+      now_ms = 0;
+      on_delay = [&] { worst_mean = std::max(worst_mean, (hw.left + hw.right) / 2); };
+      // Nothing moves the robot here, so a final turn could never settle.
+      RamseteConfig no_turn = ramsete_config;
+      no_turn.turn_to_final_heading = false;
+      no_turn.settle_position = false;
+      CHECK(followTrajectory(trajectory, no_turn, 5_s) == MotionResult::Reached);
+      std::printf("followTrajectory 6 in behind: mean side voltage peaked at %.3f V, "
+                  "cap %.3f V\n", worst_mean, cap);
+      CHECK(worst_mean <= cap + 1e-9);
+      on_delay = {};
+    }
+
+    // An effective track width wider than the geometry's puts more of the
+    // turn into the side difference.
+    {
+      auto spin = [&](QLength track) {
+        RamseteConfig wide = ramsete_config;
+        wide.track_width = track;
+        resetOdometry(trajectory_start);
+        now_ms = 0;
+        double diff = 0;
+        on_delay = [&] { if (now_ms == 500) diff = hw.left - hw.right; };
+        followTrajectory(trajectory, wide, 510_ms);
+        on_delay = {};
+        return diff;
+      };
+      const double geometric = spin(0_in);
+      const double wider = spin(18_in);
+      std::printf("side difference at 500 ms: geometry %.3f V, 18 in track %.3f V\n",
+                  geometric, wider);
+      CHECK(std::fabs(wider) > std::fabs(geometric) * 1.4);
+    }
+
+    // A trajectory longer than the time limit times out and stops.
+    now_ms = 0;
+    CHECK(followTrajectory(trajectory, ramsete_config, 200_ms) ==
+          MotionResult::TimedOut);
+    CHECK_EQ(hw.left, 0);
+    // Nothing to follow, or no feedforward to follow it with.
+    CHECK(followTrajectory(mclib::path::Trajectory{}, ramsete_config, 1_s) ==
+          MotionResult::InvalidValue);
+    RamseteConfig no_feedforward;
+    CHECK(followTrajectory(trajectory, no_feedforward, 1_s) ==
+          MotionResult::InvalidValue);
+    CHECK_EQ(hw.left, 0);
+  }
+
   bindDrive(nullptr);
+
+  // With no drive bound there is nothing to move, and the caller has to be
+  // able to tell that apart from a timeout.
+  now_ms = 0;
+  CHECK(driveTo(24_in, 100_ms) == MotionResult::NoDrive);
+  CHECK(boomerang(0_in, 24_in, 1, 0_deg, 0.5, 100_ms) == MotionResult::NoDrive);
+  CHECK_EQ(now_ms, 0);
+  CHECK(std::string(toString(MotionResult::TimedOut)) == "TimedOut");
   return mclib::test::summary("motion safety");
 }

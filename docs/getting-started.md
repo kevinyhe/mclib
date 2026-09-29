@@ -146,15 +146,17 @@ mclib::control::bindDrive(&chassis);
 mclib::control::setMotionConfig(my_config);
 ```
 
-If no drive is bound, every motion routine prints an error and returns.
+If no drive is bound, every motion routine prints an error and returns
+`MotionResult::NoDrive`.
 
 ## Motion commands
 
 `ChassisController` wraps each blocking routine as a command:
 `makeTurnToAngleCommand`, `makeDriveToCommand`, `makeCurveCircleCommand`,
 `makeSwingCommand`, `makeWallResetCommand`, `makeTurnToPointCommand`,
-`makeMoveToPointCommand` and `makeBoomerangCommand`. Each runs the routine on
-its own task and cancels it when interrupted.
+`makeMoveToPointCommand`, `makeBoomerangCommand` and
+`makeFollowTrajectoryCommand`. Each runs the routine on its own task and
+cancels it when interrupted.
 
 `makeDriveDistanceCommand` and `makeTurnToHeadingCommand` run one step per
 scheduler pass instead.

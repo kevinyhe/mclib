@@ -5,6 +5,9 @@
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
+#include "mclib/control/ramsete.hpp"
+#include "mclib/path/trajectory.hpp"
+#include "mclib/math.hpp"
 #include <cmath>
 #include <cstdint>
 
@@ -23,6 +26,8 @@ Advance advance = nullptr;
 Output output = nullptr;
 mclib::Pose2D last_integrated_pose{};
 double boomerang_lead = 0.5;
+mclib::control::RamseteConfig ramsete_config;
+mclib::path::TrajectoryConstraints ramsete_limits;
 
 struct SimDrive : mclib::control::DriveHardware {
   mclib::units::DriveGeometry geometry{
@@ -91,6 +96,8 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   advance = step; output = write;
   sample = {};
   boomerang_lead = 0.5;
+  ramsete_config = {};
+  ramsete_limits = {};
   drive.geometry = {Wheel::fromDiameter(diameter_in * inch), track_in * inch, ratio};
   drive.heading_offset = drive.left_offset = drive.right_offset = 0;
   drive.encoder_heading = encoder_heading;
@@ -104,6 +111,69 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   setOdometryConfig(config);
   resetOdometry({0, 0, 0});
   refresh(0);
+}
+
+namespace {
+// Circular arcs as baked PathPoints with exact heading and curvature: the
+// geometry curveCircle() drives, so the two can be compared on one target.
+// Planned in the field frame from the origin, facing +Y, so a scenario can
+// start the robot off the path and see whether the follower recovers.
+struct ArcEnd { double x, y, travel; };
+
+// Appends a turn of @p turn_rad at @p radius_in, leaving the travel direction
+// @p start.travel. Positive turns right.
+ArcEnd appendArc(std::vector<mclib::path::PathPoint>& points, ArcEnd start,
+                 double turn_rad, double radius_in) {
+  using namespace mclib::units;
+  const double r = (turn_rad < 0 ? -1.0 : 1.0) * std::fabs(radius_in);
+  // Centre is r along the travel direction's right-hand side.
+  const double cx = start.x + r * std::cos(start.travel);
+  const double cy = start.y - r * std::sin(start.travel);
+  const int samples = std::max(2, static_cast<int>(std::fabs(turn_rad * r)) * 2);
+  for (int i = points.empty() ? 0 : 1; i <= samples; ++i) {
+    const double phi = start.travel + turn_rad * i / samples;
+    mclib::path::PathPoint point;
+    point.x = (cx - r * std::cos(phi)) * inch;
+    point.y = (cy + r * std::sin(phi)) * inch;
+    point.heading = QAngle::fromBase(mclib::wrapAngle(phi));
+    point.curvature = QCurvature::fromBase(1.0 / (r * inch).raw());
+    points.push_back(point);
+  }
+  const double end = start.travel + turn_rad;
+  return {cx - r * std::cos(end), cy + r * std::sin(end), end};
+}
+
+// One arc from the origin to body heading @p end_heading_deg.
+mclib::path::Path arcPath(double end_heading_deg, double radius_in, bool reversed) {
+  const double pi = std::acos(-1.0);
+  std::vector<mclib::path::PathPoint> points;
+  const double turn = mclib::wrapAngle(end_heading_deg * pi / 180);
+  appendArc(points, {0, 0, reversed ? pi : 0.0}, turn, radius_in);
+  return mclib::path::Path(points);
+}
+
+// Right then left, 90 deg each: from the origin to (2r, 2r), facing +Y again.
+mclib::path::Path sCurvePath(double radius_in) {
+  const double pi = std::acos(-1.0);
+  std::vector<mclib::path::PathPoint> points;
+  const ArcEnd mid = appendArc(points, {0, 0, 0}, pi / 2, radius_in);
+  appendArc(points, mid, -pi / 2, radius_in);
+  return mclib::path::Path(points);
+}
+}  // namespace
+
+extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
+                                double max_ips, double max_ips2, double max_lateral_ips2,
+                                double track_in) {
+  using namespace mclib::units;
+  ramsete_config.track_width = track_in * inch;
+  ramsete_config.feedforward.kS = ks_v * volt;
+  ramsete_config.feedforward.kV = kv_v_per_ips * volt / inps;
+  ramsete_config.gains = {b, zeta};
+  ramsete_limits.max_velocity = max_ips * inps;
+  ramsete_limits.max_acceleration = max_ips2 * mclib::control::inps2;
+  ramsete_limits.max_lateral_acceleration = max_lateral_ips2 * mclib::control::inps2;
+  ramsete_limits.track_width = drive.geometry.track_width;
 }
 
 extern "C" int sim_run(int action, double a, double b, double heading,
@@ -121,6 +191,30 @@ extern "C" int sim_run(int action, double a, double b, double heading,
     case 6: moveToPoint(a * inch, b * inch, direction, limit, exit, volts * volt); break;
     case 7: boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
                        limit, exit, volts * volt); break;
+    case 9:
+    case 10:
+    case 13: {
+      auto limits = ramsete_limits;
+      limits.reversed = action == 10;
+      const auto trajectory = mclib::path::Trajectory::generate(
+          action == 13 ? sCurvePath(b) : arcPath(a, b, limits.reversed), limits);
+      return static_cast<int>(followTrajectory(trajectory, ramsete_config, limit, exit,
+                                               volts * volt));
+    }
+    case 11: {
+      // Open-loop: both sides at `volts` for `timeout_ms`, to measure kS/kV.
+      drive.setDriveVoltage(volts, volts);
+      for (double t = 0; t < timeout_ms; t += 10) pros::delay(10);
+      drive.setDriveVoltage(0, 0);
+      return 0;
+    }
+    case 12: {
+      // Open-loop spin in place: left at +volts, right at -volts.
+      drive.setDriveVoltage(volts, -volts);
+      for (double t = 0; t < timeout_ms; t += 10) pros::delay(10);
+      drive.setDriveVoltage(0, 0);
+      return 0;
+    }
     case 8: return wallReset(a * inch, b * inch, heading * degree, volts * volt,
                              limit, current_threshold_ma * milliampere, 5 * rpm);
     default: return -1;
