@@ -20,4 +20,4 @@ python3 tests/vexsim/run.py
 ```
 
 See [tests/vexsim/README.md](../tests/vexsim/README.md) for options and
-[known limits](accuracy.md) for results.
+[BUILDER_VALIDATION.md](../tests/vexsim/BUILDER_VALIDATION.md) for results.

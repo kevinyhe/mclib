@@ -5,6 +5,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <utility>
 #include <vector>
@@ -17,6 +18,13 @@ class EventLoop
 {
 private:
 	std::vector<std::function<void()>> bindings;
+	// bind() and clear() may be called from inside a binding. While poll()
+	// runs, bind() appends here and clear() only sets the flag, so the vector
+	// poll() walks never reallocates and the running binding is never
+	// destroyed under itself. poll() applies both once every binding is done.
+	std::vector<std::function<void()>> pending;
+	bool polling = false;
+	bool clearRequested = false;
 
 public:
 	/**
@@ -40,13 +48,28 @@ public:
 
 	/**
 	 * @brief Poll is run every frame and runs each of the bindings. This is generally run by the CommandScheduler
+	 *
+	 * @details Bindings run in the order they were bound. A binding added from inside a binding first runs on the
+	 * next poll. A clear() from inside a binding skips the rest of this poll.
 	 */
 	void poll()
 	{
-		for (const auto &binding : this->bindings)
+		polling = true;
+		for (std::size_t i = 0; i < bindings.size() && !clearRequested; ++i)
 		{
-			binding();
+			bindings[i]();
 		}
+		polling = false;
+		if (clearRequested)
+		{
+			clearRequested = false;
+			bindings.clear();
+		}
+		for (auto &binding : pending)
+		{
+			bindings.emplace_back(std::move(binding));
+		}
+		pending.clear();
 	}
 
 	/**
@@ -55,14 +78,28 @@ public:
 	 */
 	void bind(const std::function<void()> &binding)
 	{
+		if (polling)
+		{
+			pending.emplace_back(binding);
+			return;
+		}
 		bindings.emplace_back(binding);
 	}
 
 	/**
 	 * @brief Clear all bindings on this event loop
+	 *
+	 * @details Called from inside a binding, the bindings are removed once the running binding returns, and
+	 * the rest of that poll is skipped.
 	 */
 	void clear()
 	{
+		pending.clear();
+		if (polling)
+		{
+			clearRequested = true;
+			return;
+		}
 		bindings.clear();
 	}
 
