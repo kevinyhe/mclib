@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Fixed
+
+- `PTOMechanism` settle window and drive watchdog could run one scheduler tick
+  long. They compared times as seconds in a `double`, so 250 ms could read as
+  249.99999 ms depending on the clock value at the shift or write. They now
+  compare whole milliseconds.
+
 ## 0.1.0
 
 Initial release.
