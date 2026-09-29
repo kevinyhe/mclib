@@ -140,6 +140,20 @@ $(TESTBINDIR)/motion_safety_test: $(TESTDIR)/motion_safety_test.cpp $(HOST_TEST_
 
 -include $(MOTION_TEST_OBJS:.o=.d)
 
+# Only the auton selector test links the real selector and controller wrapper,
+# over the screen, controller, clock and task stand-ins in
+# tests/support/host_screen.cpp. That file defines pros::millis(), which
+# motion_safety_test defines too, so it stays out of HOST_TEST_SRC.
+SELECTOR_TEST_OBJS:=$(HOST_OBJDIR)/$(SRCDIR)/mclib/auton/selector.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/controller.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/types.o \
+	$(HOST_OBJDIR)/$(TESTDIR)/support/host_screen.o
+$(TESTBINDIR)/auton_selector_test: $(TESTDIR)/auton_selector_test.cpp $(HOST_TEST_OBJS) $(SELECTOR_TEST_OBJS)
+	@mkdir -p $(dir $@)
+	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(SELECTOR_TEST_OBJS) $(HOST_LDFLAGS)
+
+-include $(SELECTOR_TEST_OBJS:.o=.d)
+
 -include $(HOST_DEPS)
 
 .PHONY: test test-build
