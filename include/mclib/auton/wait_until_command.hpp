@@ -33,7 +33,7 @@ public:
       : m_condition(std::move(condition)), m_timeout(timeout) {}
 
   void initialize() override {
-    m_start = time::now();
+    m_start_ms = time::millis();
     m_timed_out = false;
   }
 
@@ -44,7 +44,7 @@ public:
     if (m_timeout <= QTime{}) {
       return false;
     }
-    if (time::now() - m_start >= m_timeout) {
+    if (time::hasElapsed(m_start_ms, m_timeout)) {
       m_timed_out = true;
       return true;
     }
@@ -62,7 +62,7 @@ public:
 private:
   std::function<bool()> m_condition;
   QTime m_timeout{};
-  QTime m_start{};
+  std::uint32_t m_start_ms = 0;
   bool m_timed_out = false;
 };
 

@@ -102,11 +102,11 @@ const PositionMechanismConfig& PositionMechanism::getConfig() const {
 
 std::unique_ptr<Command> PositionMechanism::makeMoveToCommand(
     double target, double timeout_ms) {
-  auto start_time = std::make_shared<double>(0.0);
+  auto start_ms = std::make_shared<std::uint32_t>(0);
   return std::make_unique<FunctionalCommand>(
-      [this, target, start_time]() {
+      [this, target, start_ms]() {
         moveTo(target);
-        *start_time = static_cast<double>(mclib::time::millis());
+        *start_ms = mclib::time::millis();
       },
       []() {},
       [this](bool interrupted) {
@@ -114,10 +114,10 @@ std::unique_ptr<Command> PositionMechanism::makeMoveToCommand(
           stop();
         }
       },
-      [this, start_time, timeout_ms]() {
+      [this, start_ms, timeout_ms]() {
         const bool timed_out =
             timeout_ms > 0.0 &&
-            static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
+            mclib::time::hasElapsed(*start_ms, timeout_ms * mclib::units::millisecond);
         return atTarget() || timed_out;
       },
       std::initializer_list<Subsystem*>{this});
@@ -150,16 +150,16 @@ std::unique_ptr<Command> PositionMechanism::makeStateUntilCommand(
 
 std::unique_ptr<Command> PositionMechanism::makeStateForCommand(
     double state, QTime duration) {
-  auto start_time = std::make_shared<QTime>(0.0);
+  auto start_ms = std::make_shared<std::uint32_t>(0);
   return std::make_unique<FunctionalCommand>(
-      [this, state, start_time]() {
+      [this, state, start_ms]() {
         moveTo(state);
-        *start_time = mclib::time::now();
+        *start_ms = mclib::time::millis();
       },
       []() {},
       [](bool) {},
-      [start_time, duration]() {
-        return mclib::time::now() - *start_time >= duration;
+      [start_ms, duration]() {
+        return mclib::time::hasElapsed(*start_ms, duration);
       },
       std::initializer_list<Subsystem*>{this});
 }

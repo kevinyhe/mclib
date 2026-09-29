@@ -7,6 +7,7 @@
 
 #include "mclib/units/units.hpp"
 
+#include <cmath>
 #include <cstdint>
 
 namespace mclib {
@@ -83,6 +84,31 @@ inline std::uint32_t millis() {
  */
 inline QTime now() {
   return static_cast<double>(millis()) * millisecond;
+}
+
+/**
+ * @brief Whole milliseconds since @p start_ms, a value read from millis().
+ *
+ * @details Unsigned subtraction, so it stays correct when the 32-bit clock
+ * wraps.
+ */
+inline std::uint32_t msSince(std::uint32_t start_ms) {
+  return millis() - start_ms;
+}
+
+/**
+ * @brief True once @p duration has passed since @p start_ms.
+ *
+ * @details Compares whole milliseconds, with @p duration rounded to the
+ * clock's 1 ms grid. Subtracting two now() values instead gives seconds in a
+ * double with rounding error: 100 ms reads as 99.99999 ms for 59% of start
+ * times, and a check made once per 10 ms tick then finishes a tick late.
+ *
+ * @param start_ms A value read from millis().
+ * @param duration How long to wait. Zero or less has passed at once.
+ */
+inline bool hasElapsed(std::uint32_t start_ms, QTime duration) {
+  return static_cast<double>(msSince(start_ms)) >= std::round(duration.ms());
 }
 
 /**
