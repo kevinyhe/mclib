@@ -141,6 +141,23 @@ $(TESTBINDIR)/motion_safety_test: $(TESTDIR)/motion_safety_test.cpp $(HOST_TEST_
 
 -include $(MOTION_TEST_OBJS:.o=.d)
 
+# The holonomic drive owns real device wrappers, so its test links them over
+# the libpros stand-ins in tests/support/host_devices.cpp. Those define pros::
+# symbols, so they stay out of HOST_TEST_SRC.
+HOLONOMIC_TEST_OBJS:=$(HOST_OBJDIR)/$(SRCDIR)/mclib/chassis/holonomic_controller.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/chassis/holonomic_chassis.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/motor_group.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/inertial.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/controller.o \
+	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/types.o \
+	$(HOST_OBJDIR)/$(TESTDIR)/support/host_devices.o
+$(TESTBINDIR)/holonomic_controller_test: $(TESTDIR)/holonomic_controller_test.cpp $(HOST_TEST_OBJS) $(HOLONOMIC_TEST_OBJS)
+	@mkdir -p $(dir $@)
+	@echo "Linking $@"
+	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(HOLONOMIC_TEST_OBJS) $(HOST_LDFLAGS)
+
+-include $(HOLONOMIC_TEST_OBJS:.o=.d)
+
 -include $(HOST_DEPS)
 
 .PHONY: test test-build
