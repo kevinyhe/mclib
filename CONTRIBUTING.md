@@ -69,7 +69,10 @@ python -c "import pros, os, importlib.metadata as m; open(os.path.join(os.path.d
 2. Add a test that fails without your change.
 3. Update `docs/`.
 4. Add an entry under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
-5. CI must pass: host tests, sanitizers, firmware build and template.
+5. CI must pass: host tests, sanitizers, physics simulator, firmware build and
+   template. If your change makes more simulator scenarios pass, update
+   `tests/vexsim/ci_baseline.json` (see
+   [tests/vexsim/README.md](tests/vexsim/README.md#ci)).
 
 ## Releases
 

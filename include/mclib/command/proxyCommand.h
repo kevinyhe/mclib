@@ -38,7 +38,10 @@ public:
 	 */
 	void initialize() override {
 		this->command = supplier();
-		this->command->schedule();
+		// A supplier may have nothing to run. isFinished() then ends the proxy on the next tick.
+		if (this->command != nullptr) {
+			this->command->schedule();
+		}
 	}
 
 	/**
@@ -52,7 +55,7 @@ public:
 	 * @param interrupted Cancels the \refitem Command is cancelled is true
 	 */
 	void end(bool interrupted) override {
-		if (interrupted) {
+		if (interrupted && command != nullptr) {
 			command->cancel();
 		}
 		command = nullptr;
