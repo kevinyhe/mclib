@@ -40,7 +40,8 @@ OUTPUT = C.CFUNCTYPE(None, C.c_int, C.c_int, C.c_double)
 def build(destination):
     sources = ["control/motion", "control/chassis_io", "control/motion_config",
                "control/motion_math", "control/scaling", "control/robot_state",
-               "control/odometry", "chassis/chassis_math", "pid", "math", "utils"]
+               "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
+               "control/ramsete", "path/trajectory", "path/path"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -77,6 +78,9 @@ def load_library(library):
     lib.sim_set_gains.restype = None
     lib.sim_set_lead.argtypes = [C.c_double]
     lib.sim_set_lead.restype = None
+    if hasattr(lib, "sim_set_ramsete"):
+        lib.sim_set_ramsete.argtypes = [C.c_double] * 8
+        lib.sim_set_ramsete.restype = None
     lib.sim_heading_target.argtypes = []
     lib.sim_heading_target.restype = C.c_double
     if hasattr(lib, "sim_motion_telemetry"):
@@ -302,6 +306,34 @@ class PhysicsBridge:
         return all(mode != 0 or volts == 0 for mode, volts in self.commands)
 
 
+def measure_feedforward(lib, preset, tracking_mode, cache):
+    """kS and kV for one side of @p preset, measured in the simulator.
+
+    Holds 4 V and then 8 V on both sides for 1.5 s each and fits
+    V = kS + kV * speed through the two steady speeds - the same measurement
+    docs/motion.md asks for on a real robot. Then spins in place at 6 V per
+    side for the effective track width, 2 * (V - kS) / kV / turn rate.
+    """
+    key = (preset, tracking_mode)
+    if key not in cache:
+        speeds = []
+        for volts in (4.0, 8.0):
+            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+            bridge.run(11, timeout=1500, volts=volts)
+            speeds.append(bridge.sim.state.speed / bridge.inch)
+        kv = 4.0 / (speeds[1] - speeds[0])
+        ks = 4.0 - kv * speeds[0]
+        top = (12.0 - ks) / kv
+        bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+        bridge.run(12, timeout=1500, volts=6.0)
+        turn_rate = abs(bridge.sim.state.r)
+        track = 2 * (6.0 - ks) / kv / turn_rate
+        cache[key] = dict(ks=ks, kv=kv, top_ips=top, track_in=track)
+        print(f"{preset}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), top={top:.1f} in/s, "
+              f"effective track={track:.2f} in", flush=True)
+    return cache[key]
+
+
 def scenarios():
     for preset in ("four_motor_200", "six_motor_450", "speed_base"):
         for name, action, args, target, angle in (
@@ -315,6 +347,9 @@ def scenarios():
             ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
             ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
             ("reverse_arc", 3, {"a": -90, "b": 24}, (24, -24), -90),
+            # The same two arcs through followTrajectory() (RAMSETE).
+            ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
+            ("ramsete_reverse_arc", 10, {"a": -90, "b": 24}, (24, -24), -90),
             ("swing", 4, {"a": 90}, None, 90),
         ):
             yield dict(name=f"{preset}/{name}", preset=preset, action=action,
@@ -356,6 +391,12 @@ def main():
                         help="Drive encoders (baseline) or two modeled passive tracking wheels")
     parser.add_argument("--motion-timeout-ms", type=int, default=4000,
                         help="Deadline for nominal motion cases (default: 4000)")
+    parser.add_argument("--ramsete-b", type=float, default=50.0,
+                        help="RAMSETE b for the ramsete_* scenarios, SI units (default: 50)")
+    parser.add_argument("--ramsete-zeta", type=float, default=0.7,
+                        help="RAMSETE zeta for the ramsete_* scenarios (default: 0.7)")
+    parser.add_argument("--ramsete-accel", type=float, default=60.0,
+                        help="Planned acceleration for the ramsete_* scenarios, in/s^2 (default: 60)")
     args = parser.parse_args()
     cases = [case for case in scenarios() if args.filter in case["name"]]
     if not cases:
@@ -371,9 +412,21 @@ def main():
     print(f"Artifacts: {destination}", flush=True)
     lib = build(destination)
     rows = []
+    feedforward_cache = {}
     for case in cases:
+        feedforward = None
+        if case["action"] in (9, 10):
+            feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
+                                              feedforward_cache)
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,
                                **case.get("options", {}))
+        if feedforward is not None:
+            # Plan at 70% of the measured top speed, with --ramsete-accel
+            # and 60 in/s^2 cornering.
+            cruise = 0.7 * feedforward["top_ips"]
+            lib.sim_set_ramsete(feedforward["ks"], feedforward["kv"],
+                                args.ramsete_b, args.ramsete_zeta,
+                                cruise, args.ramsete_accel, 60.0, feedforward["track_in"])
         error = None
         try:
             wall_result = bridge.run(case["action"], **case["args"])

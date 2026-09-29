@@ -5,6 +5,9 @@
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
+#include "mclib/control/ramsete.hpp"
+#include "mclib/path/trajectory.hpp"
+#include "mclib/math.hpp"
 #include <cmath>
 #include <cstdint>
 
@@ -23,6 +26,8 @@ Advance advance = nullptr;
 Output output = nullptr;
 mclib::Pose2D last_integrated_pose{};
 double boomerang_lead = 0.5;
+mclib::control::RamseteConfig ramsete_config;
+mclib::path::TrajectoryConstraints ramsete_limits;
 
 struct SimDrive : mclib::control::DriveHardware {
   mclib::units::DriveGeometry geometry{
@@ -91,6 +96,8 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   advance = step; output = write;
   sample = {};
   boomerang_lead = 0.5;
+  ramsete_config = {};
+  ramsete_limits = {};
   drive.geometry = {Wheel::fromDiameter(diameter_in * inch), track_in * inch, ratio};
   drive.heading_offset = drive.left_offset = drive.right_offset = 0;
   drive.encoder_heading = encoder_heading;
@@ -104,6 +111,50 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   setOdometryConfig(config);
   resetOdometry({0, 0, 0});
   refresh(0);
+}
+
+namespace {
+// A circular arc from the current pose to @p end_heading_deg, as a baked
+// Path with exact heading and curvature. The same geometry curveCircle()
+// drives, so the two can be compared on the same target.
+mclib::path::Path arcPath(double end_heading_deg, double radius_in, bool reversed) {
+  using namespace mclib::units;
+  const auto pose = mclib::control::robotState().pose();
+  const double pi = std::acos(-1.0);
+  // Travel direction: the body heading, or its opposite when backing up.
+  const double start = pose.theta + (reversed ? pi : 0.0);
+  const double turn = mclib::wrapAngle(end_heading_deg * pi / 180 - pose.theta);
+  const double r = (turn < 0 ? -1.0 : 1.0) * std::fabs(radius_in);
+  // Centre is r along the travel direction's right-hand side.
+  const double cx = pose.x + r * std::cos(start);
+  const double cy = pose.y - r * std::sin(start);
+  const int samples = std::max(2, static_cast<int>(std::fabs(turn * r)) * 2);
+  std::vector<mclib::path::PathPoint> points;
+  for (int i = 0; i <= samples; ++i) {
+    const double phi = start + turn * i / samples;
+    mclib::path::PathPoint point;
+    point.x = (cx - r * std::cos(phi)) * inch;
+    point.y = (cy + r * std::sin(phi)) * inch;
+    point.heading = QAngle::fromBase(mclib::wrapAngle(phi));
+    point.curvature = QCurvature::fromBase(1.0 / (r * inch).raw());
+    points.push_back(point);
+  }
+  return mclib::path::Path(points);
+}
+}  // namespace
+
+extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
+                                double max_ips, double max_ips2, double max_lateral_ips2,
+                                double track_in) {
+  using namespace mclib::units;
+  ramsete_config.track_width = track_in * inch;
+  ramsete_config.feedforward.kS = ks_v * volt;
+  ramsete_config.feedforward.kV = kv_v_per_ips * volt / inps;
+  ramsete_config.gains = {b, zeta};
+  ramsete_limits.max_velocity = max_ips * inps;
+  ramsete_limits.max_acceleration = max_ips2 * mclib::control::inps2;
+  ramsete_limits.max_lateral_acceleration = max_lateral_ips2 * mclib::control::inps2;
+  ramsete_limits.track_width = drive.geometry.track_width;
 }
 
 extern "C" int sim_run(int action, double a, double b, double heading,
@@ -121,6 +172,29 @@ extern "C" int sim_run(int action, double a, double b, double heading,
     case 6: moveToPoint(a * inch, b * inch, direction, limit, exit, volts * volt); break;
     case 7: boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
                        limit, exit, volts * volt); break;
+    case 9:
+    case 10: {
+      auto limits = ramsete_limits;
+      limits.reversed = action == 10;
+      const auto trajectory = mclib::path::Trajectory::generate(
+          arcPath(a, b, limits.reversed), limits);
+      return static_cast<int>(followTrajectory(trajectory, ramsete_config, limit, exit,
+                                               volts * volt));
+    }
+    case 11: {
+      // Open-loop: both sides at `volts` for `timeout_ms`, to measure kS/kV.
+      drive.setDriveVoltage(volts, volts);
+      for (double t = 0; t < timeout_ms; t += 10) pros::delay(10);
+      drive.setDriveVoltage(0, 0);
+      return 0;
+    }
+    case 12: {
+      // Open-loop spin in place: left at +volts, right at -volts.
+      drive.setDriveVoltage(volts, -volts);
+      for (double t = 0; t < timeout_ms; t += 10) pros::delay(10);
+      drive.setDriveVoltage(0, 0);
+      return 0;
+    }
     case 8: return wallReset(a * inch, b * inch, heading * degree, volts * volt,
                              limit, current_threshold_ma * milliampere, 5 * rpm);
     default: return -1;

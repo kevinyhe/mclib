@@ -28,6 +28,11 @@ trace CSV per scenario. The command exits nonzero if any check fails.
   four-inch-wheel `speed_base`.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   arcs and swings, at default gains.
+- The same two arcs through `followTrajectory()` (RAMSETE):
+  `ramsete_arc` and `ramsete_reverse_arc`. Before each, the runner measures
+  the preset's kS, kV and effective track width in the simulator the way
+  `docs/motion.md` describes, then plans at 70% of top speed.
+  `--ramsete-b`, `--ramsete-zeta` and `--ramsete-accel` change the tuning.
 - Low battery, reduced traction and encoder-only heading.
 - Cancellation, competition disable, IMU and encoder faults, and timeout during
   each of the eight motion functions. Faults are injected while the drive is
