@@ -256,6 +256,52 @@ A 48 in straight line at 48 in/s and 96 in/s² takes 1.5 s: 0.5 s speeding up,
 Use a spline. A polyline from `Path::fromWaypoints()` has zero curvature and a
 heading jump at every corner.
 
+### Following a trajectory (RAMSETE)
+
+`followTrajectory()` drives a tank drive along a trajectory. Each 10 ms it
+compares the odometry pose with where the trajectory says the robot should be,
+and corrects speed and turn rate toward it. `driveTo()` and `curveCircle()`
+measure progress with the drive encoders, which keep counting when a wheel
+slips. RAMSETE uses the pose, so slip shows up as error and gets corrected.
+
+```cpp
+control::RamseteConfig follow;
+follow.feedforward = {0.8_V, 0.18_V / inps, 0.02_V / inps2};  // per side, measured
+// follow.gains = {2.0, 0.7};  // b and zeta, SI units; these are the defaults
+
+const Trajectory traj = Trajectory::generate(route, limits);
+if (followTrajectory(traj, follow, traj.duration() + 500_ms) !=
+    control::MotionResult::Reached) {
+  return;
+}
+```
+
+- Plan the trajectory from where the robot is. It is not shifted to the
+  current pose.
+- The feedforward is per side of the drive: volts for a wheel speed. Measure it
+  as in [Measuring kS and kV](#measuring-ks-and-kv). Without it, nothing drives
+  the robot, so a `kV` of 0 returns `InvalidValue`.
+- It returns when the trajectory ends. RAMSETE stops correcting once the
+  planned speed reaches zero, so it does not wait to settle. Compare
+  `robotState().pose()` with `traj.states().back()` if the end position
+  matters.
+- `Ramsete`, `tankWheelSpeeds()` and `ramseteVoltages()` in
+  `control/ramsete.hpp` are the same steps without the loop, for use in a
+  command.
+
+`b` sets how hard it pulls back toward the path; `zeta` sets damping. In the
+host test, on an S-bend with the left side slipping 8%:
+
+| Follower | Miss at the end |
+| --- | --- |
+| Feedforward only | 17.300 in |
+| RAMSETE, b = 2 | 4.110 in |
+| RAMSETE, b = 10 | 1.105 in |
+
+A steady slip is a constant push, and RAMSETE's correction is proportional, so
+it shrinks the error instead of removing it. Raise `b` until the robot
+oscillates about the path, then back off.
+
 `generate()` returns an empty trajectory when the path is not `valid()` or a
 required limit is zero, negative or not finite.
 
