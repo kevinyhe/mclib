@@ -14,6 +14,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - `mclib::path::Trajectory`: plans speed and time along a path from limits on
   speed, acceleration, deceleration, cornering and outer-wheel speed.
 
+### Fixed
+
+- `EventLoop::poll()` no longer reads freed memory when a binding calls
+  `bind()` or `clear()` on the same loop, for example a command started by a
+  `Trigger` that creates another `Trigger`. New bindings run from the next
+  poll; `clear()` skips the rest of the current poll.
+- `ProxyCommand` no longer calls through a null pointer when its supplier
+  returns `nullptr`. The proxy finishes on the next tick instead.
+- `MotorSubsystem` stored NaN as its commanded voltage while the motors got
+  0 V, and turned an infinite voltage or percent into ±12 V. Both now become
+  0 V, so `getCommandedVoltage()` matches what the motors get.
+- `PTOMechanism` settle window and drive watchdog could run one scheduler tick
+  long. They compared times as seconds in a `double`, so 250 ms could read as
+  249.99999 ms depending on the clock value at the shift or write. They now
+  compare whole milliseconds.
+
 ## 0.1.0
 
 Initial release.
