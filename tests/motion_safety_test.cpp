@@ -9,6 +9,7 @@
 #include "test_assert.hpp"
 #include <functional>
 #include <limits>
+#include <string>
 
 namespace {
 std::uint32_t now_ms = 0;
@@ -54,16 +55,22 @@ int main() {
   mclib::time::ScopedClock clock(fakeClock);
   FakeDrive hw;
   bindDrive(&hw);
-  const std::vector<std::function<void()>> motions{
-    [] { turnToAngle(90_deg, 100_ms, false); },
-    [] { driveTo(24_in, 100_ms, false); },
-    [] { curveCircle(90_deg, 24_in, 100_ms, false); },
-    [] { curveCircleReverse(90_deg, 24_in, 100_ms, false); },
-    [] { swing(90_deg, 1, 100_ms, false); },
-    [] { turnToPoint(24_in, 24_in, 1, 100_ms); },
-    [] { moveToPoint(0_in, 24_in, 1, 100_ms, false); },
-    [] { boomerang(0_in, 24_in, 1, 90_deg, 0.5, 100_ms, false); }
+  const std::vector<std::function<MotionResult()>> motions{
+    [] { return turnToAngle(90_deg, 100_ms, false); },
+    [] { return driveTo(24_in, 100_ms, false); },
+    [] { return curveCircle(90_deg, 24_in, 100_ms, false); },
+    [] { return curveCircleReverse(90_deg, 24_in, 100_ms, false); },
+    [] { return swing(90_deg, 1, 100_ms, false); },
+    [] { return turnToPoint(24_in, 24_in, 1, 100_ms); },
+    [] { return moveToPoint(0_in, 24_in, 1, 100_ms, false); },
+    [] { return boomerang(0_in, 24_in, 1, 90_deg, 0.5, 100_ms, false); }
   };
+  // Nothing in FakeDrive moves, so with no injected failure every motion
+  // runs out its 100 ms.
+  const MotionResult expected[] = {
+      MotionResult::TimedOut, MotionResult::Cancelled,
+      MotionResult::InvalidValue, MotionResult::InvalidValue,
+      MotionResult::Disabled};
   for (const auto& motion : motions) {
     for (int failure = 0; failure < 5; ++failure) {
       now_ms = 0;
@@ -80,7 +87,8 @@ int main() {
         if (failure == 3) hw.encoder = NAN;
         if (failure == 4) mclib::test::setCompetitionStatus(1);
       };
-      motion();
+      const MotionResult result = motion();
+      CHECK(result == expected[failure]);
       CHECK_EQ(hw.left, 0);
       CHECK_EQ(hw.right, 0);
       CHECK(!hw.invalid_output);
@@ -125,12 +133,14 @@ int main() {
   hw.heading = 0; hw.encoder = 0;
   now_ms = 0;
   on_delay = [&] { hw.heading = 100; };
-  turnToAngle(90_deg, 100_ms, false);
+  CHECK(turnToAngle(90_deg, 100_ms, false) == MotionResult::Reached);
   CHECK(std::abs(hw.left) > 0);
   CHECK(std::abs(hw.right) > 0);
   on_delay = {};
   // Invalid targets must not hang normalization or energize the drivetrain.
-  turnToAngle(QAngle::fromBase(INFINITY), 100_ms, false);
+  CHECK(turnToAngle(QAngle::fromBase(INFINITY), 100_ms, false) ==
+        MotionResult::InvalidValue);
+  CHECK(driveTo(24_in, 0_ms) == MotionResult::InvalidValue);
   CHECK_EQ(hw.left, 0);
   CHECK_EQ(hw.right, 0);
   CHECK(std::isnan(normalizeTarget(INFINITY)));
@@ -141,7 +151,7 @@ int main() {
   now_ms = 0;
   hw.heading = hw.encoder = 0;
   resetOdometry({0, 22.8, 0});
-  moveToPoint(0_in, 24_in, 1, 2_s);
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s) == MotionResult::Reached);
   CHECK(now_ms < 1000);
   CHECK_EQ(hw.left, 0);
 
@@ -155,7 +165,7 @@ int main() {
       drove_after_settle |= hw.left > 0 && hw.right > 0;
     if (now_ms >= 500) resetOdometry({0, 24.1, 0});
   };
-  moveToPoint(0_in, 24_in, 1, 2_s, false);
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s, false) == MotionResult::Reached);
   CHECK(drove_after_settle);
   CHECK(now_ms < 1000);
   CHECK(hw.left > 0 && hw.right > 0);
@@ -165,7 +175,7 @@ int main() {
   // boomerang. It must continue trying until its deadline, then stop safely.
   now_ms = 0;
   resetOdometry({0, 19.1, 0});
-  boomerang(0_in, 24_in, 1, 0_deg, 0.5, 1_s);
+  CHECK(boomerang(0_in, 24_in, 1, 0_deg, 0.5, 1_s) == MotionResult::TimedOut);
   CHECK_EQ(now_ms, 1000);
   CHECK_EQ(hw.left, 0);
   CHECK_EQ(hw.right, 0);
@@ -576,9 +586,17 @@ int main() {
   // Timeout arithmetic survives the 32-bit PROS clock rollover.
   now_ms = std::numeric_limits<std::uint32_t>::max() - 20;
   const auto start = now_ms;
-  turnToAngle(180_deg, 100_ms, false);
+  CHECK(turnToAngle(180_deg, 100_ms, false) == MotionResult::TimedOut);
   CHECK_EQ(static_cast<std::uint32_t>(now_ms - start), 100);
   CHECK_EQ(hw.left, 0);
   bindDrive(nullptr);
+
+  // With no drive bound there is nothing to move, and the caller has to be
+  // able to tell that apart from a timeout.
+  now_ms = 0;
+  CHECK(driveTo(24_in, 100_ms) == MotionResult::NoDrive);
+  CHECK(boomerang(0_in, 24_in, 1, 0_deg, 0.5, 100_ms) == MotionResult::NoDrive);
+  CHECK_EQ(now_ms, 0);
+  CHECK(std::string(toString(MotionResult::TimedOut)) == "TimedOut");
   return mclib::test::summary("motion safety");
 }
