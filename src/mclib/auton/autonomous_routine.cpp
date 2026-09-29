@@ -9,6 +9,8 @@
 #include "mclib/command/commandScheduler.h"
 #include "mclib/command/instantCommand.h"
 #include "mclib/command/waitCommand.h"
+#include "mclib/control/ramsete.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "pros/rtos.hpp"
 
 #include <algorithm>
@@ -426,6 +428,13 @@ Routine::MotionStep Routine::MotionStep::boomerang(QLength x,
                                                    double lead,
                                                    QTime timeout) {
   return m_routine->boomerang(x, y, dir, final_heading, lead, timeout);
+}
+
+Routine::MotionStep Routine::MotionStep::followTrajectory(
+    const path::Trajectory& trajectory,
+    const control::RamseteConfig& config,
+    QTime timeout) {
+  return m_routine->followTrajectory(trajectory, config, timeout);
 }
 
 Routine::MotionStep& Routine::MotionStep::rebuild() {
@@ -927,6 +936,32 @@ Routine::MotionStep Routine::boomerang(QLength x,
                    final_heading,
                    lead,
                    timeout);
+}
+
+Routine::MotionStep Routine::followTrajectory(ChassisController& chassis,
+                                              const path::Trajectory& trajectory,
+                                              const control::RamseteConfig& config,
+                                              QTime timeout) {
+  // Shared so that rebuild() on every .withXxx() does not copy the samples.
+  auto owned = std::make_shared<const path::Trajectory>(trajectory);
+  return addMotion(
+      [&chassis, owned, config](const MotionOptions& options) {
+        return chassis.makeFollowTrajectoryCommand(*owned,
+                                                   config,
+                                                   options.timeout,
+                                                   options.exit,
+                                                   options.max_voltage);
+      },
+      timeout);
+}
+
+Routine::MotionStep Routine::followTrajectory(const path::Trajectory& trajectory,
+                                              const control::RamseteConfig& config,
+                                              QTime timeout) {
+  if (m_chassis == nullptr) {
+    return addMissingChassisStep();
+  }
+  return followTrajectory(*m_chassis, trajectory, config, timeout);
 }
 
 void Routine::clear() {

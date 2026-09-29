@@ -8,7 +8,9 @@
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion.hpp"
+#include "mclib/control/ramsete.hpp"
 #include "mclib/control/robot_state.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "mclib/time.hpp"
 #include "pros/rtos.hpp"
 
@@ -476,6 +478,20 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(
               max_output,
               overturn,
               min_speed);
+  });
+}
+
+std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
+    const path::Trajectory& trajectory,
+    const control::RamseteConfig& config,
+    QTime time_limit,
+    bool exit,
+    QVoltage max_output) {
+  // Shared, because AsyncControlCommand copies its action into a new task on
+  // every start and a trajectory is a few hundred samples.
+  auto owned = std::make_shared<const path::Trajectory>(trajectory);
+  return makeAsyncControlCommand([owned, config, time_limit, exit, max_output]() {
+    followTrajectory(*owned, config, time_limit, exit, max_output);
   });
 }
 

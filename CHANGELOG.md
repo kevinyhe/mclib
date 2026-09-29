@@ -13,6 +13,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   tank drives that corrects using the odometry pose instead of the drive
   encoders. `RamseteConfig::track_width` takes the drive's effective track
   width, and the commanded speed is capped at the trajectory's top speed.
+- `ChassisController::makeFollowTrajectoryCommand()` and
+  `Routine::followTrajectory()`: RAMSETE following as a command and as a
+  routine step. Both keep their own copy of the trajectory.
 
 ### Changed
 

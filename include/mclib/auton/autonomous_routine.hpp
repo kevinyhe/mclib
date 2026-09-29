@@ -162,6 +162,9 @@ public:
                          QAngle final_heading,
                          double lead,
                          QTime timeout);
+    MotionStep followTrajectory(const path::Trajectory& trajectory,
+                                const control::RamseteConfig& config,
+                                QTime timeout);
 
   private:
     friend class Routine;
@@ -401,6 +404,21 @@ public:
                        QAngle final_heading,
                        double lead,
                        QTime timeout);
+
+  /**
+   * @brief Follow a trajectory with RAMSETE. See followTrajectory() in
+   *        control/motion.hpp.
+   *
+   * The step keeps its own copy of @p trajectory and @p config. It honours
+   * `withMaxVoltage()` and `withoutExit()`; the other options do not apply.
+   */
+  MotionStep followTrajectory(ChassisController& chassis,
+                              const path::Trajectory& trajectory,
+                              const control::RamseteConfig& config,
+                              QTime timeout);
+  MotionStep followTrajectory(const path::Trajectory& trajectory,
+                              const control::RamseteConfig& config,
+                              QTime timeout);
 
   void clear();
   bool empty() const;

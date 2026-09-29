@@ -177,6 +177,19 @@ public:
       QVoltage max_output = 12.0 * units::volt,
       bool overturn = true,
       QVoltage min_speed = -1.0 * units::volt);
+  /**
+   * @brief followTrajectory() as a command.
+   *
+   * The command keeps its own copy of @p trajectory and @p config, so the
+   * caller's can go out of scope. Starting it again follows the trajectory
+   * again from its first state, so plan it from where the robot will be.
+   */
+  std::unique_ptr<Command> makeFollowTrajectoryCommand(
+      const path::Trajectory& trajectory,
+      const control::RamseteConfig& config,
+      QTime time_limit,
+      bool exit = true,
+      QVoltage max_output = 12.0 * units::volt);
   // Driver control. Each returns a command meant to be the subsystem's
   // default: it runs whenever no autonomous command owns the drive, reads
   // the sticks every scheduler pass, shapes them through the curves in
