@@ -7,6 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `mclib::control::AsyncMotion`: run a motion on its own task, wait for a
+  time, distance or condition partway through, then collect its
+  `MotionResult`. Starting a new one cancels the old one.
 - `HolonomicController::followTrajectory()` and
   `makeFollowTrajectoryCommand()`: X-drive and mecanum trajectory following
   with a heading target separate from the direction of travel, then settling

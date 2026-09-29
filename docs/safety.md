@@ -25,6 +25,37 @@ if (driveTo(24_in, 1500_ms) != MotionResult::Reached) {
 
 `toString()` gives the name for logs.
 
+## Running a motion in the background
+
+`mclib::control::AsyncMotion` runs a motion on its own task and returns at
+once, so the routine can act partway through:
+
+```cpp
+using mclib::control::AsyncMotion;
+
+AsyncMotion drive = AsyncMotion::start([] { return driveTo(30_in, 2_s); });
+drive.waitUntilTravelled(12_in);   // straight-line distance from the start
+intake.setVoltage(12_V);
+if (drive.wait() != MotionResult::Reached) {
+  return;
+}
+```
+
+| Call | Returns |
+| --- | --- |
+| `wait()` | the `MotionResult`, once it finishes |
+| `waitUntilElapsed(t)`, `waitUntilTravelled(d)`, `waitUntil(condition)` | `true` when the condition is met while the motion runs, `false` if the motion ended first |
+| `cancel()` | `Cancelled`, after the motion has stopped and braked |
+| `isRunning()`, `result()` | without blocking |
+
+- Starting a new `AsyncMotion` cancels the running one and waits for it.
+- Destroying the handle cancels its motion. Keep it until the motion is done.
+- Cancelling uses `CancelToken::Motion`, like chassis commands: the motion
+  stops at its next 10 ms tick. A motion that ignores it for 500 ms has its
+  task killed.
+- Don't run blocking motions or chassis commands at the same time. They share
+  the drive and the cancel flag.
+
 `wallReset()` returns `true` only after sustained wall contact, and then resets
 the pose. On failure it stops, returns `false` and leaves the pose unchanged.
 
