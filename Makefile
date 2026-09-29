@@ -107,6 +107,9 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/device/types.cpp \
 	$(TESTDIR)/support/host_motor.cpp \
 	$(SRCDIR)/mclib/mechanism/pneumatic_subsystem.cpp \
+	$(SRCDIR)/mclib/mechanism/conveyor_mechanism.cpp \
+	$(SRCDIR)/mclib/mechanism/pto_mechanism.cpp \
+	$(TESTDIR)/support/host_motor_group.cpp \
 	$(SRCDIR)/mclib/telemetry/sd_sink.cpp \
 	$(SRCDIR)/mclib/telemetry/file_sink.cpp \
 	$(TESTDIR)/support/host_time.cpp \
