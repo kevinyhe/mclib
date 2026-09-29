@@ -9,6 +9,7 @@
 #include "mclib/time.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace mclib {
@@ -19,8 +20,8 @@ PTOMechanism::PTOMechanism(const PTOConfig& config)
       m_config(config),
       m_motors(makeMotors(config)),
       m_pneumatic(makePneumatic(config)),
-      m_last_shift_time(mclib::time::now()),
-      m_last_write_time(mclib::time::now()) {
+      m_last_shift_ms(mclib::time::millis()),
+      m_last_write_ms(mclib::time::millis()) {
   // Boot counts as a shift: nothing may drive until the hardware has had the
   // settle window to reach the position the config claims it starts in.
   applySolenoid(m_config.initial_engaged);
@@ -40,8 +41,8 @@ PTOMechanism::PTOMechanism(std::shared_ptr<device::MotorGroup> motors,
       m_config(config),
       m_motors(motors ? std::move(motors) : makeMotors(config)),
       m_pneumatic(pneumatic ? std::move(pneumatic) : makePneumatic(config)),
-      m_last_shift_time(mclib::time::now()),
-      m_last_write_time(mclib::time::now()) {
+      m_last_shift_ms(mclib::time::millis()),
+      m_last_write_ms(mclib::time::millis()) {
   applySolenoid(m_config.initial_engaged);
 }
 
@@ -65,13 +66,25 @@ bool PTOMechanism::isEngaged() const {
   return getState();
 }
 
+double PTOMechanism::wholeMs(QTime duration) {
+  // The clock ticks in whole milliseconds. Rounding the configured time to
+  // the same grid keeps 250 * millisecond from reading as 249.99999 ms.
+  return std::round(duration.convert(millisecond));
+}
+
+double PTOMechanism::msSince(std::uint32_t start_ms) {
+  // Unsigned subtraction, so it stays correct across the uint32 wrap.
+  return static_cast<double>(mclib::time::millis() - start_ms);
+}
+
 bool PTOMechanism::isShiftSettled() const {
-  return mclib::time::now() - m_last_shift_time >= m_config.shift_settle_time;
+  return msSince(m_last_shift_ms) >= wholeMs(m_config.shift_settle_time);
 }
 
 QTime PTOMechanism::remainingSettleTime() const {
-  const QTime elapsed = mclib::time::now() - m_last_shift_time;
-  return mclib::units::max(0 * millisecond, m_config.shift_settle_time - elapsed);
+  const double remaining_ms =
+      wholeMs(m_config.shift_settle_time) - msSince(m_last_shift_ms);
+  return std::max(0.0, remaining_ms) * millisecond;
 }
 
 bool PTOMechanism::acceptsWriteFrom(bool engaged_side) const {
@@ -101,7 +114,7 @@ bool PTOMechanism::drive(bool from_engaged_side, double volts) {
   }
 
   m_commanded_volts = std::clamp(volts, -12.0, 12.0);
-  m_last_write_time = mclib::time::now();
+  m_last_write_ms = mclib::time::millis();
   return true;
 }
 
@@ -109,7 +122,7 @@ void PTOMechanism::stop() {
   // Always allowed, from either side and mid-shift: zeroing the motors can
   // never move the robot, and blocking it would leave stale voltage applied.
   m_commanded_volts = 0.0;
-  m_last_write_time = mclib::time::now();
+  m_last_write_ms = mclib::time::millis();
   // Hit the hardware now instead of waiting for the next periodic() tick, so
   // stop() still works when the mechanism was never registered with the
   // CommandScheduler or the scheduler task is stuck.
@@ -121,7 +134,7 @@ bool PTOMechanism::isDriveWriteFresh() const {
     return true;
   }
 
-  return mclib::time::now() - m_last_write_time < m_config.drive_timeout;
+  return msSince(m_last_write_ms) < wholeMs(m_config.drive_timeout);
 }
 
 void PTOMechanism::applySolenoid(bool engaged) {
@@ -211,7 +224,7 @@ void PTOMechanism::onStateChanged(const bool& engaged) {
   // gearbox.
   applySolenoid(engaged);
 
-  m_last_shift_time = mclib::time::now();
+  m_last_shift_ms = mclib::time::millis();
 }
 
 std::shared_ptr<device::MotorGroup> PTOMechanism::makeMotors(const PTOConfig& config) {
