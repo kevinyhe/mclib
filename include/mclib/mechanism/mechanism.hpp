@@ -91,16 +91,16 @@ public:
   }
 
   std::unique_ptr<Command> makeStateForCommand(StateT state, QTime duration) {
-    auto start_time = std::make_shared<QTime>(0.0);
+    auto start_ms = std::make_shared<std::uint32_t>(0);
     return std::make_unique<FunctionalCommand>(
-        [this, state, start_time]() {
+        [this, state, start_ms]() {
           setState(state);
-          *start_time = mclib::time::now();
+          *start_ms = mclib::time::millis();
         },
         [this, state]() { setState(state); },
         [](bool) {},
-        [start_time, duration]() {
-          return mclib::time::now() - *start_time >= duration;
+        [start_ms, duration]() {
+          return mclib::time::hasElapsed(*start_ms, duration);
         },
         std::initializer_list<Subsystem*>{this});
   }

@@ -337,11 +337,11 @@ public:
    */
   std::unique_ptr<Command> makePresetCommand(StateT preset,
                                              double timeout_ms = 0.0) {
-    auto start_time = std::make_shared<double>(0.0);
+    auto start_ms = std::make_shared<std::uint32_t>(0);
     return std::make_unique<FunctionalCommand>(
-        [this, preset, start_time]() {
+        [this, preset, start_ms]() {
           setPreset(preset);
-          *start_time = static_cast<double>(mclib::time::millis());
+          *start_ms = mclib::time::millis();
         },
         []() {},
         [this](bool interrupted) {
@@ -349,10 +349,10 @@ public:
             stop();
           }
         },
-        [this, start_time, timeout_ms]() {
+        [this, start_ms, timeout_ms]() {
           const bool timed_out =
               timeout_ms > 0.0 &&
-              static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
+              mclib::time::hasElapsed(*start_ms, timeout_ms * mclib::units::millisecond);
           return atTarget() || timed_out;
         },
         std::initializer_list<Subsystem*>{this});
@@ -365,11 +365,11 @@ public:
    */
   std::unique_ptr<Command> makeMoveToCommand(double target,
                                              double timeout_ms = 0.0) {
-    auto start_time = std::make_shared<double>(0.0);
+    auto start_ms = std::make_shared<std::uint32_t>(0);
     return std::make_unique<FunctionalCommand>(
-        [this, target, start_time]() {
+        [this, target, start_ms]() {
           moveTo(target);
-          *start_time = static_cast<double>(mclib::time::millis());
+          *start_ms = mclib::time::millis();
         },
         []() {},
         [this](bool interrupted) {
@@ -377,10 +377,10 @@ public:
             stop();
           }
         },
-        [this, start_time, timeout_ms]() {
+        [this, start_ms, timeout_ms]() {
           const bool timed_out =
               timeout_ms > 0.0 &&
-              static_cast<double>(mclib::time::millis()) - *start_time >= timeout_ms;
+              mclib::time::hasElapsed(*start_ms, timeout_ms * mclib::units::millisecond);
           return atTarget() || timed_out;
         },
         std::initializer_list<Subsystem*>{this});
@@ -433,16 +433,16 @@ public:
   }
 
   std::unique_ptr<Command> makeStateForCommand(StateT preset, QTime duration) {
-    auto start_time = std::make_shared<QTime>(0.0);
+    auto start_ms = std::make_shared<std::uint32_t>(0);
     return std::make_unique<FunctionalCommand>(
-        [this, preset, start_time]() {
+        [this, preset, start_ms]() {
           setPreset(preset);
-          *start_time = mclib::time::now();
+          *start_ms = mclib::time::millis();
         },
         []() {},
         [](bool) {},
-        [start_time, duration]() {
-          return mclib::time::now() - *start_time >= duration;
+        [start_ms, duration]() {
+          return mclib::time::hasElapsed(*start_ms, duration);
         },
         std::initializer_list<Subsystem*>{this});
   }

@@ -16,7 +16,7 @@
  * @brief Creates a \refitem Command with no requirements that finishes after a user-specified duration
  */
 class WaitCommand : public Command {
-	QTime startTime;
+	std::uint32_t startMs = 0;
 	QTime duration;
 public:
 	/**
@@ -32,7 +32,7 @@ public:
 	 * @brief Initializes the WaitCommand and sets the start time of the WaitCommand
 	 */
 	void initialize() override {
-		startTime = mclib::time::now();
+		startMs = mclib::time::millis();
 	}
 
 	/**
@@ -41,7 +41,7 @@ public:
 	 * @return Returns true if the duration has passed, false otherwise
 	 */
 	bool isFinished() override {
-		return mclib::time::now() - startTime > duration;
+		return mclib::time::hasElapsed(startMs, duration);
 	}
 
 	~WaitCommand() override = default;

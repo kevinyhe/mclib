@@ -37,6 +37,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- Timed commands could finish one scheduler tick late. `makeStateForCommand`,
+  `WaitCommand`, `WaitUntilTimeoutCommand`, and the timed commands of
+  `PositionMechanism`, `PresetPositionMechanism` and `ToggleGroupMechanism`
+  compared times as seconds in a `double`, so 100 ms read as 99.99999 ms for
+  59% of start times. They now compare whole milliseconds with the new
+  `time::hasElapsed()`. `WaitCommand` now finishes when its duration has
+  passed, not a tick after.
 - `EventLoop::poll()` no longer reads freed memory when a binding calls
   `bind()` or `clear()` on the same loop, for example a command started by a
   `Trigger` that creates another `Trigger`. New bindings run from the next

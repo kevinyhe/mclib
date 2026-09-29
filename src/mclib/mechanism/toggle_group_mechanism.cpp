@@ -145,32 +145,32 @@ std::unique_ptr<Command> ToggleGroupMechanism::makeToggleAllCommand() {
 
 std::unique_ptr<Command> ToggleGroupMechanism::makeSetForCommand(
     std::size_t index, bool extended, QTime duration) {
-  auto start_time = std::make_shared<QTime>(0.0);
+  auto start_ms = std::make_shared<std::uint32_t>(0);
   return std::make_unique<FunctionalCommand>(
-      [this, index, extended, start_time]() {
+      [this, index, extended, start_ms]() {
         set(index, extended);
-        *start_time = mclib::time::now();
+        *start_ms = mclib::time::millis();
       },
       [this, index, extended]() { set(index, extended); },
       [](bool) {},
-      [start_time, duration]() {
-        return mclib::time::now() - *start_time >= duration;
+      [start_ms, duration]() {
+        return mclib::time::hasElapsed(*start_ms, duration);
       },
       std::initializer_list<Subsystem*>{this});
 }
 
 std::unique_ptr<Command> ToggleGroupMechanism::makeSetAllForCommand(
     bool extended, QTime duration) {
-  auto start_time = std::make_shared<QTime>(0.0);
+  auto start_ms = std::make_shared<std::uint32_t>(0);
   return std::make_unique<FunctionalCommand>(
-      [this, extended, start_time]() {
+      [this, extended, start_ms]() {
         setAll(extended);
-        *start_time = mclib::time::now();
+        *start_ms = mclib::time::millis();
       },
       [this, extended]() { setAll(extended); },
       [](bool) {},
-      [start_time, duration]() {
-        return mclib::time::now() - *start_time >= duration;
+      [start_ms, duration]() {
+        return mclib::time::hasElapsed(*start_ms, duration);
       },
       std::initializer_list<Subsystem*>{this});
 }
