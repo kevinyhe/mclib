@@ -50,9 +50,22 @@ void autonomous() {
 | `driveTo(distance, timeout)` | drives a distance relative to the current position |
 | `turnToAngle(angle, timeout)` | turns to a field heading |
 | `moveToPoint(Point{x, y}, timeout)` | drives to a field position |
+| `followTrajectory(trajectory, config, timeout)` | follows a trajectory with RAMSETE; see [Motion](motion.md#following-a-trajectory-ramsete) |
 
 Motion options: `withMaxVoltage`, `withMinVoltage`, `withDirection`, `reversed`,
-`withoutStop` and `withoutOverturn`.
+`withoutStop` and `withoutOverturn`. `followTrajectory` uses only
+`withMaxVoltage` and `withoutExit`.
+
+A `followTrajectory` step keeps its own copy of the trajectory, so it can be
+built from a local:
+
+```cpp
+{
+  const Trajectory curve = Trajectory::generate(route, limits);
+  red_safe.followTrajectory(curve, follow, curve.duration() + 500_ms)
+      .withMaxVoltage(10_V);
+}
+```
 
 All motion arguments take units: `24_in`, `90_deg`, `2_s`, `10_V`.
 
