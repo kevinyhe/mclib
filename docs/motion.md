@@ -321,9 +321,24 @@ cornering):
 | six_motor_450, forward / reverse | 9.54 / 9.53 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
 | speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
 
-At b = 50 the fast drives still end 12° off heading on two of the six arcs,
-because RAMSETE stops correcting when the plan does. Follow with
-`turnToAngle()` if the final heading matters.
+RAMSETE stops correcting when the plan does, so a robot that lags ends with
+the heading error it had: up to 12° on the fast drives. With `exit` true,
+`followTrajectory()` then turns in place to the final heading
+(`RamseteConfig::turn_to_final_heading`, on by default). With it, all nine
+arc and S-curve scenarios pass with two tracking wheels: 0.37-2.44 in and
+0.1-2.0° off. The turn takes up to 0.4 s of the time limit.
+
+Two stress cases still fail, because the final turn fixes heading and not
+position:
+
+| Case (six_motor_450, 90° arc) | Miss |
+| --- | --- |
+| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in |
+| Starting 3.6 in and 8° off the path | 4.53 in |
+
+In both the robot slides outward through the arc, and lowering b to 10-30
+does not change the miss by more than 1.4 in. Capping the turn rate made
+every case worse. Plan slower on a slippery field.
 
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.

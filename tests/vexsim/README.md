@@ -49,7 +49,10 @@ read access to `kevinyhe/vexsim`. Without it the job skips.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   arcs and swings, at default gains.
 - The same two arcs through `followTrajectory()` (RAMSETE):
-  `ramsete_arc` and `ramsete_reverse_arc`. Before each, the runner measures
+  `ramsete_arc` and `ramsete_reverse_arc`, plus `ramsete_s_curve` (90° right
+  then 90° left, 24 in radius, to (48, 48)). `stress/ramsete_*` runs the arc
+  at low battery, low grip and from a start 3.6 in and 8° off the path, and
+  the `safety/*/9` cases inject each fault and a timeout into it. Before each, the runner measures
   the preset's kS, kV and effective track width in the simulator the way
   `docs/motion.md` describes, then plans at 70% of top speed.
   `--ramsete-b`, `--ramsete-zeta` and `--ramsete-accel` change the tuning.

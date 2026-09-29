@@ -1512,5 +1512,15 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
   }
   safety.setCorrectHeading(safety.heading());
   state().setTurning(false);
+
+  if (exit && config.turn_to_final_heading && safety.running())
+  {
+    // Settle the heading RAMSETE left behind, inside the same time limit.
+    // turnToAngle() runs its own safety checks and stops the drive itself.
+    const double used_ms = static_cast<uint32_t>(pros::millis() - start_time);
+    const QTime remaining = (time_limit.ms() - used_ms) * mclib::units::millisecond;
+    return turnToAngle(trajectory.states().back().heading, remaining, true,
+                       max_voltage);
+  }
   return safety.result();
 }

@@ -349,9 +349,11 @@ mclib::control::MotionResult boomerang(QLength x,
  * Plan the trajectory from where the robot is. It is not shifted to the
  * current pose.
  *
- * RAMSETE stops correcting once the trajectory's speed reaches zero, so this
- * returns when the trajectory ends and does not wait to settle. Check
- * `robotState().pose()` against the last state if the end position matters.
+ * RAMSETE stops correcting once the trajectory's speed reaches zero. With
+ * `exit` true and `config.turn_to_final_heading` on (the default), it then
+ * turns in place to the last state's heading with `turnToAngle()`, in the
+ * time left. Position is not settled; check `robotState().pose()` against
+ * the last state if the end position matters.
  *
  * @param trajectory The plan. Must outlive the call.
  * @param config     RAMSETE gains and per-side drive feedforward. `kV` must
@@ -361,8 +363,9 @@ mclib::control::MotionResult boomerang(QLength x,
  * @param exit       True stops and holds at the end. False leaves the last
  *                   voltages on for chaining.
  * @param max_output Voltage cap. Both sides scale down together.
- * @return `Reached` when the trajectory ran to its end. `InvalidValue` for an
- *         empty trajectory or a non-positive `kV`. See MotionResult.
+ * @return `Reached` when the trajectory ran to its end and, if it turned
+ *         afterwards, the turn settled. `InvalidValue` for an empty
+ *         trajectory or a non-positive `kV`. See MotionResult.
  */
 mclib::control::MotionResult followTrajectory(
     const mclib::path::Trajectory& trajectory,

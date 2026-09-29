@@ -114,24 +114,24 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
 }
 
 namespace {
-// A circular arc from the current pose to @p end_heading_deg, as a baked
-// Path with exact heading and curvature. The same geometry curveCircle()
-// drives, so the two can be compared on the same target.
-mclib::path::Path arcPath(double end_heading_deg, double radius_in, bool reversed) {
+// Circular arcs as baked PathPoints with exact heading and curvature: the
+// geometry curveCircle() drives, so the two can be compared on one target.
+// Planned in the field frame from the origin, facing +Y, so a scenario can
+// start the robot off the path and see whether the follower recovers.
+struct ArcEnd { double x, y, travel; };
+
+// Appends a turn of @p turn_rad at @p radius_in, leaving the travel direction
+// @p start.travel. Positive turns right.
+ArcEnd appendArc(std::vector<mclib::path::PathPoint>& points, ArcEnd start,
+                 double turn_rad, double radius_in) {
   using namespace mclib::units;
-  const auto pose = mclib::control::robotState().pose();
-  const double pi = std::acos(-1.0);
-  // Travel direction: the body heading, or its opposite when backing up.
-  const double start = pose.theta + (reversed ? pi : 0.0);
-  const double turn = mclib::wrapAngle(end_heading_deg * pi / 180 - pose.theta);
-  const double r = (turn < 0 ? -1.0 : 1.0) * std::fabs(radius_in);
+  const double r = (turn_rad < 0 ? -1.0 : 1.0) * std::fabs(radius_in);
   // Centre is r along the travel direction's right-hand side.
-  const double cx = pose.x + r * std::cos(start);
-  const double cy = pose.y - r * std::sin(start);
-  const int samples = std::max(2, static_cast<int>(std::fabs(turn * r)) * 2);
-  std::vector<mclib::path::PathPoint> points;
-  for (int i = 0; i <= samples; ++i) {
-    const double phi = start + turn * i / samples;
+  const double cx = start.x + r * std::cos(start.travel);
+  const double cy = start.y - r * std::sin(start.travel);
+  const int samples = std::max(2, static_cast<int>(std::fabs(turn_rad * r)) * 2);
+  for (int i = points.empty() ? 0 : 1; i <= samples; ++i) {
+    const double phi = start.travel + turn_rad * i / samples;
     mclib::path::PathPoint point;
     point.x = (cx - r * std::cos(phi)) * inch;
     point.y = (cy + r * std::sin(phi)) * inch;
@@ -139,6 +139,25 @@ mclib::path::Path arcPath(double end_heading_deg, double radius_in, bool reverse
     point.curvature = QCurvature::fromBase(1.0 / (r * inch).raw());
     points.push_back(point);
   }
+  const double end = start.travel + turn_rad;
+  return {cx - r * std::cos(end), cy + r * std::sin(end), end};
+}
+
+// One arc from the origin to body heading @p end_heading_deg.
+mclib::path::Path arcPath(double end_heading_deg, double radius_in, bool reversed) {
+  const double pi = std::acos(-1.0);
+  std::vector<mclib::path::PathPoint> points;
+  const double turn = mclib::wrapAngle(end_heading_deg * pi / 180);
+  appendArc(points, {0, 0, reversed ? pi : 0.0}, turn, radius_in);
+  return mclib::path::Path(points);
+}
+
+// Right then left, 90 deg each: from the origin to (2r, 2r), facing +Y again.
+mclib::path::Path sCurvePath(double radius_in) {
+  const double pi = std::acos(-1.0);
+  std::vector<mclib::path::PathPoint> points;
+  const ArcEnd mid = appendArc(points, {0, 0, 0}, pi / 2, radius_in);
+  appendArc(points, mid, -pi / 2, radius_in);
   return mclib::path::Path(points);
 }
 }  // namespace
@@ -173,11 +192,12 @@ extern "C" int sim_run(int action, double a, double b, double heading,
     case 7: boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
                        limit, exit, volts * volt); break;
     case 9:
-    case 10: {
+    case 10:
+    case 13: {
       auto limits = ramsete_limits;
       limits.reversed = action == 10;
       const auto trajectory = mclib::path::Trajectory::generate(
-          arcPath(a, b, limits.reversed), limits);
+          action == 13 ? sCurvePath(b) : arcPath(a, b, limits.reversed), limits);
       return static_cast<int>(followTrajectory(trajectory, ramsete_config, limit, exit,
                                                volts * volt));
     }

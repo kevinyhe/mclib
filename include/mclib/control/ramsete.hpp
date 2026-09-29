@@ -78,6 +78,17 @@ struct RamseteConfig {
    * `2 * (V - kS) / kV / w`. It is usually wider than the real track.
    */
   units::QLength track_width{};
+  /**
+   * @brief After the trajectory, turn in place to its final heading.
+   *
+   * @details RAMSETE stops correcting when the planned speed reaches zero, so
+   * a robot that lags the plan ends with the heading error it had. In the
+   * physics simulator that was up to 12 deg on fast drives. With this on,
+   * `followTrajectory()` finishes with `turnToAngle()` to the last state's
+   * heading, in the time left. Only when `exit` is true: a chained move keeps
+   * its momentum for the next motion.
+   */
+  bool turn_to_final_heading = true;
 };
 
 /// @brief Speed and turn rate for the robot's centre.
