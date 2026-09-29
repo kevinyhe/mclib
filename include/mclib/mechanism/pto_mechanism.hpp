@@ -201,6 +201,9 @@ private:
                               char adi_port,
                               device::Gearset gearset);
 
+  static double wholeMs(QTime duration);
+  static double msSince(std::uint32_t start_ms);
+
   bool acceptsWriteFrom(bool engaged_side) const;
   bool isDriveWriteFresh() const;
   void applySolenoid(bool engaged);
@@ -209,8 +212,12 @@ private:
   std::shared_ptr<device::MotorGroup> m_motors;
   std::shared_ptr<device::IPneumatic> m_pneumatic;
   double m_commanded_volts = 0.0;
-  QTime m_last_shift_time = 0 * millisecond;
-  QTime m_last_write_time = 0 * millisecond;
+  // Whole milliseconds from mclib::time::millis(), not QTime. QTime is
+  // seconds in a double, and the difference of two such times is off by a
+  // rounding error, so a 250 ms window read as 249.99999 ms for some start
+  // times and ran one tick long.
+  std::uint32_t m_last_shift_ms = 0;
+  std::uint32_t m_last_write_ms = 0;
 };
 
 }  // namespace mechanism
