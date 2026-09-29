@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- `mclib::path::Trajectory`: plans speed and time along a path from limits on
+  speed, acceleration, deceleration, cornering and outer-wheel speed.
+
 ## 0.1.0
 
 Initial release.

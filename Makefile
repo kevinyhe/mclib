@@ -91,6 +91,7 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/path/path.cpp \
 	$(SRCDIR)/mclib/path/spline.cpp \
 	$(SRCDIR)/mclib/path/pure_pursuit.cpp \
+	$(SRCDIR)/mclib/path/trajectory.cpp \
 	$(SRCDIR)/mclib/snapshot/raycast.cpp \
 	$(SRCDIR)/mclib/snapshot/snapshot_pose.cpp \
 	$(SRCDIR)/mclib/command/subsystem.cpp \
