@@ -322,23 +322,33 @@ cornering):
 | speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
 
 RAMSETE stops correcting when the plan does, so a robot that lags ends with
-the heading error it had: up to 12° on the fast drives. With `exit` true,
-`followTrajectory()` then turns in place to the final heading
-(`RamseteConfig::turn_to_final_heading`, on by default). With it, all nine
-arc and S-curve scenarios pass with two tracking wheels: 0.37-2.44 in and
-0.1-2.0° off. The turn takes up to 0.4 s of the time limit.
+the error it had: up to 12° off heading on the fast drives. With `exit` true,
+`followTrajectory()` then settles in the time left:
 
-Two stress cases still fail, because the final turn fixes heading and not
-position:
+1. It turns in place to the final heading
+   (`RamseteConfig::turn_to_final_heading`).
+2. If the miss along that heading is more than
+   `distance_exit.big_error` (1.5 in by default), it drives straight to close
+   it (`RamseteConfig::settle_position`).
 
-| Case (six_motor_450, 90° arc) | Miss |
-| --- | --- |
-| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in |
-| Starting 3.6 in and 8° off the path | 4.53 in |
+Both are on by default. It does not settle a sideways miss: a tank drive can
+only close a few inches sideways by pivoting, and settling with `boomerang()`
+that way ran out of time in the simulator, up to 179° off heading.
 
-In both the robot slides outward through the arc, and lowering b to 10-30
-does not change the miss by more than 1.4 in. Capping the turn rate made
-every case worse. Plan slower on a slippery field.
+With both on, all nine arc and S-curve scenarios pass with two tracking
+wheels: 0.38-1.60 in and 0.1-2.0° off. Settling takes up to 1.2 s of the time
+limit.
+
+Two stress cases still fail, because what is left is mostly sideways:
+
+| Case (six_motor_450, 90° arc) | Before settling | After |
+| --- | --- | --- |
+| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in |
+| Starting 3.6 in and 8° off the path | 4.53 in | 3.67 in |
+
+In both the robot slides outward through the arc. Lowering b to 10-30 changes
+the miss by at most 1.4 in, and capping the turn rate made every case worse.
+Plan slower on a slippery field.
 
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.
