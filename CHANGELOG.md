@@ -10,6 +10,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - `mclib::path::Trajectory`: plans speed and time along a path from limits on
   speed, acceleration, deceleration, cornering and outer-wheel speed.
 
+### Changed
+
+- `turnToAngle`, `driveTo`, `curveCircle`, `curveCircleReverse`, `swing`,
+  `turnToPoint`, `moveToPoint` and `boomerang` return a
+  `mclib::control::MotionResult` instead of `void`, so a routine can tell a
+  reached target from a timeout, cancel, disable, bad value or missing drive.
+  Code that ignores the return value still compiles.
+
 ## 0.1.0
 
 Initial release.
