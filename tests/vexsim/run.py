@@ -350,6 +350,7 @@ def scenarios():
             # The same two arcs through followTrajectory() (RAMSETE).
             ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
             ("ramsete_reverse_arc", 10, {"a": -90, "b": 24}, (24, -24), -90),
+            ("ramsete_s_curve", 13, {"b": 24}, (48, 48), 0),
             ("swing", 4, {"a": 90}, None, 90),
         ):
             yield dict(name=f"{preset}/{name}", preset=preset, action=action,
@@ -361,12 +362,20 @@ def scenarios():
                           ("encoder_heading", {"encoder_heading": True})):
         yield dict(name=f"stress/{name}", preset="six_motor_450", action=0,
                    args={"a": 90}, angle=90, options=options)
+    # RAMSETE under the same stresses, with feedforward measured on a healthy
+    # robot, and starting 3.6 in and 8 deg off the planned path.
+    for name, options in (("ramsete_low_battery", {"soc": 0.08}),
+                          ("ramsete_low_grip", {"friction": 0.65}),
+                          ("ramsete_off_path_start", {"start_pose": (3.0, -2.0, 8.0)})):
+        yield dict(name=f"stress/{name}", preset="six_motor_450", action=9,
+                   args={"a": 90, "b": 24}, target=(24, 24), angle=90,
+                   options=options, position_tolerance=2.5)
     for fault in ("cancel", "disabled", "imu", "encoder"):
-        for action in (0, 1, 2, 3, 4, 5, 6, 7):
+        for action in (0, 1, 2, 3, 4, 5, 6, 7, 9):
             yield dict(name=f"safety/{fault}/{action}", preset="six_motor_450",
                        action=action, args={"a": 60, "b": 24, "stop": False},
                        options={"fault": fault}, safety=True)
-    for action in range(8):
+    for action in (0, 1, 2, 3, 4, 5, 6, 7, 9):
         yield dict(name=f"safety/timeout/{action}", preset="six_motor_450",
                    action=action, args={"a": 60, "b": 24, "stop": False, "timeout": 200},
                    timeout_safety=True)
@@ -415,7 +424,7 @@ def main():
     feedforward_cache = {}
     for case in cases:
         feedforward = None
-        if case["action"] in (9, 10):
+        if case["action"] in (9, 10, 13):
             feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
                                               feedforward_cache)
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,

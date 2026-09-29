@@ -617,7 +617,7 @@ int main() {
       return std::copysign(push, volts) / ramsete_config.feedforward.kV.raw() /
              (1 * inps).raw();
     };
-    auto run = [&](bool exit) {
+    auto run = [&](bool exit, bool settle = true) {
       pose = trajectory_start;
       resetOdometry(pose);
       hw.heading = pose.theta * 180 / M_PI;
@@ -633,17 +633,37 @@ int main() {
         resetOdometry(pose);
         hw.heading = pose.theta * 180 / M_PI;
       };
-      return followTrajectory(trajectory, ramsete_config, 5_s, exit);
+      RamseteConfig config = ramsete_config;
+      config.turn_to_final_heading = settle;
+      return followTrajectory(trajectory, config, 5_s, exit);
     };
-    CHECK(run(true) == MotionResult::Reached);
     const auto end = trajectory.states().back();
-    const double miss = std::hypot(pose.x - end.x.in(), pose.y - end.y.in());
-    std::printf("followTrajectory with 8%% left slip: missed by %.3f in after %u ms "
-                "(plan %.0f ms)\n", miss, static_cast<unsigned>(now_ms),
-                trajectory.duration().ms());
-    CHECK(miss < 3.0);
+    auto headingMissDeg = [&] {
+      return std::fabs(mclib::wrapAngle(pose.theta - end.heading.rad())) * 180 / M_PI;
+    };
+
+    // Without the final turn it returns as the plan ends, with whatever
+    // heading error RAMSETE left.
+    CHECK(run(true, false) == MotionResult::Reached);
+    const double unsettled_deg = headingMissDeg();
+    const std::uint32_t unsettled_ms = now_ms;
     CHECK(now_ms >= trajectory.duration().ms());
     CHECK(now_ms < trajectory.duration().ms() + 20);
+
+    CHECK(run(true) == MotionResult::Reached);
+    const double miss = std::hypot(pose.x - end.x.in(), pose.y - end.y.in());
+    const double settled_deg = headingMissDeg();
+    std::printf("followTrajectory with 8%% left slip (plan %.0f ms): missed by %.3f in; "
+                "heading %.2f deg off after %u ms without the final turn, "
+                "%.2f deg after %u ms with it\n",
+                trajectory.duration().ms(), miss, unsettled_deg,
+                static_cast<unsigned>(unsettled_ms), settled_deg,
+                static_cast<unsigned>(now_ms));
+    CHECK(miss < 3.0);
+    // turnToAngle() stops inside its own exit band, not on zero.
+    CHECK(settled_deg <= motionConfig().turn_exit.big_error);
+    CHECK(settled_deg < unsettled_deg);
+    CHECK(now_ms > unsettled_ms);
     CHECK_EQ(hw.left, 0);
     CHECK_EQ(hw.right, 0);
     CHECK(!robotState().isTurning());
@@ -667,7 +687,10 @@ int main() {
       resetOdometry(pose);
       now_ms = 0;
       on_delay = [&] { worst_mean = std::max(worst_mean, (hw.left + hw.right) / 2); };
-      CHECK(followTrajectory(trajectory, ramsete_config, 5_s) == MotionResult::Reached);
+      // Nothing moves the robot here, so a final turn could never settle.
+      RamseteConfig no_turn = ramsete_config;
+      no_turn.turn_to_final_heading = false;
+      CHECK(followTrajectory(trajectory, no_turn, 5_s) == MotionResult::Reached);
       std::printf("followTrajectory 6 in behind: mean side voltage peaked at %.3f V, "
                   "cap %.3f V\n", worst_mean, cap);
       CHECK(worst_mean <= cap + 1e-9);
