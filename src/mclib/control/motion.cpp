@@ -1513,14 +1513,37 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
   safety.setCorrectHeading(safety.heading());
   state().setTurning(false);
 
-  if (exit && config.turn_to_final_heading && safety.running())
+  if (exit && safety.running())
   {
-    // Settle the heading RAMSETE left behind, inside the same time limit.
-    // turnToAngle() runs its own safety checks and stops the drive itself.
+    // Settle what RAMSETE left behind, inside the same time limit. Each
+    // routine below runs its own safety checks and stops the drive itself.
     const double used_ms = static_cast<uint32_t>(pros::millis() - start_time);
     const QTime remaining = (time_limit.ms() - used_ms) * mclib::units::millisecond;
-    return turnToAngle(trajectory.states().back().heading, remaining, true,
-                       max_voltage);
+    const mclib::path::TrajectoryState end = trajectory.states().back();
+    MotionResult result = safety.result();
+    if (config.turn_to_final_heading)
+    {
+      result = turnToAngle(end.heading, remaining, true, max_voltage);
+    }
+    if (config.settle_position && result == MotionResult::Reached)
+    {
+      // Only the part of the miss along the final heading: a tank drive can
+      // close that by driving straight. Closing a sideways miss of a few
+      // inches takes a pivot of up to 180 deg; in the physics simulator
+      // boomerang() did that, ran out of time and ended up to 179 deg off.
+      const mclib::Pose2D pose = state().pose();
+      const double h = end.heading.rad();
+      const double along_in = (end.x.in() - pose.x) * std::sin(h) +
+                              (end.y.in() - pose.y) * std::cos(h);
+      if (std::fabs(along_in) > cfg().distance_exit.big_error)
+      {
+        const double used = static_cast<uint32_t>(pros::millis() - start_time);
+        result = driveTo(along_in * mclib::units::inch,
+                         (time_limit.ms() - used) * mclib::units::millisecond, true,
+                         max_voltage);
+      }
+    }
+    return result;
   }
   return safety.result();
 }

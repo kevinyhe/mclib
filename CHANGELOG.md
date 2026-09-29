@@ -14,7 +14,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   encoders. `RamseteConfig::track_width` takes the drive's effective track
   width, and the commanded speed is capped at the trajectory's top speed.
   With `exit` true it finishes with a turn to the final heading
-  (`RamseteConfig::turn_to_final_heading`).
+  (`RamseteConfig::turn_to_final_heading`) and a straight drive to close any
+  miss along it (`RamseteConfig::settle_position`).
 
 ### Changed
 

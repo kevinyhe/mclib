@@ -617,6 +617,7 @@ int main() {
       return std::copysign(push, volts) / ramsete_config.feedforward.kV.raw() /
              (1 * inps).raw();
     };
+    double left_slip = 0.92, right_slip = 1.0;
     auto run = [&](bool exit, bool settle = true) {
       pose = trajectory_start;
       resetOdometry(pose);
@@ -624,8 +625,12 @@ int main() {
       now_ms = 0;
       clearCancel();
       on_delay = [&] {
-        const double l = speed(hw.left) * 0.92, r = speed(hw.right);
+        const double wheel_l = speed(hw.left), wheel_r = speed(hw.right);
+        const double l = wheel_l * left_slip, r = wheel_r * right_slip;
         const double v = (l + r) / 2, w = (l - r) / 12.0, dt = 0.01;
+        // Encoders count wheel turns, slip included: 4 in wheel, both sides
+        // share one encoder in FakeDrive.
+        hw.encoder += (wheel_l + wheel_r) / 2 * dt / (4 * M_PI) * 360;
         const double mid = pose.theta + w * dt / 2;
         pose.x += v * std::sin(mid) * dt;
         pose.y += v * std::cos(mid) * dt;
@@ -635,6 +640,7 @@ int main() {
       };
       RamseteConfig config = ramsete_config;
       config.turn_to_final_heading = settle;
+      config.settle_position = settle;
       return followTrajectory(trajectory, config, 5_s, exit);
     };
     const auto end = trajectory.states().back();
@@ -642,28 +648,67 @@ int main() {
       return std::fabs(mclib::wrapAngle(pose.theta - end.heading.rad())) * 180 / M_PI;
     };
 
-    // Without the final turn it returns as the plan ends, with whatever
-    // heading error RAMSETE left.
+    auto missIn = [&] { return std::hypot(pose.x - end.x.in(), pose.y - end.y.in()); };
+    // The part of the miss along the final heading, the part the settle
+    // drives out.
+    auto alongIn = [&] {
+      const double h = end.heading.rad();
+      return (end.x.in() - pose.x) * std::sin(h) + (end.y.in() - pose.y) * std::cos(h);
+    };
+    const double band_in = motionConfig().distance_exit.big_error;
+
+    // Left side slips 8%: the miss is mostly sideways. Settling turns to the
+    // heading and leaves the sideways part, which a tank drive can only close
+    // by pivoting.
     CHECK(run(true, false) == MotionResult::Reached);
     const double unsettled_deg = headingMissDeg();
+    const double unsettled_in = missIn();
     const std::uint32_t unsettled_ms = now_ms;
     CHECK(now_ms >= trajectory.duration().ms());
     CHECK(now_ms < trajectory.duration().ms() + 20);
-
     CHECK(run(true) == MotionResult::Reached);
-    const double miss = std::hypot(pose.x - end.x.in(), pose.y - end.y.in());
-    const double settled_deg = headingMissDeg();
-    std::printf("followTrajectory with 8%% left slip (plan %.0f ms): missed by %.3f in; "
-                "heading %.2f deg off after %u ms without the final turn, "
-                "%.2f deg after %u ms with it\n",
-                trajectory.duration().ms(), miss, unsettled_deg,
-                static_cast<unsigned>(unsettled_ms), settled_deg,
-                static_cast<unsigned>(now_ms));
-    CHECK(miss < 3.0);
+    std::printf("followTrajectory, left side 8%% slow (plan %.0f ms): unsettled %.3f in "
+                "(%.3f along), %.2f deg, %u ms; settled %.3f in (%.3f along), %.2f deg, "
+                "%u ms\n",
+                trajectory.duration().ms(), unsettled_in, alongIn(), unsettled_deg,
+                static_cast<unsigned>(unsettled_ms), missIn(), alongIn(),
+                headingMissDeg(), static_cast<unsigned>(now_ms));
+    CHECK(missIn() < 3.0);
+    CHECK(std::fabs(alongIn()) <= band_in);
     // turnToAngle() stops inside its own exit band, not on zero.
-    CHECK(settled_deg <= motionConfig().turn_exit.big_error);
-    CHECK(settled_deg < unsettled_deg);
+    CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+    CHECK(headingMissDeg() < unsettled_deg);
     CHECK(now_ms > unsettled_ms);
+
+    // Both sides 15% slow: the robot lags the plan and ends short of the
+    // point along its heading. The settle drives the rest.
+    left_slip = right_slip = 0.85;
+    CHECK(run(true, false) == MotionResult::Reached);
+    const double short_in = alongIn();
+    CHECK(run(true) == MotionResult::Reached);
+    std::printf("followTrajectory, both sides 15%% slow: %.3f in short unsettled, "
+                "%.3f in settled after %u ms\n",
+                short_in, alongIn(), static_cast<unsigned>(now_ms));
+    CHECK(short_in > band_in);
+    // driveTo() measures with the encoders, which count the 15% slip as
+    // travel, so it closes most of the gap rather than all of it.
+    CHECK(std::fabs(alongIn()) < short_in / 2);
+    CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+
+    // Position settling off: only the turn runs, and the lag stays.
+    {
+      RamseteConfig turn_only = ramsete_config;
+      turn_only.settle_position = false;
+      pose = trajectory_start;
+      resetOdometry(pose);
+      hw.heading = pose.theta * 180 / M_PI;
+      now_ms = 0;
+      CHECK(followTrajectory(trajectory, turn_only, 5_s) == MotionResult::Reached);
+      CHECK(alongIn() > band_in);
+      CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+    }
+    left_slip = 0.92;
+    right_slip = 1.0;
     CHECK_EQ(hw.left, 0);
     CHECK_EQ(hw.right, 0);
     CHECK(!robotState().isTurning());
@@ -690,6 +735,7 @@ int main() {
       // Nothing moves the robot here, so a final turn could never settle.
       RamseteConfig no_turn = ramsete_config;
       no_turn.turn_to_final_heading = false;
+      no_turn.settle_position = false;
       CHECK(followTrajectory(trajectory, no_turn, 5_s) == MotionResult::Reached);
       std::printf("followTrajectory 6 in behind: mean side voltage peaked at %.3f V, "
                   "cap %.3f V\n", worst_mean, cap);
