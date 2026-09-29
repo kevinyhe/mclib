@@ -56,6 +56,7 @@ using mclib::control::swingCommand;
 
 using mclib::control::MotionConfig;
 using mclib::control::MotionPhase;
+using mclib::control::MotionResult;
 
 /// @brief The drivetrain every routine below runs on. Bound by
 ///        ChassisController's constructor or control::bindDrive().
@@ -205,19 +206,31 @@ class MotionSafety {
  public:
   MotionSafety(QTime limit, std::initializer_list<double> inputs)
       : start_(pros::millis()), limit_(limit.ms()) {
-    failed_ = !std::isfinite(limit_) || limit_ <= 0;
-    for (double value : inputs) failed_ |= !std::isfinite(value);
+    bool invalid = !std::isfinite(limit_) || limit_ <= 0;
+    for (double value : inputs) invalid |= !std::isfinite(value);
+    if (invalid) fail(MotionResult::InvalidValue);
   }
   bool running() {
+    if (failed_) return false;
     const auto pose = state().pose();
-    failed_ |= cancelled() || pros::competition::is_disabled() ||
-        static_cast<uint32_t>(pros::millis() - start_) >= limit_ ||
-        !std::isfinite(getInertialHeading()) ||
-        !std::isfinite(getLeftRotationDegree()) ||
-        !std::isfinite(getRightRotationDegree()) ||
-        !std::isfinite(pose.x) || !std::isfinite(pose.y) ||
-        !std::isfinite(pose.theta);
+    // First match wins, so a cancel that lands on the last tick before the
+    // time limit reports Cancelled, not TimedOut.
+    if (cancelled()) fail(MotionResult::Cancelled);
+    else if (pros::competition::is_disabled()) fail(MotionResult::Disabled);
+    else if (!std::isfinite(getInertialHeading()) ||
+             !std::isfinite(getLeftRotationDegree()) ||
+             !std::isfinite(getRightRotationDegree()) ||
+             !std::isfinite(pose.x) || !std::isfinite(pose.y) ||
+             !std::isfinite(pose.theta)) fail(MotionResult::InvalidValue);
+    else if (static_cast<uint32_t>(pros::millis() - start_) >= limit_)
+      fail(MotionResult::TimedOut);
     return !failed_;
+  }
+  // Polls once more, because a loop can leave on its own clock check without
+  // calling running(). Anything that did not fail reached its goal.
+  MotionResult result() {
+    running();
+    return failed_ ? reason_ : MotionResult::Reached;
   }
   double heading() { return checked(getInertialHeading()); }
   double left() { return checked(getLeftRotationDegree()); }
@@ -260,22 +273,41 @@ class MotionSafety {
   }
  private:
   double checked(double value) {
-    failed_ |= !std::isfinite(value);
+    if (!std::isfinite(value)) fail(MotionResult::InvalidValue);
     return value;
+  }
+  void fail(MotionResult reason) {
+    if (failed_) return;
+    failed_ = true;
+    reason_ = reason;
   }
   uint32_t start_;
   double limit_;
   bool failed_ = false;
+  MotionResult reason_ = MotionResult::Reached;
 };
 }  // namespace
-void turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+
+const char* mclib::control::toString(MotionResult result) {
+  switch (result) {
+    case MotionResult::Reached: return "Reached";
+    case MotionResult::TimedOut: return "TimedOut";
+    case MotionResult::Cancelled: return "Cancelled";
+    case MotionResult::Disabled: return "Disabled";
+    case MotionResult::InvalidValue: return "InvalidValue";
+    case MotionResult::NoDrive: return "NoDrive";
+  }
+  return "Unknown";
+}
+
+MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
   MotionObservation telemetry(MotionPhase::Turn);
   if (mclib::control::requireDrive("turnToAngle") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {turn_angle_target.deg(), max_voltage.volts(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   // Unwrap once, here. Everything below is the arithmetic this routine always
   // ran, on the same doubles; see the file comment.
   double turn_angle = turn_angle_target.deg();
@@ -349,16 +381,17 @@ void turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, QVoltage
   }
   safety.setCorrectHeading(turn_angle);
   state().setTurning(false);
+  return safety.result();
 }
 
-void driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
   MotionObservation telemetry(MotionPhase::Drive);
   if (mclib::control::requireDrive("driveTo") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {distance.in(), max_voltage.volts(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   double distance_in = distance.in();
   const double time_limit_msec = time_limit.ms();
   const double max_output = max_voltage.volts();
@@ -476,16 +509,17 @@ void driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage
   // off (zero, on the exit path above).
   state().setPrevOutputs(prev_left_output, prev_right_output);
   state().setTurning(false);
+  return safety.result();
 }
 
-void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, bool reverse)
+MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, bool reverse)
 {
   MotionObservation telemetry(MotionPhase::Arc);
   if (mclib::control::requireDrive("curveCircle") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {result_angle_target.deg(), center_radius.in(), max_voltage.volts(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   double result_angle_deg = result_angle_target.deg();
   // Signed: the sign picks the curve direction, the magnitude is the radius.
   const double center_radius_in = center_radius.in();
@@ -525,7 +559,7 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
       state().setPrevOutputs(0, 0);
     }
     safety.setCorrectHeading(result_angle_deg);
-    return;
+    return safety.result();
   }
   ratio = in_arc / out_arc;
 
@@ -625,21 +659,22 @@ void curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_l
   // Update the global heading
   safety.setCorrectHeading(result_angle_deg);
   state().setTurning(false);
+  return safety.result();
 }
 
-void curveCircleReverse(QAngle result_angle, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult curveCircleReverse(QAngle result_angle, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
-  curveCircle(result_angle, center_radius, time_limit, exit, max_voltage, min_voltage, true);
+  return curveCircle(result_angle, center_radius, time_limit, exit, max_voltage, min_voltage, true);
 }
 
-void swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
 {
   MotionObservation telemetry(MotionPhase::Swing);
   if (mclib::control::requireDrive("swing") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {swing_angle_target.deg(), drive_direction, max_voltage.volts(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   double swing_angle = swing_angle_target.deg();
   const double time_limit_msec = time_limit.ms();
   const double max_output = max_voltage.volts();
@@ -735,6 +770,7 @@ void swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, 
   state().setPrevOutputs(left_output, right_output);
   safety.setCorrectHeading(swing_angle); // Update shared heading
   state().setTurning(false);          // Reset turning state
+  return safety.result();
 }
 
 void correctHeading()
@@ -899,14 +935,14 @@ bool wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
   return true;
 }
 
-void turnToPoint(QLength x, QLength y, int direction, QTime time_limit, QVoltage min_voltage)
+MotionResult turnToPoint(QLength x, QLength y, int direction, QTime time_limit, QVoltage min_voltage)
 {
   MotionObservation telemetry(MotionPhase::Turn);
   if (mclib::control::requireDrive("turnToPoint") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {x.in(), y.in(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   const double x_in = x.in();
   const double y_in = y.in();
   const double time_limit_msec = time_limit.ms();
@@ -953,16 +989,17 @@ void turnToPoint(QLength x, QLength y, int direction, QTime time_limit, QVoltage
   stopChassis(mclib::device::BrakeMode::Hold); // Stop at end
   safety.setCorrectHeading(safety.heading());  // Update shared heading
   state().setTurning(false);                    // Reset turning state
+  return safety.result();
 }
 
-void moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
+MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
 {
   MotionObservation telemetry(MotionPhase::Point);
   if (mclib::control::requireDrive("moveToPoint") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {x.in(), y.in(), max_voltage.volts(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   const double x_in = x.in();
   const double y_in = y.in();
   const double time_limit_msec = time_limit.ms();
@@ -1150,16 +1187,17 @@ void moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool exit, QVo
   state().setPrevOutputs(prev_left_output, prev_right_output);
   safety.setCorrectHeading(safety.heading()); // Update shared heading
   state().setTurning(false);                   // Reset turning state
+  return safety.result();
 }
 
-void boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
+MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
 {
   MotionObservation telemetry(MotionPhase::Pursuit);
   if (mclib::control::requireDrive("boomerang") == nullptr) {
-    return;
+    return MotionResult::NoDrive;
   }
   MotionSafety safety(time_limit, {x.in(), y.in(), final_heading.deg(), dlead, max_voltage.volts(), min_voltage.volts()});
-  if (!safety.running()) return;
+  if (!safety.running()) return safety.result();
   const double x_in = x.in();
   const double y_in = y.in();
   // The final heading, degrees. `dlead` is genuinely dimensionless.
@@ -1396,4 +1434,5 @@ void boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead
   state().setPrevOutputs(prev_left_output, prev_right_output);
   safety.setCorrectHeading(a);  // Update shared heading
   state().setTurning(false); // Reset turning state
+  return safety.result();
 }
