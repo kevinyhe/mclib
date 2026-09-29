@@ -141,6 +141,7 @@ without stopping.
 | `path/path.hpp` | `Waypoint`, `PathPoint`, `Path`: samples with position, heading, curvature and distance along the path |
 | `path/spline.hpp` | `generateSpline()`: a smooth curve through every waypoint |
 | `path/pure_pursuit.hpp` | `PurePursuit`, `curvatureSpeedLimit()`, `approachSpeedLimit()`, `wheelSpeeds()` |
+| `path/trajectory.hpp` | `Trajectory`: speeds and times planned along a path before the robot moves |
 
 ```cpp
 #include "mclib/mclib.hpp"
@@ -216,6 +217,149 @@ With 60 in/s² lateral acceleration: a 48 in radius runs at 42.7 in/s, 10 in at
 To use a motion profile instead, ignore `PurePursuitOutput::velocity` and pass
 the profile speed and the reported curvature to `wheelSpeeds()`.
 
+### Trajectories
+
+`Trajectory::generate()` plans the whole run before the robot moves: where it
+should be at each moment, how fast, and how hard it should turn. A follower
+that tracks a target pose over time needs this. Pure pursuit does not.
+
+```cpp
+TrajectoryConstraints limits;
+limits.max_velocity = 48_in / 1_s;
+limits.max_acceleration = 96_in / (1_s * 1_s);
+limits.max_lateral_acceleration = 60_in / (1_s * 1_s);
+limits.track_width = 11.375_in;
+
+const Trajectory traj = Trajectory::generate(route, limits);
+const TrajectoryState target = traj.sample(0.5_s);
+// target.x, target.y, target.heading, target.velocity, target.curvature
+```
+
+The path is resampled every `spacing` (default 0.5 in). Each sample's speed is
+the smallest of:
+
+| Limit | Formula |
+| --- | --- |
+| `max_velocity` | fixed |
+| Cornering | `sqrt(max_lateral_acceleration / k)`, using the tightest curvature within half a sample |
+| Outer wheel | `max_velocity / (1 + k * track_width / 2)` |
+| Speeding up | `max_acceleration` from the previous sample |
+| Slowing down | `max_deceleration` (0 = same as `max_acceleration`) to the next sample |
+
+`start_velocity` and `end_velocity` set the speed at each end, for chaining.
+`reversed = true` drives the path with the back of the robot leading: speeds
+are negative and the body heading is the path heading + 180°.
+
+A 48 in straight line at 48 in/s and 96 in/s² takes 1.5 s: 0.5 s speeding up,
+0.5 s at full speed and 0.5 s slowing down.
+
+Use a spline. A polyline from `Path::fromWaypoints()` has zero curvature and a
+heading jump at every corner.
+
+### Following a trajectory (RAMSETE)
+
+`followTrajectory()` drives a tank drive along a trajectory. Each 10 ms it
+compares the odometry pose with where the trajectory says the robot should be,
+and corrects speed and turn rate toward it. `driveTo()` and `curveCircle()`
+measure progress with the drive encoders, which keep counting when a wheel
+slips. RAMSETE uses the pose, so slip shows up as error and gets corrected.
+
+```cpp
+control::RamseteConfig follow;
+follow.feedforward = {0.8_V, 0.18_V / inps, 0.02_V / inps2};  // per side, measured
+// follow.gains = {2.0, 0.7};  // b and zeta, SI units; these are the defaults
+
+const Trajectory traj = Trajectory::generate(route, limits);
+if (followTrajectory(traj, follow, traj.duration() + 500_ms) !=
+    control::MotionResult::Reached) {
+  return;
+}
+```
+
+- Plan the trajectory from where the robot is. It is not shifted to the
+  current pose.
+- The feedforward is per side of the drive: volts for a wheel speed. Measure it
+  as in [Measuring kS and kV](#measuring-ks-and-kv). Without it, nothing drives
+  the robot, so a `kV` of 0 returns `InvalidValue`.
+- It returns when the trajectory ends. RAMSETE stops correcting once the
+  planned speed reaches zero, so it does not wait to settle. Compare
+  `robotState().pose()` with `traj.states().back()` if the end position
+  matters.
+- `Ramsete`, `tankWheelSpeeds()` and `ramseteVoltages()` in
+  `control/ramsete.hpp` are the same steps without the loop, for use in a
+  command.
+
+- Set `follow.track_width` to the drive's effective track width. A skid-steer
+  drive's wheels scrub sideways in a turn, so it turns slower than its real
+  track width predicts. Spin in place with `V` volts on each side (opposite
+  signs), read the turn rate `w` in rad/s, and use `2 * (V - kS) / kV / w`.
+  In the physics simulator this came out 10-65% wider than the real track.
+- The commanded speed never goes above the trajectory's top speed, even while
+  catching up. Without that cap, a 450 rpm drive in the simulator took a
+  24 in arc at 46 in/s, 8 in/s over plan, and slid out.
+
+`b` sets how hard it pulls back toward the path; `zeta` sets damping. In the
+host test, on an S-bend with the left side slipping 8%:
+
+| Follower | Miss at the end |
+| --- | --- |
+| Feedforward only | 17.300 in |
+| RAMSETE, b = 2 | 4.110 in |
+| RAMSETE, b = 10 | 1.105 in |
+
+A steady slip is a constant push, and RAMSETE's correction is proportional, so
+it shrinks the error instead of removing it.
+
+In the physics simulator, with two tracking wheels, on the same 90° arc of
+24 in radius that `curveCircle()` drives (feedforward and effective track
+width measured in the simulator, planned at 60 in/s² and 60 in/s²
+cornering):
+
+| Drive | `curveCircle()` | RAMSETE b = 2 | RAMSETE b = 50 |
+| --- | --- | --- | --- |
+| four_motor_200, forward / reverse | 7.31 / 5.93 in | 6.01 / 4.84 in | 0.42 / 0.37 in |
+| six_motor_450, forward / reverse | 9.54 / 9.53 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
+| speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
+
+RAMSETE stops correcting when the plan does, so a robot that lags ends with
+the error it had: up to 12° off heading on the fast drives. With `exit` true,
+`followTrajectory()` then settles in the time left:
+
+1. It turns in place to the final heading
+   (`RamseteConfig::turn_to_final_heading`).
+2. If the miss along that heading is more than
+   `distance_exit.big_error` (1.5 in by default), it drives straight to close
+   it (`RamseteConfig::settle_position`).
+
+Both are on by default. It does not settle a sideways miss: a tank drive can
+only close a few inches sideways by pivoting, and settling with `boomerang()`
+that way ran out of time in the simulator, up to 179° off heading.
+
+With both on, all nine arc and S-curve scenarios pass with two tracking
+wheels: 0.38-1.60 in and 0.1-2.0° off. Settling takes up to 1.2 s of the time
+limit.
+
+Two stress cases still fail, because what is left is mostly sideways:
+
+| Case (six_motor_450, 90° arc) | Before settling | After |
+| --- | --- | --- |
+| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in |
+| Starting 3.6 in and 8° off the path | 4.53 in | 3.67 in |
+
+In both the robot slides outward through the arc. Lowering b to 10-30 changes
+the miss by at most 1.4 in, and capping the turn rate made every case worse.
+Plan slower on a slippery field.
+
+The default b = 2 is the usual value for full-size robots, and it is too soft
+at VEX scale. Start near 50 and lower it if the robot weaves about the path.
+With drive encoders only (no tracking wheels), RAMSETE at b = 50 missed the
+same arcs by 4.07-4.42 in, against 6.65-14.56 in for `curveCircle()`. It
+can't do better than the pose it corrects toward, and that pose came from the
+same slipping wheels: odometry was 4.3-4.9 in off at the end.
+
+`generate()` returns an empty trajectory when the path is not `valid()` or a
+required limit is zero, negative or not finite.
+
 ### Logging
 
 `PurePursuit::attachLogger(logger)` logs goal x, goal y, cross-track error,
@@ -229,7 +373,8 @@ X-drive and mecanum support, in three parts:
 | --- | --- |
 | `chassis/holonomic_math.hpp` | `holonomic::mix(forward, strafe, turn, kind)` converts -1..1 commands to four wheel outputs, scaled down together if any exceeds 1. `holonomic::fieldToRobot(field_x, field_y, heading_rad)` converts a field-relative command. |
 | `chassis/holonomic_chassis.hpp` | `HolonomicChassis`: four motor groups and an optional IMU |
-| `chassis/holonomic_controller.hpp` | `HolonomicController`: the subsystem, with driver control and `moveToPose()` |
+| `chassis/holonomic_controller.hpp` | `HolonomicController`: the subsystem, with driver control, `moveToPose()` and `followTrajectory()` |
+| `control/holonomic_follower.hpp` | `holonomicFollowStep()`: one tick of trajectory following, without the subsystem |
 
 Strafe is positive to the right; turn is positive clockwise. Motor order is
 front-left, front-right, back-left, back-right, viewed from above with the front
@@ -289,3 +434,49 @@ each shaped by its own `DriveCurve`. With `field_centric_teleop = true`, pushing
 the left stick forward moves the robot toward field +Y regardless of its
 heading. `drive.driveFieldCentric(x, y, turn)` and
 `drive.drive(forward, strafe, turn)` are the underlying calls.
+
+### Following a trajectory
+
+`followTrajectory(trajectory, final_heading, timeout)` drives along a
+[trajectory](#trajectories) while turning from the current heading to
+`final_heading`, evenly over the trajectory's duration. The direction of
+travel and the heading are separate: the robot can strafe along a curve while
+facing one way.
+
+Each tick it:
+
+1. samples the trajectory at the time since the start;
+2. takes the planned speed along the path, and adds `translation_kp` times the
+   x and y position error (in/s per inch);
+3. adds `heading_kp` times the heading error to the planned turn rate;
+4. rotates the field velocity into the robot frame with the odometry heading;
+5. converts forward, strafe and turn speeds to volts with
+   `config.follower.feedforward`, and mixes them onto the wheels.
+
+When the trajectory ends it switches to `moveToPose()` on the last point and
+`final_heading`, on the same timeout clock, and settles with the usual exit
+conditions.
+
+```cpp
+config.follower.feedforward.forward = {0.6_V, 0.30_V / inps, {}};
+config.follower.feedforward.strafe = {0.9_V, 0.42_V / inps, {}};  // mecanum slips sideways
+config.follower.feedforward.turn = {0.8_V, 2.0_V / radps};
+controller.setConfig(config);
+
+TrajectoryConstraints limits;
+limits.max_velocity = 30_in / 1_s;
+limits.max_acceleration = 60_in / (1_s * 1_s);
+const Trajectory traj = Trajectory::generate(route, limits);  // reversed = false
+controller.makeFollowTrajectoryCommand(traj, 90_deg, 5_s)->schedule();
+```
+
+Measure each feedforward axis on its own, as in
+[Measuring kS and kV](#measuring-ks-and-kv): drive forward for `forward`,
+strafe for `strafe`, spin in place for `turn`. `forward.kV` must be positive,
+or the goal ends at once with the drive held.
+
+Plan `max_velocity` within what the drive can do while strafing and turning.
+In the host test, a mecanum drive planned at 24 in/s needs 10.7 V to strafe
+before any turn is added. The wheel mix scales everything down, and tracking
+error reaches 4.32 in. Planned at 16 in/s it stays within 0.55 in.
+

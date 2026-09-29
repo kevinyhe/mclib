@@ -35,6 +35,55 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
 
+  simulator:
+    name: Physics simulator
+    runs-on: ubuntu-latest
+    # vexsim is a private repo. The job needs a VEXSIM_TOKEN secret with read
+    # access to it; without one (forks, or before it is set) the steps skip
+    # and the job passes.
+    env:
+      HAS_VEXSIM_TOKEN: ${{ secrets.VEXSIM_TOKEN != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tracking: [drive, two]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out vexsim
+        if: env.HAS_VEXSIM_TOKEN == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: kevinyhe/vexsim
+          token: ${{ secrets.VEXSIM_TOKEN }}
+          path: vexsim
+
+      - uses: actions/setup-python@v5
+        if: env.HAS_VEXSIM_TOKEN == 'true'
+        with:
+          python-version: '3.12'
+
+      # run.py exits nonzero on any failure, and some scenarios fail on main.
+      # check_baseline.py fails only when a scenario in ci_baseline.json does.
+      - name: Run the scenarios
+        if: env.HAS_VEXSIM_TOKEN == 'true'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 tests/vexsim/run.py --vexsim vexsim \
+            --tracking-mode ${{ matrix.tracking }} --output sim-results || true
+          python3 tests/vexsim/check_baseline.py ${{ matrix.tracking }} sim-results/results.json
+
+      - uses: actions/upload-artifact@v4
+        if: always() && env.HAS_VEXSIM_TOKEN == 'true'
+        with:
+          name: simulator-${{ matrix.tracking }}
+          path: sim-results/results.json
+
+      - name: Skipped
+        if: env.HAS_VEXSIM_TOKEN != 'true'
+        run: echo "VEXSIM_TOKEN is not set; skipping the physics simulator."
+
   firmware:
     name: ARM firmware build and template package
     runs-on: ubuntu-latest

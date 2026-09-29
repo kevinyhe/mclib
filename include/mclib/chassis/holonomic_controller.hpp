@@ -9,9 +9,11 @@
 #include "mclib/command/functionalCommand.h"
 #include "mclib/command/subsystem.h"
 #include "mclib/control/drive_curve.hpp"
+#include "mclib/control/holonomic_follower.hpp"
 #include "mclib/control/motion_config.hpp"
 #include "mclib/device/controller.hpp"
 #include "mclib/math.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "mclib/pid.hpp"
 #include "mclib/units/units.hpp"
 
@@ -33,6 +35,9 @@ struct HolonomicControllerConfig {
                        250.0 * units::millisecond, 4.5};
   /// @brief Cap on every wheel, and on each loop's output before mixing.
   QVoltage max_voltage = 12.0 * units::volt;
+  /// @brief Gains and feedforward for followTrajectory(). The forward
+  ///        feedforward `kV` must be positive for it to run.
+  control::HolonomicFollowerConfig follower{};
   /// @brief makeDriveCommand() drives field-centric (sticks are field axes)
   ///        when true, robot-centric when false.
   bool field_centric_teleop = true;
@@ -94,6 +99,32 @@ class HolonomicController : public Subsystem {
                    QTime timeout = 0.0 * units::second,
                    bool stop_at_end = true);
 
+  /**
+   * @brief Start a scheduler-driven trajectory follow, then settle on its
+   *        last point.
+   *
+   * Each `periodic()` samples @p trajectory at the time since the call and
+   * runs `control::holonomicFollowStep()`. The heading turns from the
+   * current heading to @p final_heading, evenly over the trajectory's
+   * duration, independent of the direction of travel. When the trajectory
+   * ends, the goal becomes a moveToPose() to its last point and
+   * @p final_heading, with the same timeout clock, so the robot settles
+   * with the usual exit conditions.
+   *
+   * An empty trajectory, or `config.follower.feedforward.forward.kV` of zero
+   * or less, ends the goal at once with the drive held.
+   *
+   * @param trajectory    Copied; plan it from where the robot is.
+   * @param final_heading Compass heading to face at the end.
+   * @param timeout       For the whole goal, following and settling. Zero
+   *                      means no timeout.
+   * @param stop_at_end   As for moveToPose().
+   */
+  void followTrajectory(const path::Trajectory& trajectory,
+                        QAngle final_heading,
+                        QTime timeout = 0.0 * units::second,
+                        bool stop_at_end = true);
+
   /// @brief Abort the current goal and hold the drive. No-op when idle.
   void cancel();
   void onDisabled() override { cancel(); m_chassis.stop(); }
@@ -105,6 +136,11 @@ class HolonomicController : public Subsystem {
 
   std::unique_ptr<Command> makeMoveToPoseCommand(
       Pose2D target,
+      QTime timeout = 0.0 * units::second,
+      bool stop_at_end = true);
+  std::unique_ptr<Command> makeFollowTrajectoryCommand(
+      path::Trajectory trajectory,
+      QAngle final_heading,
       QTime timeout = 0.0 * units::second,
       bool stop_at_end = true);
   std::unique_ptr<Command> makeMoveToPointCommand(
@@ -139,6 +175,10 @@ class HolonomicController : public Subsystem {
   void startGoal(double x_in, double y_in, double theta_rad,
                  QTime timeout, bool stop_at_end);
   void runMoveToPose();
+  void runFollow();
+  /// @brief Mix robot-frame volts onto the four wheels, scaling all four down
+  ///        together if one would exceed the cap.
+  void writeRobotVolts(double forward, double strafe, double turn);
   /**
    * @brief End the goal, leaving the drive in a defined state.
    * @param force_stop Brake and hold regardless of `stop_at_end`: a timeout or
@@ -159,6 +199,9 @@ class HolonomicController : public Subsystem {
   double m_start_time_ms = 0.0;
   double m_timeout_ms = 0.0;
   bool m_stop_at_end = true;
+  bool m_following = false;
+  path::Trajectory m_trajectory;
+  double m_follow_start_heading_rad = 0.0;
 };
 
 }  // namespace mclib

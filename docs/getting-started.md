@@ -154,8 +154,9 @@ If no drive is bound, every motion routine prints an error and returns
 `ChassisController` wraps each blocking routine as a command:
 `makeTurnToAngleCommand`, `makeDriveToCommand`, `makeCurveCircleCommand`,
 `makeSwingCommand`, `makeWallResetCommand`, `makeTurnToPointCommand`,
-`makeMoveToPointCommand` and `makeBoomerangCommand`. Each runs the routine on
-its own task and cancels it when interrupted.
+`makeMoveToPointCommand`, `makeBoomerangCommand` and
+`makeFollowTrajectoryCommand`. Each runs the routine on its own task and
+cancels it when interrupted.
 
 `makeDriveDistanceCommand` and `makeTurnToHeadingCommand` run one step per
 scheduler pass instead.
