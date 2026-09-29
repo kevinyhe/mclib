@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-// MotorSubsystem: voltage and percent clamping, what reaches
+// MotorSubsystem: voltage and percent clamping, non-finite input, what reaches
 // the motors each tick, the command factories, a new command mid-command, and
 // disable.
 //
@@ -18,8 +18,10 @@
 #include "support/host_pros.hpp"
 #include "test_assert.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <type_traits>
 
@@ -36,6 +38,9 @@ static_assert(!std::is_move_constructible_v<MotorSubsystem>);
 double mv(int port) { return static_cast<double>(hm::ports[port].millivolts); }
 double writes(int port) { return static_cast<double>(hm::ports[port].voltage_writes); }
 double brakes(int port) { return static_cast<double>(hm::ports[port].brakes); }
+
+constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+constexpr double kInf = std::numeric_limits<double>::infinity();
 
 void state_changes() {
   std::printf("-- setVoltage, setPercent, stop, clamping\n");
@@ -85,6 +90,50 @@ void state_changes() {
   m.motors().setVoltage(-1.5);
   CHECK_EQ(mv(1), -1500.0);
   CHECK_EQ(mv(2), -1500.0);
+}
+
+void non_finite_input() {
+  std::printf("-- NaN and infinity\n");
+  hm::reset();
+  MotorSubsystem m({3});
+
+  // The motor gets 0 V for a NaN, and the commanded voltage has to agree
+  // with what the motor gets.
+  m.setVoltage(5.0);
+  m.setVoltage(kNaN);
+  m.runPeriodic();
+  CHECK_EQ(mv(3), 0.0);
+  CHECK_EQ(m.getCommandedVoltage(), 0.0);
+
+  m.setVoltage(5.0);
+  m.setPercent(kNaN);
+  CHECK_EQ(m.getCommandedVoltage(), 0.0);
+
+  // Infinity also becomes 0 V, as it does in device::MotorGroup and in
+  // PositionMechanism. It comes from a division by zero, not from a driver
+  // asking for full power.
+  m.setVoltage(5.0);
+  m.setVoltage(kInf);
+  CHECK_EQ(m.getCommandedVoltage(), 0.0);
+  m.setVoltage(5.0);
+  m.setVoltage(-kInf);
+  CHECK_EQ(m.getCommandedVoltage(), 0.0);
+  m.setVoltage(5.0);
+  m.setPercent(kInf);
+  CHECK_EQ(m.getCommandedVoltage(), 0.0);
+  m.runPeriodic();
+  CHECK_EQ(mv(3), 0.0);
+
+  // Same through the command factory.
+  mclib::test::setCompetitionStatus(0);
+  std::unique_ptr<Command> nan_cmd = m.makeVoltageCommand(kNaN);
+  m.setName("nan");
+  m.registerSelf();
+  CommandScheduler::schedule(nan_cmd.get());
+  CommandScheduler::run();
+  CHECK_EQ(m.getCommandedVoltage(), 0.0);
+  CommandScheduler::cancel(nan_cmd.get());
+  CommandScheduler::unregisterSubsystem(&m);
 }
 
 void commands_and_disable() {
@@ -171,6 +220,7 @@ void commands_and_disable() {
 int main() {
   mclib::time::ScopedClock clock([]() { return g_fake_ms; });
   state_changes();
+  non_finite_input();
   commands_and_disable();
   return mclib::test::summary("motor_subsystem");
 }
