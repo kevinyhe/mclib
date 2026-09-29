@@ -20,6 +20,8 @@
 #include "mclib/control/robot_state.hpp"
 #include "mclib/device/controller.hpp"
 #include "mclib/math.hpp"
+#include "mclib/path/spline.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "mclib/time.hpp"
 #include "pros/motors.h"
 #include "support/host_devices.hpp"
@@ -448,6 +450,165 @@ void testFieldCentricTeleop(Kind kind) {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// followTrajectory
+
+mclib::path::Trajectory curve(double max_ips = 24.0) {
+  using namespace mclib::units::literals;
+  mclib::path::TrajectoryConstraints limits;
+  limits.max_velocity = max_ips * units::inps;
+  limits.max_acceleration = 48 * mclib::control::inps2;
+  limits.max_lateral_acceleration = 40 * mclib::control::inps2;
+  return mclib::path::Trajectory::generate(
+      mclib::path::generateSpline(
+          {{0_in, 0_in}, {12_in, 18_in}, {0_in, 36_in}, {-18_in, 36_in}}),
+      limits);
+}
+
+/// Feedforward that matches the model's X-drive numbers. On mecanum the model
+/// strafes at 0.75 of this, so the strafe feedforward is 25% short and the
+/// position correction has to make up the rest.
+mclib::control::HolonomicFollowerConfig matchedFollower() {
+  mclib::control::HolonomicFollowerConfig follower;
+  const auto volts_per_inps = (1.0 / Robot::kInPerSecPerVolt) * units::volt / units::inps;
+  follower.feedforward.forward.kV = volts_per_inps;
+  follower.feedforward.strafe.kV = volts_per_inps;
+  follower.feedforward.turn.kV =
+      (Robot::kTurnRadiusIn / Robot::kInPerSecPerVolt) * units::volt / units::radps;
+  return follower;
+}
+
+struct FollowResult {
+  double worst_tracking_in = 0.0;
+  double miss_in = 0.0;
+  double heading_miss_deg = 0.0;
+  std::uint32_t took_ms = 0;
+  bool settled = false;
+};
+
+FollowResult runFollow(Kind kind, mclib::control::HolonomicFollowerConfig follower,
+                       const mclib::path::Trajectory& traj, double final_heading_deg) {
+  resetWorld();
+  Rig rig(kind);
+  auto config = rig.controller.getConfig();
+  config.follower = follower;
+  rig.controller.setConfig(config);
+  rig.robot.place(traj.states().front().pose());
+  // Face +Y at the start whatever the path tangent is: a holonomic drive
+  // does not have to point along its path.
+  rig.robot.place({rig.robot.pose.x, rig.robot.pose.y, 0.0});
+
+  FollowResult out;
+  const std::uint32_t start = now_ms;
+  rig.controller.followTrajectory(traj, final_heading_deg * units::degree,
+                                  6.0 * units::second);
+  while (rig.controller.isActive() && now_ms - start < 6000) {
+    rig.tick();
+    const double t = (now_ms - start) / 1000.0;
+    if (t <= traj.duration().s()) {
+      const auto want = traj.sample(t * units::second);
+      out.worst_tracking_in = std::fmax(
+          out.worst_tracking_in,
+          std::hypot(want.x.in() - rig.robot.pose.x, want.y.in() - rig.robot.pose.y));
+    }
+  }
+  const auto end = traj.states().back();
+  out.took_ms = now_ms - start;
+  out.settled = rig.controller.isSettled() && !rig.controller.isActive();
+  out.miss_in = std::hypot(end.x.in() - rig.robot.pose.x, end.y.in() - rig.robot.pose.y);
+  out.heading_miss_deg = headingDiffDeg(final_heading_deg * kDeg, rig.robot.pose.theta);
+  return out;
+}
+
+void testFollowTrajectory(Kind kind) {
+  const mclib::path::Trajectory traj = curve();
+  CHECK(!traj.empty());
+  const FollowResult followed = runFollow(kind, matchedFollower(), traj, 90.0);
+  mclib::control::HolonomicFollowerConfig open_loop = matchedFollower();
+  open_loop.translation_kp = 0.0;
+  open_loop.heading_kp = 0.0;
+  const FollowResult open = runFollow(kind, open_loop, traj, 90.0);
+  std::printf("  %s followTrajectory (plan %.0f ms): worst tracking %.2f in "
+              "(feedforward only %.2f in), ended %.2f in / %.2f deg off after %u ms\n",
+              kindName(kind), traj.duration().ms(), followed.worst_tracking_in,
+              open.worst_tracking_in, followed.miss_in, followed.heading_miss_deg,
+              followed.took_ms);
+  CHECK(followed.settled);
+  CHECK(followed.took_ms < 6000);
+  CHECK(followed.miss_in <= kMaxMissIn);
+  CHECK(std::fabs(followed.heading_miss_deg) <= kMaxMissDeg);
+  CHECK(followed.worst_tracking_in < open.worst_tracking_in);
+  if (kind == Kind::XDrive) {
+    CHECK(followed.worst_tracking_in < 1.5);
+  } else {
+    // At 24 in/s a mecanum strafe needs 10.7 V before any turn is added, so
+    // the wheel mix saturates and scales everything down. Planned within what
+    // the drive can do, and with the strafe feedforward measured on the
+    // mecanum itself, it tracks as well as the X-drive.
+    mclib::control::HolonomicFollowerConfig measured = matchedFollower();
+    measured.feedforward.strafe.kV =
+        (1.0 / (Robot::kInPerSecPerVolt * 0.75)) * units::volt / units::inps;
+    const mclib::path::Trajectory slower = curve(16.0);
+    const FollowResult tuned = runFollow(kind, measured, slower, 90.0);
+    std::printf("  mecanum at 16 in/s with measured strafe kV: worst tracking %.2f in\n",
+                tuned.worst_tracking_in);
+    CHECK(tuned.worst_tracking_in < 1.5);
+    CHECK(tuned.miss_in <= kMaxMissIn);
+  }
+  CHECK(allWheelsZero());
+  CHECK(allHold());
+}
+
+void testFollowTrajectoryRejects(Kind kind) {
+  // No feedforward: nothing would drive the robot, so the goal ends at once.
+  resetWorld();
+  Rig rig(kind);
+  rig.robot.place({0.0, 0.0, 0.0});
+  rig.controller.followTrajectory(curve(), 0.0 * units::degree, 2.0 * units::second);
+  rig.tick();
+  CHECK(!rig.controller.isActive());
+  CHECK(allWheelsZero());
+  CHECK(allHold());
+
+  // An empty trajectory is the same.
+  resetWorld();
+  Rig rig2(kind);
+  auto config = rig2.controller.getConfig();
+  config.follower = matchedFollower();
+  rig2.controller.setConfig(config);
+  rig2.controller.followTrajectory(mclib::path::Trajectory{}, 0.0 * units::degree);
+  rig2.tick();
+  CHECK(!rig2.controller.isActive());
+  CHECK(allWheelsZero());
+
+  // Cancel mid-follow holds the drive.
+  resetWorld();
+  Rig rig3(kind);
+  config = rig3.controller.getConfig();
+  config.follower = matchedFollower();
+  rig3.controller.setConfig(config);
+  const auto traj = curve();
+  rig3.robot.place(traj.states().front().pose());
+  rig3.controller.followTrajectory(traj, 0.0 * units::degree);
+  for (int i = 0; i < 20; ++i) rig3.tick();
+  CHECK(anyWheelDriven());
+  rig3.controller.cancel();
+  CHECK(!rig3.controller.isActive());
+  CHECK(allWheelsZero());
+  CHECK(allHold());
+
+  // A timeout shorter than the plan stops it where it is.
+  resetWorld();
+  Rig rig4(kind);
+  rig4.controller.setConfig(config);
+  rig4.robot.place(traj.states().front().pose());
+  rig4.controller.followTrajectory(traj, 0.0 * units::degree, 300.0 * units::millisecond);
+  const std::uint32_t took = rig4.runUntilDone(2000);
+  CHECK(took >= 300 && took <= 310);
+  CHECK(allWheelsZero());
+  CHECK(allHold());
+}
+
 int main() {
   mclib::time::ScopedClock clock(fakeClock);
   for (const Kind kind : {Kind::XDrive, Kind::Mecanum}) {
@@ -462,6 +623,8 @@ int main() {
     testThroughScheduler(kind);
     testNonFiniteTarget(kind);
     testFieldCentricTeleop(kind);
+    testFollowTrajectory(kind);
+    testFollowTrajectoryRejects(kind);
   }
   return mclib::test::summary("holonomic_controller_test");
 }

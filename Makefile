@@ -87,6 +87,7 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/control/odometry.cpp \
 	$(SRCDIR)/mclib/control/profile.cpp \
 	$(SRCDIR)/mclib/control/feedforward.cpp \
+	$(SRCDIR)/mclib/control/holonomic_follower.cpp \
 	$(SRCDIR)/mclib/pid.cpp \
 	$(SRCDIR)/mclib/path/path.cpp \
 	$(SRCDIR)/mclib/path/spline.cpp \

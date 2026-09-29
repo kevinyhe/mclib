@@ -272,7 +272,8 @@ X-drive and mecanum support, in three parts:
 | --- | --- |
 | `chassis/holonomic_math.hpp` | `holonomic::mix(forward, strafe, turn, kind)` converts -1..1 commands to four wheel outputs, scaled down together if any exceeds 1. `holonomic::fieldToRobot(field_x, field_y, heading_rad)` converts a field-relative command. |
 | `chassis/holonomic_chassis.hpp` | `HolonomicChassis`: four motor groups and an optional IMU |
-| `chassis/holonomic_controller.hpp` | `HolonomicController`: the subsystem, with driver control and `moveToPose()` |
+| `chassis/holonomic_controller.hpp` | `HolonomicController`: the subsystem, with driver control, `moveToPose()` and `followTrajectory()` |
+| `control/holonomic_follower.hpp` | `holonomicFollowStep()`: one tick of trajectory following, without the subsystem |
 
 Strafe is positive to the right; turn is positive clockwise. Motor order is
 front-left, front-right, back-left, back-right, viewed from above with the front
@@ -332,3 +333,49 @@ each shaped by its own `DriveCurve`. With `field_centric_teleop = true`, pushing
 the left stick forward moves the robot toward field +Y regardless of its
 heading. `drive.driveFieldCentric(x, y, turn)` and
 `drive.drive(forward, strafe, turn)` are the underlying calls.
+
+### Following a trajectory
+
+`followTrajectory(trajectory, final_heading, timeout)` drives along a
+[trajectory](#trajectories) while turning from the current heading to
+`final_heading`, evenly over the trajectory's duration. The direction of
+travel and the heading are separate: the robot can strafe along a curve while
+facing one way.
+
+Each tick it:
+
+1. samples the trajectory at the time since the start;
+2. takes the planned speed along the path, and adds `translation_kp` times the
+   x and y position error (in/s per inch);
+3. adds `heading_kp` times the heading error to the planned turn rate;
+4. rotates the field velocity into the robot frame with the odometry heading;
+5. converts forward, strafe and turn speeds to volts with
+   `config.follower.feedforward`, and mixes them onto the wheels.
+
+When the trajectory ends it switches to `moveToPose()` on the last point and
+`final_heading`, on the same timeout clock, and settles with the usual exit
+conditions.
+
+```cpp
+config.follower.feedforward.forward = {0.6_V, 0.30_V / inps, {}};
+config.follower.feedforward.strafe = {0.9_V, 0.42_V / inps, {}};  // mecanum slips sideways
+config.follower.feedforward.turn = {0.8_V, 2.0_V / radps};
+controller.setConfig(config);
+
+TrajectoryConstraints limits;
+limits.max_velocity = 30_in / 1_s;
+limits.max_acceleration = 60_in / (1_s * 1_s);
+const Trajectory traj = Trajectory::generate(route, limits);  // reversed = false
+controller.makeFollowTrajectoryCommand(traj, 90_deg, 5_s)->schedule();
+```
+
+Measure each feedforward axis on its own, as in
+[Measuring kS and kV](#measuring-ks-and-kv): drive forward for `forward`,
+strafe for `strafe`, spin in place for `turn`. `forward.kV` must be positive,
+or the goal ends at once with the drive held.
+
+Plan `max_velocity` within what the drive can do while strafing and turning.
+In the host test, a mecanum drive planned at 24 in/s needs 10.7 V to strafe
+before any turn is added. The wheel mix scales everything down, and tracking
+error reaches 4.32 in. Planned at 16 in/s it stays within 0.55 in.
+
