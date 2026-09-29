@@ -13,6 +13,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   poll; `clear()` skips the rest of the current poll.
 - `ProxyCommand` no longer calls through a null pointer when its supplier
   returns `nullptr`. The proxy finishes on the next tick instead.
+- `MotorSubsystem` stored NaN as its commanded voltage while the motors got
+  0 V, and turned an infinite voltage or percent into ±12 V. Both now become
+  0 V, so `getCommandedVoltage()` matches what the motors get.
 
 ## 0.1.0
 
