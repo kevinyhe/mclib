@@ -9,13 +9,15 @@
 // the wrapper adds: drawing, touch and button handling, the controller line,
 // the polling task, and saving the pick to a file.
 //
-// The PROS screen, controller, clock and task calls are the stand-ins in
-// tests/support/host_screen.cpp.
+// The PROS screen, clock and task calls are the stand-ins in
+// tests/support/host_screen.cpp. The controller is the shared stand-in in
+// tests/support/host_devices.cpp.
 
 #include "mclib/auton/selector.hpp"
 #include "mclib/device/controller.hpp"
 #include "pros/colors.hpp"
 #include "pros/misc.h"
+#include "support/host_devices.hpp"
 #include "support/host_pros.hpp"
 #include "support/host_screen.hpp"
 #include "test_assert.hpp"
@@ -27,6 +29,7 @@
 
 namespace {
 
+namespace hd = mclib::test::host_devices;
 namespace hs = mclib::test::host_screen;
 using mclib::auton::AutonSelector;
 using mclib::auton::SelectorModel;
@@ -57,7 +60,7 @@ void touchButton(const AutonSelector& selector, int index) {
 }
 
 void setButton(DigitalButton button, bool down) {
-  hs::button_down[static_cast<int>(mclib::device::toProsDigitalButton(button))] = down;
+  hd::button_down[static_cast<int>(mclib::device::toProsDigitalButton(button))] = down;
 }
 
 /// add(), select(), next(), previous() and runSelected() pass through to the
@@ -65,6 +68,7 @@ void setButton(DigitalButton button, bool down) {
 void reportsChosenRoutine() {
   std::printf("-- runSelected() runs the chosen routine\n");
   hs::reset();
+  hd::reset();
   AutonSelector selector;
   CHECK(!selector.runSelected());
 
@@ -95,6 +99,7 @@ void reportsChosenRoutine() {
 void drawsButtons() {
   std::printf("-- drawBrainScreen() highlights the selection\n");
   hs::reset();
+  hd::reset();
   AutonSelector selector;
   selector.drawBrainScreen();
   CHECK_EQ(d(hs::erase_count), 1.0);
@@ -127,6 +132,7 @@ void drawsButtons() {
 void touchSelectsOnPress() {
   std::printf("-- brain touch selects on the press edge only\n");
   hs::reset();
+  hd::reset();
   AutonSelector selector;
   Routines routines;
   routines.addTo(selector);
@@ -170,6 +176,7 @@ void touchSelectsOnPress() {
 void controllerButtonsStep() {
   std::printf("-- controller buttons step the selection\n");
   hs::reset();
+  hd::reset();
   AutonSelector selector;
   Routines routines;
   routines.addTo(selector);
@@ -213,6 +220,7 @@ void controllerButtonsStep() {
 void controllerCustomButtons() {
   std::printf("-- bindController() with custom buttons\n");
   hs::reset();
+  hd::reset();
   AutonSelector selector;
   Routines routines;
   routines.addTo(selector);
@@ -235,35 +243,36 @@ void controllerCustomButtons() {
 void controllerTextIsPaddedAndRateLimited() {
   std::printf("-- controller line is padded and rate limited\n");
   hs::reset();
+  hd::reset();
   hs::now_ms = 1000;
   AutonSelector selector;
   Controller controller;
   selector.bindController(controller);
 
   selector.pollController();
-  CHECK(hs::controller_text.size() == 1 && hs::controller_text.back() == "no autons      ");
+  CHECK(hd::controller_text.size() == 1 && hd::controller_text.back() == "no autons      ");
 
   selector.add("a very long routine name", nullptr);
   hs::now_ms += 50;
   selector.pollController();
-  CHECK(hs::controller_text.size() == 2 && hs::controller_text.back() == "a very long rou");
+  CHECK(hd::controller_text.size() == 2 && hd::controller_text.back() == "a very long rou");
 
   selector.add("x", nullptr);
   selector.select(1);
   // 10 ms later: too soon, nothing written yet.
   hs::now_ms += 10;
   selector.pollController();
-  CHECK_EQ(d(static_cast<long>(hs::controller_text.size())), 2.0);
+  CHECK_EQ(d(static_cast<long>(hd::controller_text.size())), 2.0);
   // 50 ms after the last write: the pending change goes out, padded so the
   // tail of the longer name is wiped.
   hs::now_ms += 40;
   selector.pollController();
-  CHECK(hs::controller_text.size() == 3 && hs::controller_text.back() == "x              ");
+  CHECK(hd::controller_text.size() == 3 && hd::controller_text.back() == "x              ");
 
   // Nothing changed: nothing written, however long it has been.
   hs::now_ms += 500;
   selector.pollController();
-  CHECK_EQ(d(static_cast<long>(hs::controller_text.size())), 3.0);
+  CHECK_EQ(d(static_cast<long>(hd::controller_text.size())), 3.0);
 }
 
 /// startPolling() runs until the field reports autonomous, then stops itself
@@ -271,6 +280,7 @@ void controllerTextIsPaddedAndRateLimited() {
 void pollingStopsOnAutonomous() {
   std::printf("-- the polling task stops itself on autonomous\n");
   hs::reset();
+  hd::reset();
   AutonSelector selector;
   Routines routines;
   routines.addTo(selector);
@@ -294,7 +304,7 @@ void pollingStopsOnAutonomous() {
   CHECK_EQ(d(hs::now_ms), 60.0);
   CHECK_EQ(selector.selected(), 1.0);
   // Final forced write shows the pick that is about to run.
-  CHECK(!hs::controller_text.empty() && hs::controller_text.back() == "right          ");
+  CHECK(!hd::controller_text.empty() && hd::controller_text.back() == "right          ");
 
   // Already autonomous: the new task exits on its first check.
   hs::on_delay = nullptr;
@@ -314,6 +324,7 @@ void pollingStopsOnAutonomous() {
 void saveAndLoad() {
   std::printf("-- saveSelection() and loadSelection()\n");
   hs::reset();
+  hd::reset();
   const std::string path =
       (std::filesystem::temp_directory_path() /
        ("mclib_selector_test_" + std::to_string(::getpid()) + ".txt"))

@@ -9,12 +9,12 @@
 // disable.
 //
 // The motors are a real device::MotorGroup over the host pros::MotorGroup in
-// tests/support/host_motor.cpp, which records every command per port.
+// tests/support/host_devices.cpp, which records every command per port.
 
 #include "mclib/command/commandScheduler.h"
 #include "mclib/mechanism/motor_subsystem.hpp"
 #include "mclib/time.hpp"
-#include "support/host_motor.hpp"
+#include "support/host_devices.hpp"
 #include "support/host_pros.hpp"
 #include "test_assert.hpp"
 
@@ -26,7 +26,7 @@
 #include <type_traits>
 
 using mclib::mechanism::MotorSubsystem;
-namespace hm = mclib::test::host_motor;
+namespace hd = mclib::test::host_devices;
 
 namespace {
 
@@ -35,16 +35,16 @@ std::uint32_t g_fake_ms = 0;
 static_assert(!std::is_copy_constructible_v<MotorSubsystem>);
 static_assert(!std::is_move_constructible_v<MotorSubsystem>);
 
-double mv(int port) { return static_cast<double>(hm::ports[port].millivolts); }
-double writes(int port) { return static_cast<double>(hm::ports[port].voltage_writes); }
-double brakes(int port) { return static_cast<double>(hm::ports[port].brakes); }
+double mv(int port) { return static_cast<double>(hd::motors[port].millivolts); }
+double writes(int port) { return static_cast<double>(hd::motors[port].voltage_writes); }
+double brakes(int port) { return static_cast<double>(hd::motors[port].brakes); }
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kInf = std::numeric_limits<double>::infinity();
 
 void state_changes() {
   std::printf("-- setVoltage, setPercent, stop, clamping\n");
-  hm::reset();
+  hd::reset();
   MotorSubsystem m({1, -2});
   CHECK_EQ(m.getCommandedVoltage(), 0.0);
   // Construction writes nothing.
@@ -94,7 +94,7 @@ void state_changes() {
 
 void non_finite_input() {
   std::printf("-- NaN and infinity\n");
-  hm::reset();
+  hd::reset();
   MotorSubsystem m({3});
 
   // The motor gets 0 V for a NaN, and the commanded voltage has to agree
@@ -138,7 +138,7 @@ void non_finite_input() {
 
 void commands_and_disable() {
   std::printf("-- commands, a new command mid-command, and disable\n");
-  hm::reset();
+  hd::reset();
   mclib::test::setCompetitionStatus(0);
   MotorSubsystem m({4, 5}, mclib::device::Gearset::Green);
   m.setName("flywheel");

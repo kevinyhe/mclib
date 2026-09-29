@@ -8,8 +8,8 @@
 // retry budget and its refill, a jam that clears mid-reversal, and disable.
 //
 // Runs on a mclib::time::ScopedClock at 10 ms per tick. The motors are the
-// host stand-in in tests/support/host_motor_group.cpp: the test sets the
-// current and speed the group reports and reads back the voltage it was sent.
+// host stand-in in tests/support/host_devices.cpp: the test sets the current
+// and speed both ports report and reads back the voltage they were sent.
 //
 // Timing with the thresholds below (dwell 250 ms, unjam 250 ms, clear 1000 ms):
 // the first stalled tick starts the dwell timer, the unjam starts 25 ticks
@@ -18,7 +18,7 @@
 
 #include "mclib/mechanism/conveyor_mechanism.hpp"
 #include "mclib/time.hpp"
-#include "support/host_motor_group.hpp"
+#include "support/host_devices.hpp"
 #include "test_assert.hpp"
 
 #include <cstdint>
@@ -27,7 +27,7 @@
 using mclib::mechanism::ConveyorConfig;
 using mclib::mechanism::ConveyorMechanism;
 using mclib::mechanism::ConveyorState;
-namespace host = mclib::test::host_motor_group;
+namespace host = mclib::test::host_devices;
 
 namespace {
 
@@ -70,17 +70,19 @@ struct Rig {
     running();
   }
 
-  host::Group& motors() { return host::group[kPort]; }
-  double volts() { return motors().volts; }
+  /// The first motor. The conveyor sends both motors the same command.
+  host::Motor& motors() { return host::motors[kPort]; }
+  double volts() { return motors().volts(); }
 
-  void stalled() {
-    motors().current_ma = kStallMa;
-    motors().rpm = kStallRpm;
+  /// Set the current and speed both motors report.
+  void reads(std::int32_t current_ma, double rpm) {
+    for (const int port : {static_cast<int>(kPort), kPort + 1}) {
+      host::motors[port].current_ma = current_ma;
+      host::motors[port].rpm = rpm;
+    }
   }
-  void running() {
-    motors().current_ma = kIdleMa;
-    motors().rpm = kRunRpm;
-  }
+  void stalled() { reads(kStallMa, kStallRpm); }
+  void running() { reads(kIdleMa, kRunRpm); }
 
   void tick() {
     ++ticks;
@@ -142,7 +144,8 @@ void statesSendTheirVoltage() {
   {
     Rig rig;
     CHECK(rig.conveyor.getConveyorState() == ConveyorState::Stopped);
-    CHECK_EQ(rig.motors().ports.size(), 2.0);
+    CHECK(host::motors.size() == 2 && host::motors.count(kPort) == 1 &&
+          host::motors.count(kPort + 1) == 1);
 
     rig.conveyor.setConveyorState(ConveyorState::Forward);
     CHECK_EQ(rig.motors().voltage_writes, 0.0);
@@ -217,8 +220,7 @@ void jamNeedsBothConditionsForTheDwell() {
     // High current while still moving: loaded, not jammed.
     Rig rig;
     rig.conveyor.setConveyorState(ConveyorState::Forward);
-    rig.motors().current_ma = kStallMa;
-    rig.motors().rpm = kRunRpm;
+    rig.reads(kStallMa, kRunRpm);
     CHECK_EQ(rig.ticksUntilUnjam(300), -1.0);
     CHECK_EQ(rig.volts(), 12.0);
   }
@@ -226,8 +228,7 @@ void jamNeedsBothConditionsForTheDwell() {
     // Slow with low current: not pushing against anything.
     Rig rig;
     rig.conveyor.setConveyorState(ConveyorState::Forward);
-    rig.motors().current_ma = kIdleMa;
-    rig.motors().rpm = kStallRpm;
+    rig.reads(kIdleMa, kStallRpm);
     CHECK_EQ(rig.ticksUntilUnjam(300), -1.0);
     CHECK_EQ(rig.volts(), 12.0);
   }

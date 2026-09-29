@@ -66,14 +66,22 @@ HOST_CXX?=g++
 HOST_CXXFLAGS?=-std=$(CXX_STANDARD) -I$(INCDIR) -I$(TESTDIR) -DMCLIB_HOST_BUILD -Wall -Wextra -g -O1
 HOST_LDFLAGS?=-pthread
 
-# Library sources that compile without PROS headers, linked into every test.
-# Expected to grow as more of src/ is made PROS-free.
+# Library sources and host stand-ins linked into every test.
 #
-# tests/support/ holds host-only stand-ins for the PROS-backed parts of the
-# library - systemMillis() and the PROS competition-status calls the
-# CommandScheduler makes. It is not globbed into TEST_SRCS
-# because `make test` only globs tests/*.cpp, so nothing in there is mistaken
-# for a test.
+# tests/support/ holds host-only stand-ins for what the library gets from
+# libpros. It is not globbed into TEST_SRCS because `make test` only globs
+# tests/*.cpp, so nothing in there is mistaken for a test.
+#   host_time.cpp       mclib::time::systemMillis()
+#   host_pros.cpp       the competition-status calls CommandScheduler makes
+#   host_pneumatic.cpp  mclib::device::Pneumatic, in place of device/pneumatic.cpp
+#   host_devices.cpp    pros::Motor, MotorGroup, Imu, Controller and Mutex
+# Each class has one stand-in, in one of these files. A test that
+# needs a new call adds it there rather than writing its own.
+#
+# Nothing in HOST_TEST_SRC may define pros::millis(), pros::delay() or
+# pros::Task: motion_safety_test defines its own clock, and
+# auton_selector_test gets one from host_screen.cpp. Those two have their own
+# link rules below.
 HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/math.cpp \
 	$(SRCDIR)/mclib/utils.cpp \
@@ -102,19 +110,22 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/mechanism/toggle_mechanism.cpp \
 	$(SRCDIR)/mclib/mechanism/toggle_group_mechanism.cpp \
 	$(SRCDIR)/mclib/mechanism/motor_subsystem.cpp \
-	$(SRCDIR)/mclib/device/motor.cpp \
-	$(SRCDIR)/mclib/device/motor_group.cpp \
-	$(SRCDIR)/mclib/device/types.cpp \
-	$(TESTDIR)/support/host_motor.cpp \
 	$(SRCDIR)/mclib/mechanism/pneumatic_subsystem.cpp \
 	$(SRCDIR)/mclib/mechanism/conveyor_mechanism.cpp \
 	$(SRCDIR)/mclib/mechanism/pto_mechanism.cpp \
-	$(TESTDIR)/support/host_motor_group.cpp \
+	$(SRCDIR)/mclib/chassis/holonomic_chassis.cpp \
+	$(SRCDIR)/mclib/chassis/holonomic_controller.cpp \
+	$(SRCDIR)/mclib/device/motor.cpp \
+	$(SRCDIR)/mclib/device/motor_group.cpp \
+	$(SRCDIR)/mclib/device/inertial.cpp \
+	$(SRCDIR)/mclib/device/controller.cpp \
+	$(SRCDIR)/mclib/device/types.cpp \
 	$(SRCDIR)/mclib/telemetry/sd_sink.cpp \
 	$(SRCDIR)/mclib/telemetry/file_sink.cpp \
 	$(TESTDIR)/support/host_time.cpp \
 	$(TESTDIR)/support/host_pros.cpp \
-	$(TESTDIR)/support/host_pneumatic.cpp
+	$(TESTDIR)/support/host_pneumatic.cpp \
+	$(TESTDIR)/support/host_devices.cpp
 
 # One test per file: any tests/*.cpp with its own int main() returning 0 on
 # success. No registration, no framework.
@@ -148,36 +159,18 @@ $(TESTBINDIR)/motion_safety_test: $(TESTDIR)/motion_safety_test.cpp $(HOST_TEST_
 
 -include $(MOTION_TEST_OBJS:.o=.d)
 
-# Only the auton selector test links the real selector and controller wrapper,
-# over the screen, controller, clock and task stand-ins in
-# tests/support/host_screen.cpp. That file defines pros::millis(), which
-# motion_safety_test defines too, so it stays out of HOST_TEST_SRC.
+# Only the auton selector test links the real selector, over the screen,
+# clock and task stand-ins in tests/support/host_screen.cpp. That file
+# defines pros::millis(), which motion_safety_test defines too, so it stays
+# out of HOST_TEST_SRC.
 SELECTOR_TEST_OBJS:=$(HOST_OBJDIR)/$(SRCDIR)/mclib/auton/selector.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/controller.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/types.o \
 	$(HOST_OBJDIR)/$(TESTDIR)/support/host_screen.o
 $(TESTBINDIR)/auton_selector_test: $(TESTDIR)/auton_selector_test.cpp $(HOST_TEST_OBJS) $(SELECTOR_TEST_OBJS)
 	@mkdir -p $(dir $@)
+	@echo "Linking $@"
 	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(SELECTOR_TEST_OBJS) $(HOST_LDFLAGS)
 
 -include $(SELECTOR_TEST_OBJS:.o=.d)
-
-# The holonomic drive owns real device wrappers, so its test links them over
-# the libpros stand-ins in tests/support/host_devices.cpp. Those define pros::
-# symbols, so they stay out of HOST_TEST_SRC.
-HOLONOMIC_TEST_OBJS:=$(HOST_OBJDIR)/$(SRCDIR)/mclib/chassis/holonomic_controller.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/chassis/holonomic_chassis.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/motor_group.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/inertial.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/controller.o \
-	$(HOST_OBJDIR)/$(SRCDIR)/mclib/device/types.o \
-	$(HOST_OBJDIR)/$(TESTDIR)/support/host_devices.o
-$(TESTBINDIR)/holonomic_controller_test: $(TESTDIR)/holonomic_controller_test.cpp $(HOST_TEST_OBJS) $(HOLONOMIC_TEST_OBJS)
-	@mkdir -p $(dir $@)
-	@echo "Linking $@"
-	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(HOLONOMIC_TEST_OBJS) $(HOST_LDFLAGS)
-
--include $(HOLONOMIC_TEST_OBJS:.o=.d)
 
 -include $(HOST_DEPS)
 

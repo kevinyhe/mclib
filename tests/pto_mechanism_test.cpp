@@ -8,14 +8,14 @@
 // watchdog, and disable.
 //
 // Runs on a mclib::time::ScopedClock at 10 ms per tick. The motors are the
-// host stand-in in tests/support/host_motor_group.cpp and the solenoid is the
+// host stand-in in tests/support/host_devices.cpp and the solenoid is the
 // one in tests/support/host_pneumatic.cpp, so the test reads back the voltage
 // the motors got, whether they were braked, and the solenoid pin level.
 
 #include "mclib/command/command.h"
 #include "mclib/mechanism/pto_mechanism.hpp"
 #include "mclib/time.hpp"
-#include "support/host_motor_group.hpp"
+#include "support/host_devices.hpp"
 #include "support/host_pneumatic.hpp"
 #include "test_assert.hpp"
 
@@ -26,7 +26,7 @@
 using mclib::mechanism::PTOConfig;
 using mclib::mechanism::PTOMechanism;
 using mclib::units::millisecond;
-namespace host_motors = mclib::test::host_motor_group;
+namespace host_motors = mclib::test::host_devices;
 namespace host_pins = mclib::test::host_pneumatic;
 
 namespace {
@@ -59,7 +59,8 @@ struct Rig {
 
   explicit Rig(const PTOConfig& c = config()) : pto((resetHost(), c)) {}
 
-  host_motors::Group& motors() { return host_motors::group[kPort]; }
+  /// The first motor, on the unreversed port. Every call reaches both.
+  host_motors::Motor& motors() { return host_motors::motors[kPort]; }
   bool pin() { return host_pins::pin[kAdi]; }
 
   void tick() {
@@ -100,7 +101,7 @@ void bootIsAShift() {
   CHECK(rig.pto.driveDisengaged(6.0));
   CHECK(rig.pto.motorsFor(false) == &rig.pto.motors());
   rig.tick();
-  CHECK_EQ(rig.motors().volts, 6.0);
+  CHECK_EQ(rig.motors().volts(), 6.0);
   CHECK(!rig.motors().braked);
 
   // Starting engaged puts the solenoid on the engaged side from the start.
@@ -239,7 +240,7 @@ void driveGuard() {
   CHECK(!rig.pto.drive(true, -9.0));
   CHECK_EQ(rig.pto.getCommandedVoltage(), 6.0);
   rig.tick();
-  CHECK_EQ(rig.motors().volts, 6.0);
+  CHECK_EQ(rig.motors().volts(), 6.0);
 
   // Writes are clamped to +/-12 V.
   CHECK(rig.pto.driveDisengaged(20.0));
@@ -277,7 +278,7 @@ void driveGuard() {
   CHECK(rig.pto.driveEngaged(9.0));
   CHECK(rig.pto.motorsFor(true) == &rig.pto.motors());
   rig.tick();
-  CHECK_EQ(rig.motors().volts, 9.0);
+  CHECK_EQ(rig.motors().volts(), 9.0);
 
   // Shifting back: the lift's voltage does not carry over to the drivetrain.
   rig.pto.disengage();
@@ -285,7 +286,7 @@ void driveGuard() {
   CHECK(rig.pto.isShiftSettled());
   CHECK_EQ(rig.pto.getCommandedVoltage(), 0.0);
   CHECK(rig.motors().braked);
-  CHECK_EQ(rig.motors().volts, 0.0);
+  CHECK_EQ(rig.motors().volts(), 0.0);
 
   // A zero write from the owner brakes rather than coasting.
   CHECK(rig.pto.driveDisengaged(0.0));
@@ -303,7 +304,7 @@ void driveWatchdog() {
     rig.ticks(25);
     CHECK(rig.pto.driveDisengaged(6.0));
     rig.ticks(9);  // 90 ms after the write
-    CHECK_EQ(rig.motors().volts, 6.0);
+    CHECK_EQ(rig.motors().volts(), 6.0);
     rig.tick();  // 100 ms
     CHECK_EQ(rig.pto.getCommandedVoltage(), 0.0);
     CHECK(rig.motors().braked);
@@ -313,14 +314,14 @@ void driveWatchdog() {
       CHECK(rig.pto.driveDisengaged(4.0));
       rig.tick();
     }
-    CHECK_EQ(rig.motors().volts, 4.0);
+    CHECK_EQ(rig.motors().volts(), 4.0);
 
     // Decays at exactly 100 ms whatever the clock read at the write.
     int off = 0;
     for (int write = 0; write < 200; ++write) {
       rig.pto.driveDisengaged(4.0);
       rig.ticks(9);
-      const bool live_at_90 = rig.motors().volts == 4.0;
+      const bool live_at_90 = rig.motors().volts() == 4.0;
       rig.tick();
       if (!live_at_90 || !rig.motors().braked) {
         ++off;
@@ -338,7 +339,7 @@ void driveWatchdog() {
     CHECK(rig.pto.driveDisengaged(6.0));
     rig.ticks(500);
     CHECK_EQ(rig.pto.getCommandedVoltage(), 6.0);
-    CHECK_EQ(rig.motors().volts, 6.0);
+    CHECK_EQ(rig.motors().volts(), 6.0);
   }
 }
 
@@ -353,7 +354,7 @@ void disableStops() {
     rig.ticks(25);
     CHECK(rig.pto.driveEngaged(9.0));
     rig.tick();
-    CHECK_EQ(rig.motors().volts, 9.0);
+    CHECK_EQ(rig.motors().volts(), 9.0);
 
     const int brakes = rig.motors().brakes;
     rig.pto.onDisabled();
@@ -369,12 +370,12 @@ void disableStops() {
     // And the old voltage does not come back.
     rig.ticks(10);
     CHECK(rig.motors().braked);
-    CHECK_EQ(rig.motors().volts, 0.0);
+    CHECK_EQ(rig.motors().volts(), 0.0);
 
     // The owner can drive again afterwards.
     CHECK(rig.pto.driveEngaged(5.0));
     rig.tick();
-    CHECK_EQ(rig.motors().volts, 5.0);
+    CHECK_EQ(rig.motors().volts(), 5.0);
   }
   {
     // stop() is allowed mid-shift and from the side that does not own the PTO.
@@ -401,7 +402,7 @@ void disableStops() {
     rig.pto.setEnabled(true);
     CHECK(rig.pto.driveDisengaged(6.0));
     rig.tick();
-    CHECK_EQ(rig.motors().volts, 6.0);
+    CHECK_EQ(rig.motors().volts(), 6.0);
   }
 }
 

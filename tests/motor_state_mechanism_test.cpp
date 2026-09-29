@@ -9,13 +9,13 @@
 // inherited state commands, a new state mid-command, and disable.
 //
 // The motors are real device::Motor objects over the host pros::Motor in
-// tests/support/host_motor.cpp, which records every command per port.
+// tests/support/host_devices.cpp, which records every command per port.
 
 #include "mclib/command/commandScheduler.h"
 #include "mclib/mechanism/motor_state_mechanism.hpp"
 #include "mclib/time.hpp"
 #include "mclib/units/units.hpp"
-#include "support/host_motor.hpp"
+#include "support/host_devices.hpp"
 #include "support/host_pros.hpp"
 #include "test_assert.hpp"
 
@@ -28,7 +28,7 @@
 
 using mclib::device::Gearset;
 using mclib::mechanism::MotorStateMechanism;
-namespace hm = mclib::test::host_motor;
+namespace hd = mclib::test::host_devices;
 
 namespace {
 
@@ -53,15 +53,15 @@ std::vector<double> voltages(const Intake& state) {
   return {};
 }
 
-double mv(int port) { return static_cast<double>(hm::ports[port].millivolts); }
-double writes(int port) { return static_cast<double>(hm::ports[port].voltage_writes); }
+double mv(int port) { return static_cast<double>(hd::motors[port].millivolts); }
+double writes(int port) { return static_cast<double>(hd::motors[port].voltage_writes); }
 
 void construction() {
   std::printf("-- construction writes nothing\n");
-  hm::reset();
+  hd::reset();
   IntakeMech m({1, -2, 3}, Gearset::Green, Intake::In, voltages);
   CHECK_EQ(static_cast<double>(m.motorCount()), 3.0);
-  CHECK(hm::ports.empty() || (writes(1) == 0.0 && writes(2) == 0.0));
+  CHECK(writes(1) == 0.0 && writes(2) == 0.0);
 
   IntakeMech from_vector(std::vector<std::int8_t>{4, 5}, Gearset::Red, Intake::Off,
                          voltages);
@@ -75,7 +75,7 @@ void construction() {
 
 void voltage_map_shapes() {
   std::printf("-- how the map result is spread over the motors\n");
-  hm::reset();
+  hd::reset();
   IntakeMech m({1, -2, 3}, Gearset::Blue, Intake::In, voltages);
 
   // One value: every motor gets it. A reversed port gets the same command;
@@ -112,7 +112,7 @@ void voltage_map_shapes() {
   CHECK_EQ(mv(1), 1000.0);
   CHECK_EQ(mv(2), 2000.0);
   CHECK_EQ(mv(3), 3000.0);
-  CHECK(hm::ports.count(4) == 0);
+  CHECK_EQ(writes(4), 0.0);
 
   // Out of range and non-finite values are cut down by device::Motor.
   IntakeMech wild({6}, Gearset::Blue, Intake::In,
@@ -149,17 +149,17 @@ void voltage_map_shapes() {
 
 void motor_access() {
   std::printf("-- motor(index)\n");
-  hm::reset();
+  hd::reset();
   IntakeMech m({7, 8}, Gearset::Blue, Intake::Off, voltages);
   m.motor(1).setVoltage(4.5);
   CHECK_EQ(mv(8), 4500.0);
-  CHECK(hm::ports.count(7) == 0);
+  CHECK_EQ(writes(7), 0.0);
   // motor(index) does not check the index. motorCount() is the bound.
 }
 
 void commands_and_disable() {
   std::printf("-- commands, a new state mid-command, and disable\n");
-  hm::reset();
+  hd::reset();
   mclib::test::setCompetitionStatus(0);
   IntakeMech m({1, 2}, Gearset::Blue, Intake::Off, voltages);
   m.setName("intake");

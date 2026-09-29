@@ -5,9 +5,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
 // Host stand-ins for the PROS calls src/mclib/auton/selector.cpp makes: the
-// brain screen, pros::Controller, pros::millis() and pros::Task. On the robot
-// these come from libpros. Each one here records what it was asked to do in
-// host_screen.hpp, so a test can check what the selector drew and wrote.
+// brain screen, pros::millis() and pros::Task. On the robot these come from
+// libpros. Each one here records what it was asked to do in host_screen.hpp,
+// so a test can check what the selector drew. pros::Controller is the shared
+// stand-in in tests/support/host_devices.cpp.
 //
 // pros::Task runs its function to completion inside the constructor. The
 // selector's poll loop only returns once the field reports autonomous, so a
@@ -18,7 +19,6 @@
 
 #include "support/host_screen.hpp"
 
-#include "pros/misc.hpp"
 #include "pros/rtos.hpp"
 #include "pros/screen.hpp"
 
@@ -35,8 +35,6 @@ std::vector<std::string> printed;
 bool touch_down = false;
 int touch_x = 0;
 int touch_y = 0;
-std::map<int, bool> button_down;
-std::vector<std::string> controller_text;
 std::uint32_t now_ms = 0;
 std::function<void()> on_delay;
 int tasks_started = 0;
@@ -56,8 +54,6 @@ void reset() {
   touch_down = false;
   touch_x = 0;
   touch_y = 0;
-  button_down.clear();
-  controller_text.clear();
   now_ms = 0;
   on_delay = nullptr;
   tasks_started = 0;
@@ -116,20 +112,6 @@ extern "C" std::uint32_t screen_print_at(text_format_e_t, const std::int16_t, co
 }  // namespace c
 
 extern "C" std::uint32_t millis() { return hs::now_ms; }
-
-Controller::Controller(controller_id_e_t id) : _id(id) {}
-
-std::int32_t Controller::get_digital(controller_digital_e_t button) {
-  const auto found = hs::button_down.find(static_cast<int>(button));
-  return found != hs::button_down.end() && found->second ? 1 : 0;
-}
-
-std::int32_t Controller::get_analog(controller_analog_e_t) { return 0; }
-
-std::int32_t Controller::set_text(std::uint8_t, std::uint8_t, const char* str) {
-  hs::controller_text.emplace_back(str);
-  return 1;
-}
 
 Task::Task(task_fn_t function, void* parameters, std::uint32_t, std::uint16_t, const char*) {
   ++hs::tasks_started;

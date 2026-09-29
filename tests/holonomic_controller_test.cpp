@@ -50,14 +50,14 @@ constexpr int kHold = static_cast<int>(pros::E_MOTOR_BRAKE_HOLD);
 const double kMaxMissIn = mclib::HolonomicControllerConfig{}.translation_exit.big_error;
 const double kMaxMissDeg = mclib::HolonomicControllerConfig{}.heading_exit.big_error;
 
-// Ports: one motor per corner, all forward so the stand-in's volts are the
-// wheel commands as the controller wrote them.
+// Ports: one motor per corner, all forward, so each motor's output is the
+// wheel command as the controller wrote it.
 constexpr int kFL = 1, kFR = 2, kBL = 3, kBR = 4;
 
 std::uint32_t now_ms = 0;
 std::uint32_t fakeClock() { return now_ms; }
 
-double wheel(int port) { return hd::motors[port].volts; }
+double wheel(int port) { return hd::motors[port].outputVolts(); }
 
 bool allWheelsZero() {
   return wheel(kFL) == 0.0 && wheel(kFR) == 0.0 && wheel(kBL) == 0.0 &&
@@ -70,8 +70,8 @@ bool anyWheelDriven() {
 }
 
 int brakeCalls() {
-  return hd::motors[kFL].brake_calls + hd::motors[kFR].brake_calls +
-         hd::motors[kBL].brake_calls + hd::motors[kBR].brake_calls;
+  return hd::motors[kFL].brakes + hd::motors[kFR].brakes +
+         hd::motors[kBL].brakes + hd::motors[kBR].brakes;
 }
 
 bool allHold() {

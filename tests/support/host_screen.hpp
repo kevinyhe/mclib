@@ -7,14 +7,13 @@
 
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <string>
 #include <vector>
 
 /**
- * @brief State behind the host stand-ins for the brain screen, controller,
- *        clock and task calls AutonSelector makes. See
- *        tests/support/host_screen.cpp.
+ * @brief State behind the host stand-ins for the brain screen, clock and
+ *        task calls AutonSelector makes. See tests/support/host_screen.cpp.
+ *        The controller it reads is the shared one in host_devices.hpp.
  *
  * Only auton_selector_test links this. It defines pros::millis(), which
  * motion_safety_test also defines, so it cannot go in HOST_TEST_SRC.
@@ -38,11 +37,6 @@ extern std::vector<std::string> printed;
 extern bool touch_down;
 extern int touch_x;
 extern int touch_y;
-
-/// @brief Controller buttons held down, keyed by pros::controller_digital_e_t.
-extern std::map<int, bool> button_down;
-/// @brief Every set_text() call, in order.
-extern std::vector<std::string> controller_text;
 
 /// @brief What pros::millis() returns.
 extern std::uint32_t now_ms;
