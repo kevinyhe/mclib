@@ -12,8 +12,10 @@
 #include "mclib/control/scaling.hpp"
 #include "mclib/control/swing_math.hpp"
 #include "mclib/control/odometry.hpp"
+#include "mclib/control/ramsete.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/math.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "mclib/pid.hpp"
 #include "mclib/units/units.hpp"
 #include "mclib/utils.hpp"
@@ -257,6 +259,8 @@ class MotionSafety {
     if (running()) drive().setSideVoltage(left, voltage);
     else { driveVolts(0, 0); stopChassis(mclib::device::BrakeMode::Hold); }
   }
+  // For checks a routine makes itself, such as an empty trajectory.
+  void reject() { fail(MotionResult::InvalidValue); }
   void setCorrectHeading(double commanded) {
     const double value = running() ? commanded : heading();
     if (std::isfinite(value)) state().setCorrectAngleDeg(value);
@@ -1434,5 +1438,79 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
   state().setPrevOutputs(prev_left_output, prev_right_output);
   safety.setCorrectHeading(a);  // Update shared heading
   state().setTurning(false); // Reset turning state
+  return safety.result();
+}
+
+MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
+                              const mclib::control::RamseteConfig& config,
+                              QTime time_limit, bool exit, QVoltage max_voltage)
+{
+  MotionObservation telemetry(MotionPhase::Pursuit);
+  if (mclib::control::requireDrive("followTrajectory") == nullptr) {
+    return MotionResult::NoDrive;
+  }
+  MotionSafety safety(time_limit, {max_voltage.volts(), config.gains.b,
+                                   config.gains.zeta,
+                                   config.feedforward.kS.raw(),
+                                   config.feedforward.kV.raw(),
+                                   config.feedforward.kA.raw(),
+                                   config.track_width.raw()});
+  if (trajectory.empty() || !(config.feedforward.kV.raw() > 0) ||
+      !(config.gains.b > 0) || !(config.gains.zeta >= 0)) {
+    safety.reject();
+  }
+  if (!safety.running()) return safety.result();
+
+  const mclib::control::Ramsete ramsete(config.gains);
+  const mclib::control::SimpleMotorFeedforward feedforward(config.feedforward);
+  const QLength track_width = config.track_width.raw() > 0
+                                  ? config.track_width
+                                  : drive().driveGeometry().turnRadius() * 2.0;
+  const QTime duration = trajectory.duration();
+  double top_speed = 0;
+  for (const auto& state : trajectory.states())
+    top_speed = std::max(top_speed, std::fabs(state.velocity.raw()));
+
+  // Keeps correctHeading() from fighting the follower.
+  state().setTurning(true);
+  const uint32_t start_time = pros::millis();
+  double left = 0, right = 0;
+  while (safety.running())
+  {
+    const QTime elapsed = static_cast<double>(
+        static_cast<uint32_t>(pros::millis() - start_time)) * mclib::units::millisecond;
+    const mclib::path::TrajectoryState target = trajectory.sample(elapsed);
+    mclib::control::RamseteOutput command = ramsete.calculate(safety.pose(), target);
+    // Catching up on a lag must not take the robot past the speed the plan
+    // allowed anywhere, or it can take a corner faster than its grip. In the
+    // physics simulator an uncapped 450 rpm drive reached 46 in/s on a 24 in
+    // arc planned at 38 in/s and slid sideways at up to 37 in/s.
+    command.velocity = QVelocity::fromBase(
+        std::clamp(command.velocity.raw(), -top_speed, top_speed));
+    const mclib::control::DriveVoltages volts = mclib::control::ramseteVoltages(
+        command, target.acceleration, track_width, feedforward, max_voltage);
+    left = volts.left.volts();
+    right = volts.right.volts();
+    telemetry.value.target_heading_deg = target.heading.deg();
+    telemetry.value.carrot_x = target.x.in();
+    telemetry.value.carrot_y = target.y.in();
+    telemetry.publish(MotionPhase::Pursuit, (left + right) / 2, (left - right) / 2,
+                      false, false);
+    safety.write(left, right);
+    if (!(elapsed < duration)) break;
+    pros::delay(10);
+  }
+
+  if (exit)
+  {
+    stopChassis(mclib::device::BrakeMode::Hold);
+    state().setPrevOutputs(0, 0);
+  }
+  else
+  {
+    state().setPrevOutputs(left, right);
+  }
+  safety.setCorrectHeading(safety.heading());
+  state().setTurning(false);
   return safety.result();
 }

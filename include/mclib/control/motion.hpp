@@ -9,6 +9,15 @@
 
 #include <limits>
 
+namespace mclib {
+namespace path {
+class Trajectory;
+}  // namespace path
+namespace control {
+struct RamseteConfig;
+}  // namespace control
+}  // namespace mclib
+
 /**
  * @file motion.hpp
  * @brief The blocking motion routines, in units.
@@ -326,3 +335,38 @@ mclib::control::MotionResult boomerang(QLength x,
                                        QVoltage max_output = 12.0 * mclib::units::volt,
                                        bool overturn = true,
                                        QVoltage min_speed = -1.0 * mclib::units::volt);
+
+/**
+ * @brief Follow a planned trajectory with RAMSETE, steering on the odometry
+ *        pose.
+ *
+ * Each 10 ms tick samples @p trajectory at the time since the call, runs
+ * `mclib::control::Ramsete` against the odometry pose, and drives each side
+ * with the feedforward in @p config. Unlike `driveTo()` and `curveCircle()`,
+ * wheel slip does not fool it: the correction comes from the pose, not the
+ * drive encoders.
+ *
+ * Plan the trajectory from where the robot is. It is not shifted to the
+ * current pose.
+ *
+ * RAMSETE stops correcting once the trajectory's speed reaches zero, so this
+ * returns when the trajectory ends and does not wait to settle. Check
+ * `robotState().pose()` against the last state if the end position matters.
+ *
+ * @param trajectory The plan. Must outlive the call.
+ * @param config     RAMSETE gains and per-side drive feedforward. `kV` must
+ *                   be positive.
+ * @param time_limit Give up after this long. Set it above
+ *                   `trajectory.duration()`.
+ * @param exit       True stops and holds at the end. False leaves the last
+ *                   voltages on for chaining.
+ * @param max_output Voltage cap. Both sides scale down together.
+ * @return `Reached` when the trajectory ran to its end. `InvalidValue` for an
+ *         empty trajectory or a non-positive `kV`. See MotionResult.
+ */
+mclib::control::MotionResult followTrajectory(
+    const mclib::path::Trajectory& trajectory,
+    const mclib::control::RamseteConfig& config,
+    QTime time_limit,
+    bool exit = true,
+    QVoltage max_output = 12.0 * mclib::units::volt);

@@ -9,6 +9,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 - `mclib::path::Trajectory`: plans speed and time along a path from limits on
   speed, acceleration, deceleration, cornering and outer-wheel speed.
+- `followTrajectory()` and `mclib::control::Ramsete`: a RAMSETE follower for
+  tank drives that corrects using the odometry pose instead of the drive
+  encoders. `RamseteConfig::track_width` takes the drive's effective track
+  width, and the commanded speed is capped at the trajectory's top speed.
 
 ### Changed
 
