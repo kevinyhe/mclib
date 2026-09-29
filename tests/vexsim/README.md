@@ -39,8 +39,18 @@ python3 tests/vexsim/run.py --tracking-mode two --output /tmp/sim-two
 python3 tests/vexsim/check_baseline.py two /tmp/sim-two/results.json --update
 ```
 
-vexsim is private, so the job needs a `VEXSIM_TOKEN` repository secret with
-read access to `kevinyhe/vexsim`. Without it the job skips.
+vexsim is private. The job checks it out with a read-only deploy key: the
+public half is on `kevinyhe/vexsim` (Settings → Deploy keys, "mclib CI
+(read-only)"), the private half is the `VEXSIM_DEPLOY_KEY` secret on mclib.
+Without the secret the job skips. To replace the key:
+
+```sh
+ssh-keygen -t ed25519 -N "" -C "mclib CI read-only" -f /tmp/vexsim_deploy
+gh api repos/kevinyhe/vexsim/keys -f title="mclib CI (read-only)" \
+  -f key="$(cat /tmp/vexsim_deploy.pub)" -F read_only=true
+gh secret set VEXSIM_DEPLOY_KEY -R kevinyhe/mclib < /tmp/vexsim_deploy
+rm /tmp/vexsim_deploy /tmp/vexsim_deploy.pub
+```
 
 ## Scenarios
 
