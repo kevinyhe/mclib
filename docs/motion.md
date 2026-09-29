@@ -327,9 +327,10 @@ because RAMSETE stops correcting when the plan does. Follow with
 
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.
-With drive encoders only (no tracking wheels), RAMSETE did no better than
-`curveCircle()` in the simulator: the pose it corrects toward comes from the
-same slipping wheels.
+With drive encoders only (no tracking wheels), RAMSETE at b = 50 missed the
+same arcs by 4.07-4.42 in, against 6.65-14.56 in for `curveCircle()`. It
+can't do better than the pose it corrects toward, and that pose came from the
+same slipping wheels: odometry was 4.3-4.9 in off at the end.
 
 `generate()` returns an empty trajectory when the path is not `valid()` or a
 required limit is zero, negative or not finite.
