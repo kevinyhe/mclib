@@ -63,6 +63,7 @@
 #include "mclib/path/path.hpp"
 #include "mclib/path/pure_pursuit.hpp"
 #include "mclib/path/spline.hpp"
+#include "mclib/path/trajectory.hpp"
 #include "mclib/snapshot/snapshot_config.hpp"
 #include "mclib/telemetry/file_sink.hpp"
 #include "mclib/telemetry/telemetry.hpp"

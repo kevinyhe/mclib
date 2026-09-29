@@ -146,7 +146,8 @@ mclib::control::bindDrive(&chassis);
 mclib::control::setMotionConfig(my_config);
 ```
 
-If no drive is bound, every motion routine prints an error and returns.
+If no drive is bound, every motion routine prints an error and returns
+`MotionResult::NoDrive`.
 
 ## Motion commands
 

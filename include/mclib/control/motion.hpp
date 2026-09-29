@@ -15,7 +15,8 @@
  *
  * These are the primitives an autonomous is written out of. Each one blocks on
  * its own task until it settles, times out, or someone calls
- * `mclib::control::requestCancel(CancelToken::Motion)`.
+ * `mclib::control::requestCancel(CancelToken::Motion)`, and returns a
+ * `mclib::control::MotionResult` saying which.
  * Chaining (`exit=false`) retains voltage only on successful completion.
  * Timeout, cancellation, disable, and nonfinite sensor data always stop the
  * drive and clear its stored slew output. Callers must serialize motions.
@@ -47,6 +48,38 @@
  * see the note on `min_output` in `mclib/config.hpp`.
  */
 
+namespace mclib::control {
+
+/**
+ * @brief How a blocking motion ended.
+ *
+ * Every motion except `correctHeading()` and `wallReset()` returns one. A
+ * chained motion (`exit == false`) that crosses its endpoint returns
+ * `Reached`, the same as a stopped one that settles.
+ */
+enum class MotionResult {
+  /// Settled on the target, or crossed it when chained.
+  Reached,
+  /// `time_limit` ran out before the motion finished, including its stop
+  /// ramp. A motion that reaches the target but is still braking when the
+  /// limit passes reports this, so leave margin.
+  TimedOut,
+  /// `requestCancel(CancelToken::Motion)` was called.
+  Cancelled,
+  /// The robot was disabled by field control or the competition switch.
+  Disabled,
+  /// A parameter, sensor reading, pose value or computed output was NaN or
+  /// infinite, or `time_limit` was not positive.
+  InvalidValue,
+  /// No drive is bound. See `mclib::control::bindDrive()`.
+  NoDrive,
+};
+
+/// @brief The enumerator's name, for logs and the brain screen.
+const char* toString(MotionResult result);
+
+}  // namespace mclib::control
+
 /**
  * @brief The `reset_heading` value that means "leave the IMU alone".
  *
@@ -70,12 +103,13 @@ inline constexpr QAngle keep_current_heading =
  * @param max_output Voltage cap.
  * @param min_speed  Voltage floor; negative selects the `min_output` default.
  *                   Only the `exit == false` branches apply it.
+ * @return How the motion ended. See MotionResult.
  */
-void turnToAngle(QAngle turn_angle,
-                 QTime time_limit,
-                 bool exit = true,
-                 QVoltage max_output = 12.0 * mclib::units::volt,
-                 QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult turnToAngle(QAngle turn_angle,
+                                         QTime time_limit,
+                                         bool exit = true,
+                                         QVoltage max_output = 12.0 * mclib::units::volt,
+                                         QVoltage min_speed = -1.0 * mclib::units::volt);
 
 /**
  * @brief Drive straight a relative distance, holding the current heading.
@@ -91,12 +125,13 @@ void turnToAngle(QAngle turn_angle,
  * @param min_speed  Voltage floor; negative selects the `min_output` default.
  *                   Gated off unless the caller asks for it or the motion is
  *                   chained.
+ * @return How the motion ended. See MotionResult.
  */
-void driveTo(QLength distance,
-             QTime time_limit,
-             bool exit = true,
-             QVoltage max_output = 12.0 * mclib::units::volt,
-             QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult driveTo(QLength distance,
+                                     QTime time_limit,
+                                     bool exit = true,
+                                     QVoltage max_output = 12.0 * mclib::units::volt,
+                                     QVoltage min_speed = -1.0 * mclib::units::volt);
 
 /**
  * @brief Drive a constant-radius arc to an absolute field heading.
@@ -117,22 +152,23 @@ void driveTo(QLength distance,
  * @param min_speed    Voltage floor; negative selects the `min_output` default.
  * @param reverse      Forces the drive direction backward regardless of which
  *                     way the heading has to move.
+ * @return How the motion ended. See MotionResult.
  */
-void curveCircle(QAngle result_angle,
-                 QLength center_radius,
-                 QTime time_limit,
-                 bool exit = true,
-                 QVoltage max_output = 12.0 * mclib::units::volt,
-                 QVoltage min_speed = -1.0 * mclib::units::volt,
-                 bool reverse = false);
+mclib::control::MotionResult curveCircle(QAngle result_angle,
+                                         QLength center_radius,
+                                         QTime time_limit,
+                                         bool exit = true,
+                                         QVoltage max_output = 12.0 * mclib::units::volt,
+                                         QVoltage min_speed = -1.0 * mclib::units::volt,
+                                         bool reverse = false);
 
 /// @brief `curveCircle()` with @p reverse forced on. See curveCircle().
-void curveCircleReverse(QAngle result_angle,
-                        QLength center_radius,
-                        QTime time_limit,
-                        bool exit = true,
-                        QVoltage max_output = 12.0 * mclib::units::volt,
-                        QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult curveCircleReverse(QAngle result_angle,
+                                                QLength center_radius,
+                                                QTime time_limit,
+                                                bool exit = true,
+                                                QVoltage max_output = 12.0 * mclib::units::volt,
+                                                QVoltage min_speed = -1.0 * mclib::units::volt);
 
 /**
  * @brief Turn about one locked tread to an absolute field heading.
@@ -147,13 +183,14 @@ void curveCircleReverse(QAngle result_angle,
  * @param min_speed       Voltage floor; negative selects the `min_output`
  *                        default, which this routine applies unconditionally on
  *                        the chained branches.
+ * @return How the motion ended. See MotionResult.
  */
-void swing(QAngle swing_angle,
-           double drive_direction,
-           QTime time_limit,
-           bool exit = true,
-           QVoltage max_output = 12.0 * mclib::units::volt,
-           QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult swing(QAngle swing_angle,
+                                   double drive_direction,
+                                   QTime time_limit,
+                                   bool exit = true,
+                                   QVoltage max_output = 12.0 * mclib::units::volt,
+                                   QVoltage min_speed = -1.0 * mclib::units::volt);
 
 /**
  * @brief Hold the heading in `RobotState::correctAngleDeg()` forever.
@@ -200,12 +237,13 @@ bool wallReset(QLength reset_x,
  * @param time_limit Give up after this long.
  * @param min_speed  Voltage floor; negative selects the `min_output` default,
  *                   which this routine applies unconditionally.
+ * @return How the motion ended. See MotionResult.
  */
-void turnToPoint(QLength x,
-                 QLength y,
-                 int direction = 1,
-                 QTime time_limit = 1000.0 * mclib::units::millisecond,
-                 QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult turnToPoint(QLength x,
+                                         QLength y,
+                                         int direction = 1,
+                                         QTime time_limit = 1000.0 * mclib::units::millisecond,
+                                         QVoltage min_speed = -1.0 * mclib::units::volt);
 
 /**
  * @brief Drive to a field point, steering as it goes.
@@ -222,15 +260,16 @@ void turnToPoint(QLength x,
  * @param overturn   True lets heading correction eat into the forward drive
  *                   when the two together exceed @p max_output.
  * @param min_speed  Voltage floor; negative selects the `min_output` default.
+ * @return How the motion ended. See MotionResult.
  */
-void moveToPoint(QLength x,
-                 QLength y,
-                 int dir,
-                 QTime time_limit,
-                 bool exit = true,
-                 QVoltage max_output = 12.0 * mclib::units::volt,
-                 bool overturn = true,
-                 QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult moveToPoint(QLength x,
+                                         QLength y,
+                                         int dir,
+                                         QTime time_limit,
+                                         bool exit = true,
+                                         QVoltage max_output = 12.0 * mclib::units::volt,
+                                         bool overturn = true,
+                                         QVoltage min_speed = -1.0 * mclib::units::volt);
 
 /**
  * @brief Drive to a field point *and* a final heading, by chasing a carrot.
@@ -275,14 +314,15 @@ void moveToPoint(QLength x,
  *          speed, and left-hand arcs are limited at all (the old expression
  *          took `sqrt()` of a negative radius and produced NaN, which silently
  *          disabled the clamp).
+ * @return How the motion ended. See MotionResult.
  */
-void boomerang(QLength x,
-               QLength y,
-               int dir,
-               QAngle final_heading,
-               double dlead,
-               QTime time_limit,
-               bool exit = true,
-               QVoltage max_output = 12.0 * mclib::units::volt,
-               bool overturn = true,
-               QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult boomerang(QLength x,
+                                       QLength y,
+                                       int dir,
+                                       QAngle final_heading,
+                                       double dlead,
+                                       QTime time_limit,
+                                       bool exit = true,
+                                       QVoltage max_output = 12.0 * mclib::units::volt,
+                                       bool overturn = true,
+                                       QVoltage min_speed = -1.0 * mclib::units::volt);

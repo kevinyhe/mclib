@@ -141,6 +141,7 @@ without stopping.
 | `path/path.hpp` | `Waypoint`, `PathPoint`, `Path`: samples with position, heading, curvature and distance along the path |
 | `path/spline.hpp` | `generateSpline()`: a smooth curve through every waypoint |
 | `path/pure_pursuit.hpp` | `PurePursuit`, `curvatureSpeedLimit()`, `approachSpeedLimit()`, `wheelSpeeds()` |
+| `path/trajectory.hpp` | `Trajectory`: speeds and times planned along a path before the robot moves |
 
 ```cpp
 #include "mclib/mclib.hpp"
@@ -215,6 +216,48 @@ With 60 in/s² lateral acceleration: a 48 in radius runs at 42.7 in/s, 10 in at
 
 To use a motion profile instead, ignore `PurePursuitOutput::velocity` and pass
 the profile speed and the reported curvature to `wheelSpeeds()`.
+
+### Trajectories
+
+`Trajectory::generate()` plans the whole run before the robot moves: where it
+should be at each moment, how fast, and how hard it should turn. A follower
+that tracks a target pose over time needs this. Pure pursuit does not.
+
+```cpp
+TrajectoryConstraints limits;
+limits.max_velocity = 48_in / 1_s;
+limits.max_acceleration = 96_in / (1_s * 1_s);
+limits.max_lateral_acceleration = 60_in / (1_s * 1_s);
+limits.track_width = 11.375_in;
+
+const Trajectory traj = Trajectory::generate(route, limits);
+const TrajectoryState target = traj.sample(0.5_s);
+// target.x, target.y, target.heading, target.velocity, target.curvature
+```
+
+The path is resampled every `spacing` (default 0.5 in). Each sample's speed is
+the smallest of:
+
+| Limit | Formula |
+| --- | --- |
+| `max_velocity` | fixed |
+| Cornering | `sqrt(max_lateral_acceleration / k)`, using the tightest curvature within half a sample |
+| Outer wheel | `max_velocity / (1 + k * track_width / 2)` |
+| Speeding up | `max_acceleration` from the previous sample |
+| Slowing down | `max_deceleration` (0 = same as `max_acceleration`) to the next sample |
+
+`start_velocity` and `end_velocity` set the speed at each end, for chaining.
+`reversed = true` drives the path with the back of the robot leading: speeds
+are negative and the body heading is the path heading + 180°.
+
+A 48 in straight line at 48 in/s and 96 in/s² takes 1.5 s: 0.5 s speeding up,
+0.5 s at full speed and 0.5 s slowing down.
+
+Use a spline. A polyline from `Path::fromWaypoints()` has zero curvature and a
+heading jump at every corner.
+
+`generate()` returns an empty trajectory when the path is not `valid()` or a
+required limit is zero, negative or not finite.
 
 ### Logging
 
