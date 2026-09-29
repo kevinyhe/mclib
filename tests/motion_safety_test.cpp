@@ -652,6 +652,49 @@ int main() {
     CHECK_EQ(robotState().prevLeftOutput(), hw.left);
     on_delay = {};
 
+    // Starting 6 in behind the plan, RAMSETE asks for more speed to catch
+    // up. It must not ask for more than the plan's top speed: the average of
+    // the two sides is the feedforward for the commanded speed.
+    {
+      double top = 0;
+      for (const auto& state : trajectory.states())
+        top = std::max(top, state.velocity.inps());
+      const double cap = ramsete_config.feedforward.kS.volts() +
+                         ramsete_config.feedforward.kV.raw() * (top * inps).raw();
+      double worst_mean = 0;
+      pose = trajectory_start;
+      pose.y -= 6;
+      resetOdometry(pose);
+      now_ms = 0;
+      on_delay = [&] { worst_mean = std::max(worst_mean, (hw.left + hw.right) / 2); };
+      CHECK(followTrajectory(trajectory, ramsete_config, 5_s) == MotionResult::Reached);
+      std::printf("followTrajectory 6 in behind: mean side voltage peaked at %.3f V, "
+                  "cap %.3f V\n", worst_mean, cap);
+      CHECK(worst_mean <= cap + 1e-9);
+      on_delay = {};
+    }
+
+    // An effective track width wider than the geometry's puts more of the
+    // turn into the side difference.
+    {
+      auto spin = [&](QLength track) {
+        RamseteConfig wide = ramsete_config;
+        wide.track_width = track;
+        resetOdometry(trajectory_start);
+        now_ms = 0;
+        double diff = 0;
+        on_delay = [&] { if (now_ms == 500) diff = hw.left - hw.right; };
+        followTrajectory(trajectory, wide, 510_ms);
+        on_delay = {};
+        return diff;
+      };
+      const double geometric = spin(0_in);
+      const double wider = spin(18_in);
+      std::printf("side difference at 500 ms: geometry %.3f V, 18 in track %.3f V\n",
+                  geometric, wider);
+      CHECK(std::fabs(wider) > std::fabs(geometric) * 1.4);
+    }
+
     // A trajectory longer than the time limit times out and stops.
     now_ms = 0;
     CHECK(followTrajectory(trajectory, ramsete_config, 200_ms) ==

@@ -1453,7 +1453,8 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
                                    config.gains.zeta,
                                    config.feedforward.kS.raw(),
                                    config.feedforward.kV.raw(),
-                                   config.feedforward.kA.raw()});
+                                   config.feedforward.kA.raw(),
+                                   config.track_width.raw()});
   if (trajectory.empty() || !(config.feedforward.kV.raw() > 0) ||
       !(config.gains.b > 0) || !(config.gains.zeta >= 0)) {
     safety.reject();
@@ -1462,8 +1463,13 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
 
   const mclib::control::Ramsete ramsete(config.gains);
   const mclib::control::SimpleMotorFeedforward feedforward(config.feedforward);
-  const QLength track_width = drive().driveGeometry().turnRadius() * 2.0;
+  const QLength track_width = config.track_width.raw() > 0
+                                  ? config.track_width
+                                  : drive().driveGeometry().turnRadius() * 2.0;
   const QTime duration = trajectory.duration();
+  double top_speed = 0;
+  for (const auto& state : trajectory.states())
+    top_speed = std::max(top_speed, std::fabs(state.velocity.raw()));
 
   // Keeps correctHeading() from fighting the follower.
   state().setTurning(true);
@@ -1474,8 +1480,13 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
     const QTime elapsed = static_cast<double>(
         static_cast<uint32_t>(pros::millis() - start_time)) * mclib::units::millisecond;
     const mclib::path::TrajectoryState target = trajectory.sample(elapsed);
-    const mclib::control::RamseteOutput command =
-        ramsete.calculate(safety.pose(), target);
+    mclib::control::RamseteOutput command = ramsete.calculate(safety.pose(), target);
+    // Catching up on a lag must not take the robot past the speed the plan
+    // allowed anywhere, or it can take a corner faster than its grip. In the
+    // physics simulator an uncapped 450 rpm drive reached 46 in/s on a 24 in
+    // arc planned at 38 in/s and slid sideways at up to 37 in/s.
+    command.velocity = QVelocity::fromBase(
+        std::clamp(command.velocity.raw(), -top_speed, top_speed));
     const mclib::control::DriveVoltages volts = mclib::control::ramseteVoltages(
         command, target.acceleration, track_width, feedforward, max_voltage);
     left = volts.left.volts();

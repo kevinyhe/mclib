@@ -289,6 +289,15 @@ if (followTrajectory(traj, follow, traj.duration() + 500_ms) !=
   `control/ramsete.hpp` are the same steps without the loop, for use in a
   command.
 
+- Set `follow.track_width` to the drive's effective track width. A skid-steer
+  drive's wheels scrub sideways in a turn, so it turns slower than its real
+  track width predicts. Spin in place with `V` volts on each side (opposite
+  signs), read the turn rate `w` in rad/s, and use `2 * (V - kS) / kV / w`.
+  In the physics simulator this came out 10-65% wider than the real track.
+- The commanded speed never goes above the trajectory's top speed, even while
+  catching up. Without that cap, a 450 rpm drive in the simulator took a
+  24 in arc at 46 in/s, 8 in/s over plan, and slid out.
+
 `b` sets how hard it pulls back toward the path; `zeta` sets damping. In the
 host test, on an S-bend with the left side slipping 8%:
 
@@ -299,8 +308,28 @@ host test, on an S-bend with the left side slipping 8%:
 | RAMSETE, b = 10 | 1.105 in |
 
 A steady slip is a constant push, and RAMSETE's correction is proportional, so
-it shrinks the error instead of removing it. Raise `b` until the robot
-oscillates about the path, then back off.
+it shrinks the error instead of removing it.
+
+In the physics simulator, with two tracking wheels, on the same 90° arc of
+24 in radius that `curveCircle()` drives (feedforward and effective track
+width measured in the simulator, planned at 60 in/s² and 60 in/s²
+cornering):
+
+| Drive | `curveCircle()` | RAMSETE b = 2 | RAMSETE b = 50 |
+| --- | --- | --- | --- |
+| four_motor_200, forward / reverse | 7.31 / 5.93 in | 6.01 / 4.84 in | 0.42 / 0.37 in |
+| six_motor_450, forward / reverse | 9.54 / 9.53 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
+| speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
+
+At b = 50 the fast drives still end 12° off heading on two of the six arcs,
+because RAMSETE stops correcting when the plan does. Follow with
+`turnToAngle()` if the final heading matters.
+
+The default b = 2 is the usual value for full-size robots, and it is too soft
+at VEX scale. Start near 50 and lower it if the robot weaves about the path.
+With drive encoders only (no tracking wheels), RAMSETE did no better than
+`curveCircle()` in the simulator: the pose it corrects toward comes from the
+same slipping wheels.
 
 `generate()` returns an empty trajectory when the path is not `valid()` or a
 required limit is zero, negative or not finite.

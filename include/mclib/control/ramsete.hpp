@@ -67,6 +67,17 @@ struct RamseteConfig {
   ///        speed and acceleration. Measure it as in docs/motion.md. `kV`
   ///        must be positive; without feedforward nothing drives the robot.
   FeedforwardGains feedforward{};
+  /**
+   * @brief Track width used to split a turn rate onto the two sides.
+   *
+   * @details 0 uses the drive geometry's track width. A skid-steer drive's
+   * wheels scrub sideways when it turns, so it turns slower than that width
+   * predicts and the follower falls behind on every curve. Measure the
+   * effective width instead: spin in place at a steady voltage `V` on each
+   * side (opposite signs), read the turn rate `w` in rad/s, and use
+   * `2 * (V - kS) / kV / w`. It is usually wider than the real track.
+   */
+  units::QLength track_width{};
 };
 
 /// @brief Speed and turn rate for the robot's centre.
