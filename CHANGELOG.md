@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Fixed
+
+- `EventLoop::poll()` no longer reads freed memory when a binding calls
+  `bind()` or `clear()` on the same loop, for example a command started by a
+  `Trigger` that creates another `Trigger`. New bindings run from the next
+  poll; `clear()` skips the rest of the current poll.
+- `ProxyCommand` no longer calls through a null pointer when its supplier
+  returns `nullptr`. The proxy finishes on the next tick instead.
+
 ## 0.1.0
 
 Initial release.
