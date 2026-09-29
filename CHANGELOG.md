@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `HolonomicController::followTrajectory()` and
+  `makeFollowTrajectoryCommand()`: X-drive and mecanum trajectory following
+  with a heading target separate from the direction of travel, then settling
+  on the last pose. The step itself is `control::holonomicFollowStep()`.
 - `mclib::path::Trajectory`: plans speed and time along a path from limits on
   speed, acceleration, deceleration, cornering and outer-wheel speed.
 - `followTrajectory()` and `mclib::control::Ramsete`: a RAMSETE follower for

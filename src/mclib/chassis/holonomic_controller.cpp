@@ -60,6 +60,18 @@ void HolonomicController::moveToPose(Pose2D target, QTime timeout, bool stop_at_
   startGoal(target.x, target.y, target.theta, timeout, stop_at_end);
 }
 
+void HolonomicController::followTrajectory(const path::Trajectory& trajectory,
+                                           QAngle final_heading, QTime timeout,
+                                           bool stop_at_end) {
+  const Pose2D now = control::robotState().pose();
+  const path::TrajectoryState end =
+      trajectory.empty() ? path::TrajectoryState{} : trajectory.states().back();
+  startGoal(end.x.in(), end.y.in(), final_heading.rad(), timeout, stop_at_end);
+  m_trajectory = trajectory;
+  m_follow_start_heading_rad = now.theta;
+  m_following = true;
+}
+
 void HolonomicController::moveToPoint(QLength x, QLength y, QTime timeout, bool stop_at_end) {
   const Pose2D now = control::robotState().pose();
   startGoal(x.in(), y.in(), now.theta, timeout, stop_at_end);
@@ -84,7 +96,9 @@ bool HolonomicController::isActive() const {
 }
 
 void HolonomicController::periodic() {
-  if (m_active) {
+  if (m_active && m_following) {
+    runFollow();
+  } else if (m_active) {
     runMoveToPose();
   }
 }
@@ -94,6 +108,24 @@ std::unique_ptr<Command> HolonomicController::makeMoveToPoseCommand(
   return std::make_unique<FunctionalCommand>(
       [this, target, timeout, stop_at_end]() {
         moveToPose(target, timeout, stop_at_end);
+      },
+      []() {},
+      [this](bool interrupted) {
+        if (interrupted) {
+          cancel();
+        }
+      },
+      [this]() { return isSettled(); },
+      std::initializer_list<Subsystem*>{this});
+}
+
+std::unique_ptr<Command> HolonomicController::makeFollowTrajectoryCommand(
+    path::Trajectory trajectory, QAngle final_heading, QTime timeout,
+    bool stop_at_end) {
+  return std::make_unique<FunctionalCommand>(
+      [this, trajectory = std::move(trajectory), final_heading, timeout,
+       stop_at_end]() {
+        followTrajectory(trajectory, final_heading, timeout, stop_at_end);
       },
       []() {},
       [this](bool interrupted) {
@@ -180,6 +212,7 @@ void HolonomicController::startGoal(double x_in, double y_in, double theta_rad,
   m_stop_at_end = stop_at_end;
   m_active = true;
   m_settled = false;
+  m_following = false;
 
   // Both loops run on an error the tick computes -- remaining distance and
   // wrapped heading delta -- fed in as a negative input against a target of
@@ -231,10 +264,61 @@ void HolonomicController::runMoveToPose() {
   const double turn =
       std::clamp(m_heading_pid.update(-heading_error_deg), -max_volts, max_volts);
 
+  writeRobotVolts(robot.forward, robot.strafe, turn);
+
+  if (m_translation_pid.targetArrived() && m_heading_pid.targetArrived()) {
+    finishGoal(false);
+  } else if (timedOut()) {
+    finishGoal(true);
+  }
+}
+
+void HolonomicController::runFollow() {
+  const Pose2D pose = control::robotState().pose();
+  const double max_volts = m_config.max_voltage.volts();
+  if (m_trajectory.empty() ||
+      !(m_config.follower.feedforward.forward.kV.raw() > 0.0) ||
+      !(std::isfinite(max_volts) && max_volts > 0.0) ||
+      !std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.theta) ||
+      !std::isfinite(m_target_theta_rad)) {
+    finishGoal(true);
+    return;
+  }
+  if (timedOut()) {
+    finishGoal(true);
+    return;
+  }
+
+  const QTime elapsed =
+      (static_cast<double>(mclib::time::millis()) - m_start_time_ms) * units::millisecond;
+  const QTime duration = m_trajectory.duration();
+  if (!(elapsed < duration)) {
+    // Hand over to the pose loops for the last inch. startGoal() already
+    // aimed them at the trajectory's end and the final heading; the timeout
+    // clock keeps running from the original start.
+    m_following = false;
+    m_translation_pid.reset();
+    m_heading_pid.reset();
+    m_translation_pid.setTarget(0.0);
+    m_heading_pid.setTarget(0.0);
+    runMoveToPose();
+    return;
+  }
+
+  const control::HolonomicTarget target = control::holonomicTarget(
+      m_trajectory.sample(elapsed), QAngle::fromBase(m_follow_start_heading_rad),
+      QAngle::fromBase(m_target_theta_rad), duration, elapsed);
+  const control::HolonomicVolts volts =
+      control::holonomicFollowStep(pose, target, m_config.follower);
+  writeRobotVolts(volts.forward, volts.strafe, volts.turn);
+}
+
+void HolonomicController::writeRobotVolts(double forward, double strafe, double turn) {
+  const double max_volts = m_config.max_voltage.volts();
   // mix() works in fractions and scales the four down together when they
   // would exceed the rail, so the direction of travel survives saturation.
-  holonomic::WheelSpeeds wheels = holonomic::mix(robot.forward / max_volts,
-                                                 robot.strafe / max_volts,
+  holonomic::WheelSpeeds wheels = holonomic::mix(forward / max_volts,
+                                                 strafe / max_volts,
                                                  turn / max_volts,
                                                  m_chassis.kind());
   wheels.front_left *= max_volts;
@@ -242,12 +326,6 @@ void HolonomicController::runMoveToPose() {
   wheels.back_left *= max_volts;
   wheels.back_right *= max_volts;
   m_chassis.driveVoltage(wheels);
-
-  if (m_translation_pid.targetArrived() && m_heading_pid.targetArrived()) {
-    finishGoal(false);
-  } else if (timedOut()) {
-    finishGoal(true);
-  }
 }
 
 void HolonomicController::finishGoal(bool force_stop) {
@@ -264,6 +342,7 @@ void HolonomicController::finishGoal(bool force_stop) {
   }
   m_active = false;
   m_settled = true;
+  m_following = false;
 }
 
 bool HolonomicController::timedOut() const {
