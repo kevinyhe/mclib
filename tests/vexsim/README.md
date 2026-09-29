@@ -48,7 +48,7 @@ Position is measured 300 ms after the move returns. Odometry error is measured
 at the moment it returns.
 
 These are simulator criteria. The library does not guarantee them on a robot.
-Results are in [docs/accuracy.md](../../docs/accuracy.md).
+Results are in [BUILDER_VALIDATION.md](BUILDER_VALIDATION.md).
 
 ## Simulation model
 
