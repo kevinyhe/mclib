@@ -321,9 +321,34 @@ cornering):
 | six_motor_450, forward / reverse | 9.54 / 9.53 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
 | speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
 
-At b = 50 the fast drives still end 12° off heading on two of the six arcs,
-because RAMSETE stops correcting when the plan does. Follow with
-`turnToAngle()` if the final heading matters.
+RAMSETE stops correcting when the plan does, so a robot that lags ends with
+the error it had: up to 12° off heading on the fast drives. With `exit` true,
+`followTrajectory()` then settles in the time left:
+
+1. It turns in place to the final heading
+   (`RamseteConfig::turn_to_final_heading`).
+2. If the miss along that heading is more than
+   `distance_exit.big_error` (1.5 in by default), it drives straight to close
+   it (`RamseteConfig::settle_position`).
+
+Both are on by default. It does not settle a sideways miss: a tank drive can
+only close a few inches sideways by pivoting, and settling with `boomerang()`
+that way ran out of time in the simulator, up to 179° off heading.
+
+With both on, all nine arc and S-curve scenarios pass with two tracking
+wheels: 0.38-1.60 in and 0.1-2.0° off. Settling takes up to 1.2 s of the time
+limit.
+
+Two stress cases still fail, because what is left is mostly sideways:
+
+| Case (six_motor_450, 90° arc) | Before settling | After |
+| --- | --- | --- |
+| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in |
+| Starting 3.6 in and 8° off the path | 4.53 in | 3.67 in |
+
+In both the robot slides outward through the arc. Lowering b to 10-30 changes
+the miss by at most 1.4 in, and capping the turn rate made every case worse.
+Plan slower on a slippery field.
 
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.
