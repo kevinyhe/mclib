@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- `mclib::control::AsyncMotion`: run a motion on its own task, wait for a
+  time, distance or condition partway through, then collect its
+  `MotionResult`. Starting a new one cancels the old one.
+
 ### Changed
 
 - `turnToAngle`, `driveTo`, `curveCircle`, `curveCircleReverse`, `swing`,

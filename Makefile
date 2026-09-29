@@ -138,6 +138,13 @@ $(TESTBINDIR)/motion_safety_test: $(TESTDIR)/motion_safety_test.cpp $(HOST_TEST_
 	@mkdir -p $(dir $@)
 	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(MOTION_TEST_OBJS) $(HOST_LDFLAGS)
 
+# AsyncMotion runs the real motion loops on a std::thread against a wall clock
+# the test supplies.
+$(TESTBINDIR)/async_motion_test: $(TESTDIR)/async_motion_test.cpp $(HOST_TEST_OBJS) $(MOTION_TEST_OBJS) $(HOST_OBJDIR)/$(SRCDIR)/mclib/control/async_motion.o
+	@mkdir -p $(dir $@)
+	@echo "Linking $@"
+	@$(HOST_CXX) $(HOST_CXXFLAGS) -MMD -MP -MF $@.d -o $@ $< $(HOST_TEST_OBJS) $(MOTION_TEST_OBJS) $(HOST_OBJDIR)/$(SRCDIR)/mclib/control/async_motion.o $(HOST_LDFLAGS)
+
 -include $(MOTION_TEST_OBJS:.o=.d)
 
 -include $(HOST_DEPS)
