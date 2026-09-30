@@ -6,7 +6,7 @@
 
 PROJECT_NAME           = mclib
 PROJECT_BRIEF          = "A PROS 4 library for VEX V5"
-PROJECT_NUMBER         = 0.1.0
+PROJECT_NUMBER         = 0.2.0
 
 OUTPUT_DIRECTORY       = docs/api
 CREATE_SUBDIRS         = NO

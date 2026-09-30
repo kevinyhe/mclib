@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+## 0.2.0
+
+Upgrading from 0.1.0: the eight blocking motions (`turnToAngle`, `driveTo`,
+`curveCircle`, `curveCircleReverse`, `swing`, `turnToPoint`, `moveToPoint`,
+`boomerang`) now return `mclib::control::MotionResult` instead of `void`.
+Code that ignores the return value compiles unchanged; code that took their
+address as a `void` function pointer needs the new type.
+`ConveyorConfig::unjam_voltage` is now a magnitude: its sign is ignored.
+
 ### Added
 
 - Motion builder (`tests/vexsim/builder`): follow steps take a list of
