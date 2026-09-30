@@ -46,6 +46,8 @@
 namespace mclib {
 namespace control {
 
+class PoseFusion;
+
 /**
  * @brief One tracking wheel: how to read it and where it sits.
  *
@@ -81,6 +83,10 @@ struct OdometrySetup {
   std::optional<TrackingWheelSensor> vertical;
   /// @brief Sideways-rolling tracking wheel, if fitted.
   std::optional<TrackingWheelSensor> horizontal;
+  /// @brief Optional distance-sensor correction, run after every tick. The
+  ///        task resets it when it starts and writes the position it returns
+  ///        back into odometry. Not owned; it must outlive the task.
+  PoseFusion* fusion = nullptr;
 };
 
 /**

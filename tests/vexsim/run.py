@@ -84,7 +84,7 @@ def load_library(library):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
     if hasattr(lib, "sim_filter_enable"):
-        lib.sim_filter_enable.argtypes = [C.POINTER(C.c_double), C.c_int, C.c_int,
+        lib.sim_filter_enable.argtypes = [C.POINTER(C.c_double), C.c_int,
                                           C.c_double, C.c_double, C.c_double]
         lib.sim_filter_enable.restype = None
         lib.sim_filter_reading.argtypes = [C.c_int, C.c_double]
@@ -107,7 +107,7 @@ class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
                  start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0,
-                 distance_sensors=None, fuse=False):
+                 distance_sensors=None):
         from vexsim import Simulator, presets
         from vexsim.chassis import add_tracking_wheels
         from vexsim.motor import BrakeMode
@@ -174,7 +174,7 @@ class PhysicsBridge:
             # Feed back at most 60% of the distance moved each tick, plus
             # 0.002 in: fast enough to follow drive-encoder drift, still
             # enough that a robot settling on a target sees a steady pose.
-            lib.sim_filter_enable(flat, len(distance_sensors), int(fuse), odom_var, 0.002, 0.6)
+            lib.sim_filter_enable(flat, len(distance_sensors), odom_var, 0.002, 0.6)
 
     def set_tuning(self, tuning):
         if not isinstance(tuning, dict) or set(tuning) - DEFAULT_TUNING.keys():
@@ -458,7 +458,7 @@ def scenarios():
         ):
             yield dict(name=f"fusion/{preset}/{name}", preset=preset, action=action,
                        args=dict(args), target=target, angle=angle,
-                       options={"distance_sensors": SENSOR_LAYOUT, "fuse": True},
+                       options={"distance_sensors": SENSOR_LAYOUT},
                        position_tolerance=(1.5 if action == 7 else
                                            5.5 if action in (2, 3) else 2.5))
     for name, options in (("low_battery", {"soc": 0.08}),

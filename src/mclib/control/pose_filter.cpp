@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace mclib {
 namespace control {
@@ -166,6 +167,79 @@ bool PoseFilter::updateGps(const Pose2D& measured, double position_sigma_in,
   m_cov = josephUpdate(m_cov, K, H, R);
   ++m_accepted;
   return true;
+}
+
+PoseFusion::PoseFusion(PoseFusionConfig config, std::vector<DistanceSensorInput> sensors)
+    : m_config(config),
+      m_sensors(std::move(sensors)),
+      m_last_read_ms(m_sensors.size(), 0),
+      m_filter(config.filter) {}
+
+Pose2D PoseFusion::toField(const Pose2D& odometry) const {
+  return {odometry.x + m_config.field_offset_x_in, odometry.y + m_config.field_offset_y_in,
+          odometry.theta};
+}
+
+void PoseFusion::reset(const Pose2D& odometry_pose, double position_sigma_in,
+                       double heading_sigma_deg) {
+  sync::LockGuard lock(m_mutex);
+  m_previous = toField(odometry_pose);
+  m_filter.reset(m_previous, position_sigma_in, heading_sigma_deg);
+  std::fill(m_last_read_ms.begin(), m_last_read_ms.end(), 0);
+  m_started = true;
+}
+
+std::optional<Vec2> PoseFusion::step(const Pose2D& odometry_pose, std::uint32_t now_ms) {
+  if (!std::isfinite(odometry_pose.x) || !std::isfinite(odometry_pose.y) ||
+      !std::isfinite(odometry_pose.theta)) {
+    return std::nullopt;
+  }
+  if (!m_started) reset(odometry_pose);
+  sync::LockGuard lock(m_mutex);
+  const Pose2D now = toField(odometry_pose);
+  // How far odometry moved this tick, from where the last correction left it.
+  const double moved = std::hypot(now.x - m_previous.x, now.y - m_previous.y);
+  m_filter.predict(m_previous, now);
+  for (std::size_t i = 0; i < m_sensors.size(); ++i) {
+    const DistanceSensorInput& sensor = m_sensors[i];
+    if (!sensor.read_in) continue;
+    if (static_cast<std::uint32_t>(now_ms - m_last_read_ms[i]) < sensor.period_ms) continue;
+    m_last_read_ms[i] = now_ms;
+    m_filter.updateDistance(sensor.geometry, sensor.read_in());
+  }
+
+  const Pose2D fused = m_filter.pose();
+  const double ex = fused.x - now.x, ey = fused.y - now.y;
+  const double gap = std::hypot(ex, ey);
+  m_previous = now;
+  if (gap < 1e-9) return std::nullopt;
+  const double limit = m_config.correction_per_in * moved + m_config.correction_floor_in;
+  const double k = gap > limit ? limit / gap : 1.0;
+  m_previous.x += k * ex;
+  m_previous.y += k * ey;
+  return Vec2{m_previous.x - m_config.field_offset_x_in,
+              m_previous.y - m_config.field_offset_y_in};
+}
+
+Pose2D PoseFusion::pose() const {
+  sync::LockGuard lock(m_mutex);
+  const Pose2D p = m_filter.pose();
+  return {p.x - m_config.field_offset_x_in, p.y - m_config.field_offset_y_in, p.theta};
+}
+
+int PoseFusion::accepted() const {
+  sync::LockGuard lock(m_mutex);
+  return m_filter.accepted();
+}
+
+int PoseFusion::rejected() const {
+  sync::LockGuard lock(m_mutex);
+  return m_filter.rejected();
+}
+
+double PoseFusion::positionSigmaIn() const {
+  sync::LockGuard lock(m_mutex);
+  return m_filter.positionSigmaIn();
 }
 
 double PoseFilter::positionSigmaIn() const {

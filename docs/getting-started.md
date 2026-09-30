@@ -172,8 +172,39 @@ the filter adds 0.1-0.3 in of sensor noise to it: 6 of 15 pass either way.
 Use it on robots without tracking wheels. `curveCircle()` arcs don't improve
 either way, because they steer on the encoders, not the pose.
 
-The filter does not feed the motions on the robot yet: that loop so far runs
-only in the simulator's bridge (`tests/vexsim/bridge.cpp`).
+To have the motions steer on the corrected pose, hand the odometry task a
+`PoseFusion`. It runs the filter after every odometry tick and writes the
+corrected position back, with the limit above. The simulator's bridge runs the
+same class.
+
+```cpp
+mclib::device::Distance left_front_sensor(3), left_back_sensor(4);
+auto read = [](mclib::device::Distance& sensor) {
+  return [&sensor] {
+    const auto d = sensor.distance();
+    return d.has_value() ? d->in() : -1.0;
+  };
+};
+
+mclib::control::PoseFusionConfig fusion_config;
+// Odometry is already in field coordinates (0-144 in) here. If it starts at
+// 0 in the field centre instead, use 72 and 72.
+fusion_config.field_offset_x_in = 0;
+fusion_config.field_offset_y_in = 0;
+mclib::control::PoseFusion fusion(fusion_config, {
+    {{-6.0f, 5.0f, -90.0f}, read(left_front_sensor)},
+    {{-6.0f, -5.0f, -90.0f}, read(left_back_sensor)},
+});
+
+void initialize() {
+  auto setup = mclib::control::odometrySetupFrom(chassis);
+  setup.fusion = &fusion;   // must outlive the task
+  mclib::control::startOdometry(setup);
+}
+```
+
+`fusion.pose()`, `accepted()`, `rejected()` and `positionSigmaIn()` can be read
+from any task. Heading stays with the IMU; only position is corrected.
 
 ## Driver control
 

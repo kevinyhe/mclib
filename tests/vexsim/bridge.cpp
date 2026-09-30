@@ -12,6 +12,7 @@
 #include "mclib/math.hpp"
 #include <cmath>
 #include <cstdint>
+#include <memory>
 
 struct Sample {
   double heading, left, right, current_ma, velocity_rpm;
@@ -30,24 +31,14 @@ mclib::Pose2D last_integrated_pose{};
 double boomerang_lead = 0.5;
 mclib::control::RamseteConfig ramsete_config;
 
-// PoseFilter in the loop. The filter works in the snapshot map's frame
-// (0-144 in); the simulated robot starts at the field centre, which is the
-// odometry origin, so field = odometry + 72 in on both axes.
+// PoseFusion in the loop, the same class the odometry task runs on a robot.
+// The simulated robot starts at the field centre, which is the odometry
+// origin, so the snapshot map's field frame is odometry + 72 in.
 constexpr double kFieldOffsetIn = 72.0;
-struct FilterRig {
-  bool on = false;
-  bool feed_back = false;
-  double max_correction_in = 0.002;  // per tick, floor
-  double correction_per_in = 0.6;    // per inch moved that tick
-  mclib::control::PoseFilter filter;
-  std::vector<snapshot::SensorGeometry> sensors;
+struct FusionRig {
+  std::unique_ptr<mclib::control::PoseFusion> fusion;
   std::vector<double> readings;  // latest, -1 = none since last tick
-  mclib::Pose2D previous{};
-} fusion;
-
-mclib::Pose2D toField(const mclib::Pose2D& p) {
-  return {p.x + kFieldOffsetIn, p.y + kFieldOffsetIn, p.theta};
-}
+} fusion_rig;
 mclib::path::TrajectoryConstraints ramsete_limits;
 
 struct SimDrive : mclib::control::DriveHardware {
@@ -88,32 +79,12 @@ struct SimDrive : mclib::control::DriveHardware {
   const mclib::units::DriveGeometry& driveGeometry() const override { return geometry; }
 } drive;
 
-void runFilter() {
-  const mclib::Pose2D now = toField(mclib::control::robotState().pose());
-  // How far odometry moved this tick, from where the last correction left it.
-  const double moved = std::hypot(now.x - fusion.previous.x, now.y - fusion.previous.y);
-  fusion.filter.predict(fusion.previous, now);
-  for (std::size_t i = 0; i < fusion.sensors.size(); ++i) {
-    if (fusion.readings[i] > 0) fusion.filter.updateDistance(fusion.sensors[i], fusion.readings[i]);
-    fusion.readings[i] = -1;
-  }
-  fusion.previous = now;
-  if (fusion.feed_back) {
-    // Position only: the IMU heading is already good, and this is the same
-    // correction a snapshot makes. Drift comes from moving, so pull toward
-    // the filter by at most correction_per_in of the distance moved this
-    // tick, plus a small floor. A robot settling on a target barely moves,
-    // so its pose stays still for the exit checks instead of jumping with
-    // sensor noise.
-    const mclib::Pose2D fused = fusion.filter.pose();
-    const double ex = fused.x - now.x, ey = fused.y - now.y;
-    const double gap = std::hypot(ex, ey);
-    const double limit = fusion.correction_per_in * moved + fusion.max_correction_in;
-    const double k = gap > limit ? limit / gap : 1.0;
-    mclib::control::correctOdometryPosition(now.x + k * ex - kFieldOffsetIn,
-                                            now.y + k * ey - kFieldOffsetIn);
-    fusion.previous = toField(mclib::control::robotState().pose());
-  }
+// What startOdometry() does with OdometrySetup::fusion, after each tick.
+void runFusion() {
+  const auto corrected =
+      fusion_rig.fusion->step(mclib::control::robotState().pose(), sample.millis);
+  if (corrected.has_value())
+    mclib::control::correctOdometryPosition(corrected->x(), corrected->y());
 }
 
 void refresh(std::uint32_t ms) {
@@ -122,7 +93,7 @@ void refresh(std::uint32_t ms) {
   last_integrated_pose = mclib::control::odometryTick(
       {drive.headingDeg() * std::acos(-1.0) / 180,
        drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal});
-  if (fusion.on) runFilter();
+  if (fusion_rig.fusion) runFusion();
 }
 }
 
@@ -148,7 +119,7 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   boomerang_lead = 0.5;
   ramsete_config = {};
   ramsete_limits = {};
-  fusion = FilterRig{};
+  fusion_rig = FusionRig{};
   drive.geometry = {Wheel::fromDiameter(diameter_in * inch), track_in * inch, ratio};
   drive.heading_offset = drive.left_offset = drive.right_offset = 0;
   drive.encoder_heading = encoder_heading;
@@ -232,48 +203,52 @@ extern "C" int sim_follow_spline(const double* xy, int n, int reversed,
                                            timeout_ms * millisecond, true, volts * volt));
 }
 
-// Run a PoseFilter alongside odometry with @p n distance sensors, given as
-// (x_right_in, y_fwd_in, rel_deg) triples. With @p feed_back, its position
-// is written back into odometry every tick, so the motions steer on it.
-extern "C" void sim_filter_enable(const double* sensors, int n, int feed_back,
-                                  double odom_var_per_in, double max_correction_in,
-                                  double correction_per_in) {
-  fusion = FilterRig{};
-  fusion.on = true;
-  fusion.feed_back = feed_back != 0;
-  fusion.max_correction_in = max_correction_in;
-  fusion.correction_per_in = correction_per_in;
-  mclib::control::PoseFilterConfig config;
-  config.odom_along_var_per_in = config.odom_side_var_per_in = odom_var_per_in;
-  fusion.filter.setConfig(config);
+// Run a PoseFusion alongside odometry with @p n distance sensors, given as
+// (x_right_in, y_fwd_in, rel_deg) triples, correcting odometry every tick.
+extern "C" void sim_filter_enable(const double* sensors, int n, double odom_var_per_in,
+                                  double correction_floor_in, double correction_per_in) {
+  fusion_rig = FusionRig{};
+  fusion_rig.readings.assign(n, -1);
+  mclib::control::PoseFusionConfig config;
+  config.filter.odom_along_var_per_in = config.filter.odom_side_var_per_in = odom_var_per_in;
+  config.field_offset_x_in = config.field_offset_y_in = kFieldOffsetIn;
+  config.correction_floor_in = correction_floor_in;
+  config.correction_per_in = correction_per_in;
+  std::vector<mclib::control::DistanceSensorInput> inputs;
   for (int i = 0; i < n; ++i) {
-    snapshot::SensorGeometry g;
-    g.x_right_in = static_cast<float>(sensors[3 * i]);
-    g.y_fwd_in = static_cast<float>(sensors[3 * i + 1]);
-    g.rel_deg = static_cast<float>(sensors[3 * i + 2]);
-    fusion.sensors.push_back(g);
+    mclib::control::DistanceSensorInput input;
+    input.geometry.x_right_in = static_cast<float>(sensors[3 * i]);
+    input.geometry.y_fwd_in = static_cast<float>(sensors[3 * i + 1]);
+    input.geometry.rel_deg = static_cast<float>(sensors[3 * i + 2]);
+    // Python supplies each reading once; take it and clear it.
+    input.read_in = [i]() {
+      const double value = fusion_rig.readings[i];
+      fusion_rig.readings[i] = -1;
+      return value;
+    };
+    input.period_ms = 0;
+    inputs.push_back(input);
   }
-  fusion.readings.assign(n, -1);
-  fusion.previous = toField(mclib::control::robotState().pose());
-  fusion.filter.reset(fusion.previous, 0.5, 0.5);
+  fusion_rig.fusion = std::make_unique<mclib::control::PoseFusion>(config, inputs);
+  fusion_rig.fusion->reset(mclib::control::robotState().pose());
 }
 
 // A distance reading for sensor @p index, used on the next tick. Called from
 // the Python advance() callback.
 extern "C" void sim_filter_reading(int index, double reading_in) {
-  if (index >= 0 && static_cast<std::size_t>(index) < fusion.readings.size())
-    fusion.readings[index] = reading_in;
+  if (index >= 0 && static_cast<std::size_t>(index) < fusion_rig.readings.size())
+    fusion_rig.readings[index] = reading_in;
 }
 
-// Filter pose in the odometry frame, and its accepted / rejected counts.
+// Filter pose in the odometry frame, its accepted / rejected counts, sigma.
 extern "C" void sim_filter_state(double* out) {
-  const mclib::Pose2D p = fusion.filter.pose();
-  out[0] = p.x - kFieldOffsetIn;
-  out[1] = p.y - kFieldOffsetIn;
+  const mclib::Pose2D p = fusion_rig.fusion->pose();
+  out[0] = p.x;
+  out[1] = p.y;
   out[2] = p.theta * 180 / std::acos(-1.0);
-  out[3] = fusion.filter.accepted();
-  out[4] = fusion.filter.rejected();
-  out[5] = fusion.filter.positionSigmaIn();
+  out[3] = fusion_rig.fusion->accepted();
+  out[4] = fusion_rig.fusion->rejected();
+  out[5] = fusion_rig.fusion->positionSigmaIn();
 }
 
 extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
