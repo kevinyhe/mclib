@@ -33,6 +33,9 @@ STEP_FIELDS = {
     "arc": {"heading", "radius"}, "reverse_arc": {"heading", "radius"},
     "swing": {"heading", "direction"},
     "wall_reset": {"x", "y", "heading", "current_ma"},
+    # followTrajectory() (RAMSETE) along a spline from the current pose,
+    # through (via_x, via_y), to (x, y).
+    "follow": {"via_x", "via_y", "x", "y", "direction", "b"},
 }
 DEFAULTS = dict(name="Boomerang / tracking wheels", preset="six_motor_450", tracking_mode="two",
                 start_pose=dict(x=0, y=0, heading=0),
@@ -149,6 +152,8 @@ def validate_spec(raw):
             step.setdefault("direction", 1)
         if kind == "boomerang":
             step.setdefault("lead", .5)
+        if kind == "follow":
+            step.setdefault("b", 50)
         if kind == "wall_reset":
             if index != len(steps) - 1:
                 raise ValueError("wall_reset must be last: it changes the odometry reference frame")
@@ -156,7 +161,7 @@ def validate_spec(raw):
         for key in STEP_FIELDS[kind]:
             if key not in step:
                 raise ValueError(f"{location}.{key} is required")
-        for key in ("x", "y", "distance"):
+        for key in ("x", "y", "distance", "via_x", "via_y"):
             if key in step:
                 number(step[key], -500, 500, f"{location}.{key}")
         if "heading" in step:
@@ -175,6 +180,8 @@ def validate_spec(raw):
                 raise ValueError(f"{location}.lead must be less than 1")
         if "current_ma" in step:
             number(step["current_ma"], 0, 10000, f"{location}.current_ma")
+        if "b" in step:
+            number(step["b"], 0.1, 500, f"{location}.b")
         step["timeout_ms"] = number(step["timeout_ms"], 50, 20000,
                                      f"{location}.timeout_ms", True)
         number(step["volts"], .1, 12, f"{location}.volts")
@@ -233,7 +240,7 @@ def motion_target(step, entry_pose, commanded_heading):
         target.update(x=entry_pose[0] + step["distance"] * math.sin(radians),
                       y=entry_pose[1] + step["distance"] * math.cos(radians),
                       heading=commanded_heading)
-    elif kind in ("point", "boomerang", "wall_reset"):
+    elif kind in ("point", "boomerang", "wall_reset", "follow"):
         target.update(x=step["x"], y=step["y"], heading=step.get("heading"))
     elif kind == "turn_to_point":
         angle = math.degrees(math.atan2(step["x"] - entry_pose[0], step["y"] - entry_pose[1]))
@@ -248,7 +255,13 @@ def motion_target(step, entry_pose, commanded_heading):
     return target
 
 
-def invoke(bridge, step):
+def invoke(bridge, step, feedforward=None):
+    if step["type"] == "follow":
+        # Heading is not checked: it is wherever the spline ends up pointing.
+        bridge.set_ramsete(feedforward, b=step["b"])
+        return bridge.follow([(step["via_x"], step["via_y"]), (step["x"], step["y"])],
+                             reversed=step["direction"] == -1,
+                             timeout=step["timeout_ms"], volts=step["volts"])
     actions = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4,
                    turn_to_point=5, point=6, boomerang=7, wall_reset=8)
     kind = step["type"]
@@ -287,6 +300,11 @@ def execute(spec, destination, vexsim, cache=None):
                 raise RuntimeError("Source changed during compilation; submit the run again")
             write_json(marker, dict(source_fingerprint=fingerprint))
     shutil.copyfile(build_dir / "build.log", destination / "build.log")
+    # followTrajectory() needs feedforward. Measure it the way the docs tell a
+    # user to, on a healthy robot, before the run: measuring re-initialises
+    # the library, so it can't happen once the sequence has started.
+    feedforward = (harness.measure_feedforward(lib, spec["preset"], spec["tracking_mode"], {})
+                   if any(step["type"] == "follow" for step in spec["steps"]) else None)
     bridge = harness.PhysicsBridge(lib, spec["preset"], **spec["environment"],
                                    tracking_mode=spec["tracking_mode"], tuning=spec["tuning"],
                                    start_pose=tuple(spec["start_pose"][k] for k in ("x", "y", "heading")),
@@ -325,7 +343,7 @@ def execute(spec, destination, vexsim, cache=None):
         publisher.publish(force=True)
         configuration_error = None
         try:
-            wall_result = invoke(bridge, step)
+            wall_result = invoke(bridge, step, feedforward)
         except ValueError as error:
             configuration_error = str(error)
             wall_result = 0
