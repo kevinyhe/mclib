@@ -110,7 +110,7 @@ void ConveyorMechanism::applyState(const ConveyorState& state) {
 
   if (m_unjamming) {
     if (now < m_unjam_end_ms) {
-      m_motors.setVoltage(clampVoltage(m_config.unjam_voltage));
+      m_motors.setVoltage(m_unjam_volts);
       return;
     }
     m_unjamming = false;
@@ -155,7 +155,10 @@ void ConveyorMechanism::applyState(const ConveyorState& state) {
       ++m_unjam_retries;
       m_unjamming = true;
       m_unjam_end_ms = now + m_config.unjam_ms;
-      m_motors.setVoltage(clampVoltage(m_config.unjam_voltage));
+      // Back off against whichever way it was running when it jammed.
+      m_unjam_volts = -std::copysign(std::fabs(clampVoltage(m_config.unjam_voltage)),
+                                     voltage);
+      m_motors.setVoltage(m_unjam_volts);
       return;
     }
   } else {

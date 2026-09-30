@@ -37,6 +37,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- `ConveyorMechanism` unjammed at a fixed `unjam_voltage` (-8 V), so a jam in
+  Reverse was "unjammed" in the same direction it jammed. The unjam now runs
+  opposite to the jammed direction; only the size of `unjam_voltage` is used.
 - `MotorStateMechanism` kept its state through a disable, so after re-enable
   it drove the pre-disable voltages for two ticks, or until a command changed
   the state. It now goes to an off state on disable. New constructors take the

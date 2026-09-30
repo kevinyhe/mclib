@@ -268,12 +268,27 @@ void jamNeedsBothConditionsForTheDwell() {
     }
     CHECK_EQ(rig.volts(), -12.0);
     rig.tick();
-    CHECK_EQ(rig.volts(), -8.0);
-    // unjam_voltage is a fixed voltage, not "opposite to the current
-    // direction". In Reverse it pushes the same way as the jam.
-    mclib::test::knownBug(
-        rig.volts() < 0.0,
-        "a jam in Reverse 'unjams' at -8 V, the same direction it jammed in");
+    // The unjam runs opposite to the jam: a jam in Reverse pushes forward.
+    CHECK_EQ(rig.volts(), 8.0);
+  }
+  {
+    // Only the size of unjam_voltage counts. A positive setting still backs
+    // a Forward jam off toward the intake.
+    ConveyorConfig c = config();
+    c.unjam_voltage = 6.0;
+    Rig rig(c);
+    rig.conveyor.setConveyorState(ConveyorState::Forward);
+    rig.stalled();
+    for (int i = 0; i < 26; ++i) {
+      rig.tick();
+    }
+    CHECK_EQ(rig.volts(), -6.0);
+    rig.conveyor.setConveyorState(ConveyorState::Reverse);
+    rig.stalled();
+    for (int i = 0; i < 26; ++i) {
+      rig.tick();
+    }
+    CHECK_EQ(rig.volts(), 6.0);
   }
 }
 
