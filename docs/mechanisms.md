@@ -505,6 +505,34 @@ Accessors: `stateCount()`, `actuatorCount()`, `droppedRowCount()`, `empty()`,
 `indexOf(state)`, `currentIndex()`, `stateAt(index)`, `isDecodable(state)`,
 `combinationFor(state)`, `currentCombination()`, `rawValue(index, value)`.
 
+## MotorStateMechanism
+
+`mclib/mechanism/motor_state_mechanism.hpp`. Motors run at a fixed voltage for
+each state: an intake with In, Out and Off, for example.
+
+```cpp
+enum class Intake { Off, In, Out };
+
+mclib::mechanism::MotorStateMechanism<Intake> intake(
+    {5, -6}, mclib::device::Gearset::Blue,
+    Intake::Off,  // initial state
+    Intake::Off,  // off state, set on disable
+    [](const Intake& state) -> std::vector<double> {
+      switch (state) {
+        case Intake::In: return {12.0};
+        case Intake::Out: return {-12.0};
+        default: return {};
+      }
+    });
+```
+
+The voltage map returns one voltage for every motor, one per motor, or none
+for 0 V.
+
+On disable the mechanism goes to its off state, so when the robot is enabled
+again it doesn't drive the voltages it had before. The constructors without an
+`off_state` use the initial state as the off state.
+
 ## ConveyorMechanism
 
 `mechanism/conveyor_mechanism.hpp`. Runs intakes and conveyors. It can stop when

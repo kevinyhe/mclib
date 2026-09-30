@@ -236,27 +236,19 @@ void commands_and_disable() {
   // Nothing is written while disabled.
   CHECK_EQ(writes(1), disabled_writes);
 
-  // MotorStateMechanism has no onDisabled(). The state survives the disable,
-  // so after re-enable periodic() drives the old voltage again until a
-  // command changes the state. With a default command that sets Off, that is
-  // two ticks: the default is scheduled at the end of the first pass and sets
-  // its state in execute(), after the second pass's periodic(). MotorSubsystem
-  // zeroes its state in onDisabled() instead.
-  CHECK(m.getState() == Intake::In);
+  // onDisabled() puts the mechanism in its off state (here the initial state,
+  // Off), so after re-enable periodic() drives 0 V on the first tick instead
+  // of the pre-disable voltage.
+  CHECK(m.getState() == Intake::Off);
   mclib::test::setCompetitionStatus(0);
   int stale_ticks = 0;
   for (int i = 0; i < 5; ++i) {
     g_fake_ms += 10;
     CommandScheduler::run();
-    if (mv(1) != 12000.0) break;
-    ++stale_ticks;
+    if (mv(1) == 12000.0) ++stale_ticks;
   }
   std::printf("   ticks at the pre-disable voltage after re-enable: %d\n", stale_ticks);
-  mclib::test::knownBug(
-      stale_ticks > 0,
-      "MotorStateMechanism keeps its state through onDisabled(): after "
-      "re-enable it drives the pre-disable voltages until a command changes "
-      "the state");
+  CHECK_EQ(stale_ticks, 0);
   CHECK(m.getState() == Intake::Off);
   CHECK_EQ(mv(1), 0.0);
 
@@ -265,11 +257,43 @@ void commands_and_disable() {
 
 }  // namespace
 
+void explicit_off_state() {
+  std::printf("-- an off state that is not the initial state\n");
+  hd::reset();
+  mclib::test::setCompetitionStatus(0);
+  // Starts running In, with no default command to turn it off.
+  IntakeMech m({1, 2}, Gearset::Blue, Intake::In, Intake::Off, voltages);
+  CHECK(m.offState() == Intake::Off);
+  m.registerSelf();
+  g_fake_ms += 10;
+  CommandScheduler::run();
+  CHECK_EQ(mv(1), 12000.0);
+
+  mclib::test::setCompetitionStatus(1);
+  g_fake_ms += 10;
+  CommandScheduler::run();
+  CHECK(m.getState() == Intake::Off);
+  mclib::test::setCompetitionStatus(0);
+  g_fake_ms += 10;
+  CommandScheduler::run();
+  CHECK_EQ(mv(1), 0.0);
+  CHECK_EQ(mv(2), 0.0);
+  CommandScheduler::unregisterSubsystem(&m);
+
+  // The constructors without one use the initial state.
+  IntakeMech plain({3}, Gearset::Blue, Intake::Split, voltages);
+  CHECK(plain.offState() == Intake::Split);
+  IntakeMech from_vector(std::vector<std::int8_t>{4}, Gearset::Blue, Intake::Out,
+                         Intake::Off, voltages);
+  CHECK(from_vector.offState() == Intake::Off);
+}
+
 int main() {
   mclib::time::ScopedClock clock([]() { return g_fake_ms; });
   construction();
   voltage_map_shapes();
   motor_access();
   commands_and_disable();
+  explicit_off_state();
   return mclib::test::summary("motor_state_mechanism");
 }
