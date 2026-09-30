@@ -117,6 +117,43 @@ track width. Wheel slip affects this estimate.
 Snapshot position corrections update the odometry integrator and keep encoder
 baselines.
 
+### Correcting odometry continuously: `PoseFilter`
+
+`mclib/control/pose_filter.hpp`. Odometry drifts: every slip adds error that
+stays. `PoseFilter` is a Kalman filter that keeps its own pose and how
+uncertain it is, and blends in distance sensor and GPS readings as they arrive:
+
+```cpp
+mclib::control::PoseFilter filter;
+filter.reset(chassis_start_pose, 0.5, 0.5);  // pose, sigma in, sigma deg
+
+// Two sensors on one side, apart front to back, make heading correctable.
+const snapshot::SensorGeometry left_front{-6.0f, 5.0f, -90.0f};
+const snapshot::SensorGeometry left_back{-6.0f, -5.0f, -90.0f};
+
+// Every loop:
+filter.predict(previous_odometry_pose, odometry_pose);
+filter.updateDistance(left_front, left_front_sensor.distance().in());
+filter.updateDistance(left_back, left_back_sensor.distance().in());
+// filter.pose() is the corrected pose.
+```
+
+- `predict()` moves the estimate by the odometry step and grows its
+  uncertainty with the distance travelled and angle turned.
+- `updateDistance()` compares a reading with the range the field walls give
+  from the current estimate (`snapshot::predict_range()`), and corrects by
+  an amount set by both uncertainties. A reading more than 3 standard
+  deviations off (a robot or game object in the way) is rejected.
+- `updateGps()` blends in a GPS pose.
+- The field frame is the snapshot map's: 0-144 in on both axes.
+
+In the host test, a robot drives four 60 in square laps with odometry that
+counts 4% too far and turns 91° per 90°. Raw odometry ends 12.18 in off. With
+four wall sensors at 2% noise, a tenth of their readings blocked, the filter
+ends 0.20 in and 0.58° off, and rejects the blocked readings.
+
+The filter does not feed the motions yet: they still use the odometry pose.
+
 ## Driver control
 
 ```cpp
