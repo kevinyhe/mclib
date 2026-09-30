@@ -6,6 +6,7 @@ import http.client
 import itertools
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -59,6 +60,35 @@ class SchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "less than 1"):
             validate_spec(dict(steps=[dict(type="boomerang", x=1, y=1, heading=0, lead=1)]))
 
+    def test_follow_waypoints_and_old_via_files(self):
+        spec = validate_spec(dict(steps=[dict(type="follow", waypoints=[dict(x=12, y=24), dict(x=-6, y=30)],
+                                              x=0, y=48)]))
+        step = spec["steps"][0]
+        self.assertEqual(step["waypoints"], [dict(x=12, y=24), dict(x=-6, y=30)])
+        self.assertEqual((step["b"], step["direction"]), (50, 1))
+        # Saved before waypoint lists: one via point.
+        old = validate_spec(dict(steps=[dict(type="follow", via_x=12, via_y=24, x=0, y=48)]))
+        self.assertEqual(old["steps"][0]["waypoints"], [dict(x=12, y=24)])
+        self.assertNotIn("via_x", old["steps"][0])
+        # No waypoints is a straight line to the target.
+        self.assertEqual(validate_spec(dict(steps=[dict(type="follow", x=0, y=48)]))["steps"][0]["waypoints"], [])
+        for bad, message in (([dict(x=0, y=0)] * 9, "up to 8"), ([dict(x=0)], "needs x and y"),
+                             ([dict(x=0, y=float("nan"))], "between"), ([dict(x=0, y=0, z=1)], "unsupported")):
+            with self.assertRaisesRegex(ValueError, message):
+                validate_spec(dict(steps=[dict(type="follow", waypoints=bad, x=0, y=48)]))
+
+    def test_follow_invokes_every_waypoint_then_the_target(self):
+        bridge = mock.Mock()
+        bridge.follow.return_value = 0
+        step = validate_spec(dict(steps=[dict(type="follow", waypoints=[dict(x=12, y=24), dict(x=-6, y=30)],
+                                              x=0, y=48, direction=-1, b=40)]))["steps"][0]
+        invoke(bridge, step, dict(ks=0.7, kv=0.13, top_ips=86, track_in=13.5))
+        bridge.set_ramsete.assert_called_once()
+        self.assertEqual(bridge.set_ramsete.call_args.kwargs["b"], 40)
+        points = bridge.follow.call_args.args[0]
+        self.assertEqual(points, [(12, 24), (-6, 30), (0, 48)])
+        self.assertTrue(bridge.follow.call_args.kwargs["reversed"])
+
     def test_reverse_arc_contradiction_never_calls_controller(self):
         bridge = mock.Mock()
         bridge.pose.return_value = [0, 0, 0]
@@ -81,7 +111,7 @@ class SchemaTests(unittest.TestCase):
 class StubManager:
     def __init__(self):
         self.submitted = []
-        self.vexsim = HERE.parents[3] / "vexsim"
+        self.vexsim = Path(os.environ.get("VEXSIM_PATH", HERE.parents[3] / "vexsim"))
 
     def submit(self, body):
         self.submitted.append(validate_spec(body))

@@ -252,6 +252,33 @@ extern "C" void sim_arcs_use_ramsete(int on) {
   else mclib::control::useEncoderArcs();
 }
 
+// Plan (don't drive) a spline from (sx, sy) through @p n points with the
+// current sim_set_ramsete() limits. Writes up to @p max states as
+// (t s, x in, y in, speed in/s), about every 20 ms, into @p out and returns
+// how many; -1 when the points don't make a path.
+extern "C" int sim_plan_spline(double sx, double sy, const double* xy, int n, int reversed,
+                               double* out, int max) {
+  using namespace mclib::units;
+  std::vector<mclib::path::Waypoint> waypoints{{sx * inch, sy * inch}};
+  for (int i = 0; i < n; ++i) waypoints.push_back({xy[2 * i] * inch, xy[2 * i + 1] * inch});
+  auto limits = ramsete_limits;
+  limits.reversed = reversed != 0;
+  const auto trajectory =
+      mclib::path::Trajectory::generate(mclib::path::generateSpline(waypoints), limits);
+  if (trajectory.empty() || max < 2) return -1;
+  const double duration = trajectory.duration().s();
+  const int count = std::min(max, std::max(2, static_cast<int>(duration / 0.02) + 1));
+  for (int i = 0; i < count; ++i) {
+    const double t = duration * i / (count - 1);
+    const auto state = trajectory.sample(t * second);
+    out[4 * i] = t;
+    out[4 * i + 1] = state.x.in();
+    out[4 * i + 2] = state.y.in();
+    out[4 * i + 3] = std::fabs(state.velocity.inps());
+  }
+  return count;
+}
+
 extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
                                 double max_ips, double max_ips2, double max_lateral_ips2,
                                 double track_in) {

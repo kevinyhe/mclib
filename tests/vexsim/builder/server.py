@@ -63,6 +63,26 @@ class JobManager:
             except (OSError, ValueError):
                 continue
 
+    def plan(self, request):
+        """Plan follow paths in a separate process, like runs: this server
+        never loads C++. Uses the run cache, so the library and each preset's
+        feedforward are built and measured once."""
+        with tempfile.TemporaryDirectory(prefix="mclib-plan-") as scratch:
+            request_path = Path(scratch) / "plan.json"
+            write_json(request_path, request)
+            command = [sys.executable, "-B", str(HERE / "runner.py"), "--plan", str(request_path),
+                       "--vexsim", str(self.vexsim), "--cache", str(self.output / "cache")]
+            try:
+                done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
+                                      timeout=self.wall_timeout)
+            except subprocess.TimeoutExpired:
+                return dict(error="Planning timed out")
+        try:
+            answer = json.loads(done.stdout)
+        except ValueError:
+            return dict(error="Planner failed: " + (done.stderr.strip().splitlines() or ["no output"])[-1])
+        return answer if isinstance(answer, dict) else dict(error="Planner returned no answer")
+
     def submit(self, raw):
         spec = validate_spec(raw)
         with self.lock:
@@ -332,6 +352,9 @@ class Handler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/runs":
                 self.send(202, self.server.manager.submit(body))
+            elif path == "/api/plan":
+                answer = self.server.manager.plan(body)
+                self.send(400 if "error" in answer else 200, answer)
             elif re.fullmatch(r"/api/runs/[0-9a-f]{32}/cancel", path):
                 if body != {}:
                     raise ValueError("Cancellation body must be an empty object")

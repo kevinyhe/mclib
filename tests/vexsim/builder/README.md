@@ -37,12 +37,27 @@ For boomerang, **Direction** picks forward or reverse and **Heading** is the
 final robot heading (`0°` = +Y, `+90°` = +X).
 
 **Follow path (RAMSETE)** plans a spline from wherever the robot is, through
-**Via X / Y**, to the target, and follows it with `followTrajectory()`. Before
-the run, the builder measures the preset's kS, kV and effective track width in
-the simulator, and plans at 70% of top speed. **Direction** −1 backs along the
-path. **RAMSETE b** is the correction gain (50 suits these presets). The step
-ends with a settle (a turn, then a straight correction or a back-off and
-re-approach), so it defaults to an 8 s limit. The final heading is not checked.
+each waypoint, to the target, and follows it with `followTrajectory()`.
+
+- Drag the round target and the square waypoint handles on the field, or type
+  the values. **+ Waypoint** adds one halfway to the target (up to 8).
+- **Direction** −1 backs along the path. **RAMSETE b** is the correction gain
+  (50 suits these presets).
+- **Plan speeds** plans every follow step with the C++ planner and draws it
+  coloured by speed (blue slow, red fast), with the duration and top speed in
+  the step list. The plan is at 70% of the preset's top speed, with 60 in/s²
+  acceleration and cornering, using the preset's kS, kV and effective track
+  width measured in the simulator. The first plan for a preset measures them
+  and takes about a minute; after that a plan takes a fraction of a second.
+- The step ends with a settle (a turn, then a straight correction or a
+  back-off and re-approach), so it defaults to an 8 s limit. The final heading
+  is not checked.
+
+**Export C++** turns the whole sequence into an `autonomous()` for mclib: one
+call per step, stopping when a motion doesn't reach its target (as **Stop on
+failure** does here), and the RAMSETE setup for follow steps. Press **Plan
+speeds** first to fill in the feedforward measured in the simulator; otherwise
+it has placeholders to measure on the robot.
 
 Each step stops the robot and holds for 300 ms. Chained motions are not
 supported.

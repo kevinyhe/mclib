@@ -7,6 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- Motion builder (`tests/vexsim/builder`): follow steps take a list of
+  waypoints, **Plan speeds** draws the C++ planner's trajectory coloured by
+  speed, and **Export C++** turns a sequence into an mclib `autonomous()`.
 - `useRamseteForArcs()`: `curveCircle()` and `curveCircleReverse()` plan
   their arc (`path::planArc()`) and follow it with RAMSETE on the odometry
   pose. In the simulator with tracking wheels, 24 in arcs land within

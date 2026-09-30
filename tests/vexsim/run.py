@@ -95,6 +95,10 @@ def load_library(library):
         lib.sim_filter_reading.restype = None
         lib.sim_filter_state.argtypes = [C.POINTER(C.c_double)]
         lib.sim_filter_state.restype = None
+    if hasattr(lib, "sim_plan_spline"):
+        lib.sim_plan_spline.argtypes = [C.c_double, C.c_double, C.POINTER(C.c_double), C.c_int,
+                                        C.c_int, C.POINTER(C.c_double), C.c_int]
+        lib.sim_plan_spline.restype = C.c_int
     if hasattr(lib, "sim_follow_spline"):
         lib.sim_follow_spline.argtypes = [C.POINTER(C.c_double), C.c_int, C.c_int,
                                           C.c_double, C.c_double]
@@ -349,6 +353,17 @@ class PhysicsBridge:
         state = (C.c_double * 6)()
         self.lib.sim_filter_state(state)
         return list(state)
+
+    def plan(self, start, points, reversed=False, max_states=1000):
+        """Plan (don't drive) a spline from @p start (x, y) through @p points
+        with the set_ramsete() limits: [(t, x, y, speed), ...], or None."""
+        flat = (C.c_double * (2 * len(points)))(*[v for point in points for v in point])
+        out = (C.c_double * (4 * max_states))()
+        count = self.lib.sim_plan_spline(start[0], start[1], flat, len(points), int(reversed),
+                                         out, max_states)
+        if count < 0:
+            return None
+        return [tuple(out[4 * i:4 * i + 4]) for i in range(count)]
 
     def pose(self):
         pose = (C.c_double * 3)()

@@ -74,6 +74,25 @@ jobs:
             --tracking-mode ${{ matrix.tracking }} --output sim-results || true
           python3 tests/vexsim/check_baseline.py ${{ matrix.tracking }} sim-results/results.json
 
+      # The motion builder's own tests: schema, server, 3D replay adapter,
+      # drawn geometry, C++ export (compiled) and the planner. Once, on the
+      # drive leg. Three.js comes from vexsim's package, pinned to the version
+      # the replay adapter expects.
+      - uses: actions/setup-node@v4
+        if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        with:
+          node-version: '20'
+      - name: Builder tests
+        if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          VEXSIM_PATH: ${{ github.workspace }}/vexsim
+        run: |
+          npm install --prefix vexsim --no-save --no-audit --no-fund three@0.160.0
+          cd tests/vexsim/builder
+          node reference_geometry_test.mjs
+          python3 -m unittest -v test_builder test_native_viewer test_trajectory_builder
+
       - uses: actions/upload-artifact@v4
         if: always() && env.HAS_VEXSIM_KEY == 'true'
         with:
