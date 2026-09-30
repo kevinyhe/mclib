@@ -67,6 +67,12 @@ rm /tmp/vexsim_deploy /tmp/vexsim_deploy.pub
   `docs/motion.md` describes, then plans at 70% of top speed.
   `--ramsete-b`, `--ramsete-zeta` and `--ramsete-accel` change the tuning.
 - Low battery, reduced traction and encoder-only heading.
+- `fusion/*`: point moves, boomerangs, arcs and a RAMSETE arc with a
+  `PoseFilter` correcting odometry from four distance sensors. The readings
+  are computed from the true pose against a 144 in box around the start, with
+  2% noise and a 78 in range, every 20 ms. The filter's position is fed back
+  into odometry by at most 60% of the distance moved each tick. Tracking wheels
+  get a lower odometry noise (0.0005 in²/in) than drive encoders (0.09).
 - Cancellation, competition disable, IMU and encoder faults, and timeout during
   each of the eight motion functions. Faults are injected while the drive is
   powered.

@@ -9,6 +9,7 @@ import csv
 import ctypes as C
 import json
 import math
+import random
 from pathlib import Path
 import subprocess
 import sys
@@ -41,7 +42,8 @@ def build(destination):
     sources = ["control/motion", "control/chassis_io", "control/motion_config",
                "control/motion_math", "control/scaling", "control/robot_state",
                "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
-               "control/ramsete", "path/trajectory", "path/path", "path/spline"]
+               "control/ramsete", "path/trajectory", "path/path", "path/spline",
+               "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -81,6 +83,14 @@ def load_library(library):
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
+    if hasattr(lib, "sim_filter_enable"):
+        lib.sim_filter_enable.argtypes = [C.POINTER(C.c_double), C.c_int, C.c_int,
+                                          C.c_double, C.c_double, C.c_double]
+        lib.sim_filter_enable.restype = None
+        lib.sim_filter_reading.argtypes = [C.c_int, C.c_double]
+        lib.sim_filter_reading.restype = None
+        lib.sim_filter_state.argtypes = [C.POINTER(C.c_double)]
+        lib.sim_filter_state.restype = None
     if hasattr(lib, "sim_follow_spline"):
         lib.sim_follow_spline.argtypes = [C.POINTER(C.c_double), C.c_int, C.c_int,
                                           C.c_double, C.c_double]
@@ -96,7 +106,8 @@ def load_library(library):
 class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
-                 start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0):
+                 start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0,
+                 distance_sensors=None, fuse=False):
         from vexsim import Simulator, presets
         from vexsim.chassis import add_tracking_wheels
         from vexsim.motor import BrakeMode
@@ -126,6 +137,12 @@ class PhysicsBridge:
         self.fault_injected = False
         self.exceptions = []
         self.control_trace = []
+        # PoseFilter: sensors as (x_right_in, y_fwd_in, rel_deg), read from the
+        # true pose against a 144 in box centred on the start (the snapshot
+        # map's perimeter, shifted), 2% noise, 78 in range, every 20 ms.
+        self.distance_sensors = list(distance_sensors or [])
+        self.distance_rng = random.Random(seed + 101)
+        self.last_distance_ms = -20
         # Observer only: publishing a snapshot must never advance simulation time
         # or substitute simulator truth for the sampled controller inputs.
         self.on_capture = None
@@ -148,6 +165,16 @@ class PhysicsBridge:
             self.set_tuning(tuning)
         if tuple(start_pose) != (0.0, 0.0, 0.0):
             self.set_pose(*start_pose)
+        if distance_sensors:
+            flat = (C.c_double * (3 * len(distance_sensors)))(
+                *[v for sensor in distance_sensors for v in sensor])
+            # Tracking wheels drift far less than drive encoders: trust them
+            # more. Variance per inch: 0.09 is ~3 in per 100 in, 0.005 ~0.7.
+            odom_var = 0.0005 if tracking_mode == "two" else 0.09
+            # Feed back at most 60% of the distance moved each tick, plus
+            # 0.002 in: fast enough to follow drive-encoder drift, still
+            # enough that a robot settling on a target sees a steady pose.
+            lib.sim_filter_enable(flat, len(distance_sensors), int(fuse), odom_var, 0.002, 0.6)
 
     def set_tuning(self, tuning):
         if not isinstance(tuning, dict) or set(tuning) - DEFAULT_TUNING.keys():
@@ -262,6 +289,14 @@ class PhysicsBridge:
             reading.current_ma = sum(abs(m.current) for m in self.sim.motors) * 1000 / len(self.sim.motors)
             reading.velocity_rpm = sum(abs(self.sim.encoders[m.name].velocity)
                                        for m in self.sim.motors) * 30 / math.pi / len(self.sim.motors)
+            if self.distance_sensors and reading.millis - self.last_distance_ms >= 20:
+                self.last_distance_ms = reading.millis
+                truth = self.truth()
+                for index, sensor in enumerate(self.distance_sensors):
+                    value = box_range(truth, sensor)
+                    if value is not None:
+                        value += self.distance_rng.gauss(0.0, 0.02 * value)
+                        self.lib.sim_filter_reading(index, value)
             triggered = self.sim.t >= 0.25
             self.fault_injected |= triggered and self.fault is not None
             reading.disabled = triggered and self.fault == "disabled"
@@ -305,6 +340,12 @@ class PhysicsBridge:
             raise ValueError("The follow points don't make a path: two in a row are the same")
         return result
 
+    def filter_state(self):
+        """PoseFilter pose (odometry frame), accepted, rejected, sigma."""
+        state = (C.c_double * 6)()
+        self.lib.sim_filter_state(state)
+        return list(state)
+
     def pose(self):
         pose = (C.c_double * 3)()
         self.lib.sim_pose(pose)
@@ -326,6 +367,31 @@ class PhysicsBridge:
 
     def stopped(self):
         return all(mode != 0 or volts == 0 for mode, volts in self.commands)
+
+
+# 144 in perimeter around the start, in mclib's frame (+X right, +Y forward).
+BOX_HALF_IN = 72.0
+# Two on the left, 10 in apart front to back; one right; one back.
+SENSOR_LAYOUT = [(-6.0, 5.0, -90.0), (-6.0, -5.0, -90.0), (6.0, 0.0, 90.0), (0.0, -6.0, 180.0)]
+
+
+def box_range(truth, sensor, max_range=78.0):
+    """True range from a sensor on the robot to the box walls, or None."""
+    x, y, heading = truth
+    right, forward, rel = sensor
+    theta = math.radians(heading)
+    ox = x + right * math.cos(theta) + forward * math.sin(theta)
+    oy = y - right * math.sin(theta) + forward * math.cos(theta)
+    aim = math.radians(heading + rel)
+    dx, dy = math.sin(aim), math.cos(aim)
+    best = math.inf
+    for origin, direction in ((ox, dx), (oy, dy)):
+        for wall in (BOX_HALF_IN, -BOX_HALF_IN):
+            if abs(direction) > 1e-9:
+                t = (wall - origin) / direction
+                if t > 0:
+                    best = min(best, t)
+    return best if best <= max_range else None
 
 
 def measure_feedforward(lib, preset, tracking_mode, cache):
@@ -377,6 +443,22 @@ def scenarios():
         ):
             yield dict(name=f"{preset}/{name}", preset=preset, action=action,
                        args=args, target=target, angle=angle,
+                       position_tolerance=(1.5 if action == 7 else
+                                           5.5 if action in (2, 3) else 2.5))
+    # The same moves with a PoseFilter correcting odometry from four wall
+    # distance sensors. Mostly matters with drive encoders only, whose
+    # odometry drifts 4-10 in on these moves.
+    for preset in ("four_motor_200", "six_motor_450", "speed_base"):
+        for name, action, args, target, angle in (
+            ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
+            ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
+            ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
+            ("reverse_arc", 3, {"a": -90, "b": 24}, (24, -24), -90),
+            ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
+        ):
+            yield dict(name=f"fusion/{preset}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle,
+                       options={"distance_sensors": SENSOR_LAYOUT, "fuse": True},
                        position_tolerance=(1.5 if action == 7 else
                                            5.5 if action in (2, 3) else 2.5))
     for name, options in (("low_battery", {"soc": 0.08}),
@@ -496,6 +578,13 @@ def main():
             else:
                 passed &= all(abs(a - b) < 1e-9 for a, b in
                               zip(estimated_at_exit, (50, 60, 0)))
+        if bridge.distance_sensors:
+            fused = bridge.filter_state()
+            filter_info = dict(filter_error_at_exit_in=math.dist(fused[:2], truth_at_exit[:2]),
+                               filter_accepted=int(fused[3]), filter_rejected=int(fused[4]),
+                               filter_sigma_in=fused[5])
+        else:
+            filter_info = {}
         row = dict(name=case["name"], passed=bool(passed), elapsed=round(elapsed, 3),
                    tracking_mode=args.tracking_mode,
                    true_pose=truth, estimated_pose_at_exit=estimated_at_exit,
@@ -504,7 +593,8 @@ def main():
                    position_error_in=position_error, heading_error_deg=heading_error,
                    stopped=bridge.stopped(), peak_command_V=bridge.peak_command,
                    met_deadline=met_deadline, error=error,
-                   wall_success=bool(wall_result) if case["action"] == 8 else None)
+                   wall_success=bool(wall_result) if case["action"] == 8 else None,
+                   **filter_info)
         rows.append(row)
         stem = case["name"].replace("/", "_")
         bridge.sim.log.to_csv(str(destination / (stem + ".csv")))
