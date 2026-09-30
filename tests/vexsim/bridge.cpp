@@ -7,6 +7,7 @@
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/pose_filter.hpp"
 #include "mclib/control/ramsete.hpp"
+#include "mclib/path/arc.hpp"
 #include "mclib/path/spline.hpp"
 #include "mclib/path/trajectory.hpp"
 #include "mclib/math.hpp"
@@ -119,6 +120,8 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   boomerang_lead = 0.5;
   ramsete_config = {};
   ramsete_limits = {};
+  // The arc switch is library-global; each simulated robot starts without it.
+  mclib::control::useEncoderArcs();
   fusion_rig = FusionRig{};
   drive.geometry = {Wheel::fromDiameter(diameter_in * inch), track_in * inch, ratio};
   drive.heading_offset = drive.left_offset = drive.right_offset = 0;
@@ -163,15 +166,6 @@ ArcEnd appendArc(std::vector<mclib::path::PathPoint>& points, ArcEnd start,
   }
   const double end = start.travel + turn_rad;
   return {cx - r * std::cos(end), cy + r * std::sin(end), end};
-}
-
-// One arc from the origin to body heading @p end_heading_deg.
-mclib::path::Path arcPath(double end_heading_deg, double radius_in, bool reversed) {
-  const double pi = std::acos(-1.0);
-  std::vector<mclib::path::PathPoint> points;
-  const double turn = mclib::wrapAngle(end_heading_deg * pi / 180);
-  appendArc(points, {0, 0, reversed ? pi : 0.0}, turn, radius_in);
-  return mclib::path::Path(points);
 }
 
 // Right then left, 90 deg each: from the origin to (2r, 2r), facing +Y again.
@@ -251,6 +245,13 @@ extern "C" void sim_filter_state(double* out) {
   out[5] = fusion_rig.fusion->positionSigmaIn();
 }
 
+// Make curveCircle() / curveCircleReverse() use RAMSETE with the current
+// sim_set_ramsete() tuning (on != 0), or the encoder arcs.
+extern "C" void sim_arcs_use_ramsete(int on) {
+  if (on) mclib::control::useRamseteForArcs(ramsete_config, ramsete_limits);
+  else mclib::control::useEncoderArcs();
+}
+
 extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
                                 double max_ips, double max_ips2, double max_lateral_ips2,
                                 double track_in) {
@@ -283,10 +284,15 @@ extern "C" int sim_run(int action, double a, double b, double heading,
     case 9:
     case 10:
     case 13: {
+      // Planned from the origin so an off-path start stays off the path.
+      // Actions 9 and 10 differ only in the scenario's name: planArc() works
+      // out the travel direction from the signs, as curveCircle() does.
+      const mclib::path::ArcPlan plan =
+          action == 13 ? mclib::path::ArcPlan{sCurvePath(b), false}
+                       : mclib::path::planArc(mclib::Pose2D{0, 0, 0}, a * degree, b * inch);
       auto limits = ramsete_limits;
-      limits.reversed = action == 10;
-      const auto trajectory = mclib::path::Trajectory::generate(
-          action == 13 ? sCurvePath(b) : arcPath(a, b, limits.reversed), limits);
+      limits.reversed = plan.reversed;
+      const auto trajectory = mclib::path::Trajectory::generate(plan.path, limits);
       return static_cast<int>(followTrajectory(trajectory, ramsete_config, limit, exit,
                                                volts * volt));
     }

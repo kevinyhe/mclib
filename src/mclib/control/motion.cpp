@@ -15,7 +15,9 @@
 #include "mclib/control/ramsete.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/math.hpp"
+#include "mclib/path/arc.hpp"
 #include "mclib/path/trajectory.hpp"
+#include "mclib/sync.hpp"
 #include "mclib/pid.hpp"
 #include "mclib/units/units.hpp"
 #include "mclib/utils.hpp"
@@ -24,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 
 /**
  * @file motion.cpp
@@ -292,6 +295,34 @@ class MotionSafety {
 };
 }  // namespace
 
+namespace {
+struct ArcFollower {
+  mclib::control::RamseteConfig config;
+  mclib::path::TrajectoryConstraints limits;
+};
+// Set once at setup, read at the start of each arc, possibly from another
+// task, hence the lock.
+mclib::sync::Mutex g_arc_mutex;
+std::optional<ArcFollower> g_arc_follower;
+
+std::optional<ArcFollower> arcFollower() {
+  mclib::sync::LockGuard lock(g_arc_mutex);
+  return g_arc_follower;
+}
+}  // namespace
+
+void mclib::control::useRamseteForArcs(const RamseteConfig& config,
+                                       const path::TrajectoryConstraints& limits) {
+  mclib::sync::LockGuard lock(g_arc_mutex);
+  if (config.feedforward.kV.raw() > 0) g_arc_follower = ArcFollower{config, limits};
+  else g_arc_follower.reset();
+}
+
+void mclib::control::useEncoderArcs() {
+  mclib::sync::LockGuard lock(g_arc_mutex);
+  g_arc_follower.reset();
+}
+
 const char* mclib::control::toString(MotionResult result) {
   switch (result) {
     case MotionResult::Reached: return "Reached";
@@ -524,6 +555,28 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
   }
   MotionSafety safety(time_limit, {result_angle_target.deg(), center_radius.in(), max_voltage.volts(), min_voltage.volts()});
   if (!safety.running()) return safety.result();
+
+  // With useRamseteForArcs(), plan the same arc and follow it on the pose.
+  if (exit)
+  {
+    if (const std::optional<ArcFollower> follower = arcFollower())
+    {
+      const mclib::path::ArcPlan plan =
+          mclib::path::planArc(safety.pose(), result_angle_target, center_radius);
+      if (plan.path.valid() && (!reverse || plan.reversed))
+      {
+        mclib::path::TrajectoryConstraints limits = follower->limits;
+        limits.reversed = plan.reversed;
+        const mclib::path::Trajectory trajectory =
+            mclib::path::Trajectory::generate(plan.path, limits);
+        if (!trajectory.empty())
+        {
+          return followTrajectory(trajectory, follower->config, time_limit, true, max_voltage);
+        }
+      }
+    }
+  }
+
   double result_angle_deg = result_angle_target.deg();
   // Signed: the sign picks the curve direction, the magnitude is the radius.
   const double center_radius_in = center_radius.in();

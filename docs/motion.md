@@ -353,6 +353,45 @@ scenarios pass (0.38-1.60 in, 0.1-2.0° off), and so do the stress cases:
 On a slippery field, planning slower is still the better fix: the back-off
 costs seconds.
 
+### Arcs with RAMSETE
+
+`curveCircle()` and `curveCircleReverse()` measure progress with the drive
+encoders, which keep counting when a wheel slips. After one call to
+`useRamseteForArcs()`, they plan the same arc with `path::planArc()` and follow
+it with `followTrajectory()` instead, settle included. The calls, targets,
+time limits and voltage caps in your autonomous stay the same.
+
+```cpp
+control::RamseteConfig follow;
+follow.feedforward = {0.7_V, 0.13_V / inps, {}};  // measured, per side
+follow.gains = {50.0, 0.7};
+follow.track_width = 13.5_in;                     // effective, measured
+TrajectoryConstraints arc_limits;
+arc_limits.max_velocity = 60_in / 1_s;
+arc_limits.max_acceleration = 60_in / (1_s * 1_s);
+arc_limits.max_lateral_acceleration = 60_in / (1_s * 1_s);
+control::useRamseteForArcs(follow, arc_limits);
+
+curveCircle(90_deg, 24_in, 5_s);  // now followed on the odometry pose
+```
+
+The encoder arc still runs for a chained arc (`exit` false), a zero radius,
+and a `curveCircleReverse()` whose geometry says forward. `useEncoderArcs()`
+switches back.
+
+In the physics simulator, on the 90° arcs of 24 in radius, with two tracking
+wheels:
+
+| Drive | Encoder arc (fwd / rev) | With `useRamseteForArcs()` |
+| --- | --- | --- |
+| four_motor_200 | 7.31 / 5.93 in | 0.41 / 0.37 in |
+| six_motor_450 | 9.54 / 9.53 in | 1.59 / 1.55 in |
+| speed_base | 12.51 / 15.10 in | 0.77 / 0.98 in |
+
+With drive encoders only they improve from 6.65-14.56 in to 4.06-4.94 in,
+limited by the odometry, which is 4-5 in off there. Add distance sensors and a
+`PoseFusion` for those robots (see getting-started.md).
+
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.
 With drive encoders only (no tracking wheels), RAMSETE at b = 50 missed the

@@ -13,6 +13,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace {
 std::uint32_t now_ms = 0;
@@ -737,6 +738,61 @@ int main() {
     CHECK(run(false) == MotionResult::Reached);
     CHECK_EQ(robotState().prevLeftOutput(), hw.left);
     on_delay = {};
+
+    // curveCircle() through RAMSETE after useRamseteForArcs(), on the same
+    // model with the left side 8% slow: a 90 deg arc of 24 in radius from the
+    // origin ends at (24, 24) facing 90 deg.
+    {
+      useRamseteForArcs(ramsete_config, limits);
+      auto arc_from_origin = [&](auto&& motion) {
+        pose = mclib::Pose2D{0, 0, 0};
+        resetOdometry(pose);
+        hw.heading = 0;
+        now_ms = 0;
+        bool followed = false;
+        on_delay = [&] {
+          followed |= robotState().motionTelemetry().phase == MotionPhase::Pursuit;
+          const double wheel_l = speed(hw.left), wheel_r = speed(hw.right);
+          const double l = wheel_l * 0.92, r = wheel_r;
+          const double v = (l + r) / 2, w = (l - r) / 12.0, dt = 0.01;
+          hw.encoder += (wheel_l + wheel_r) / 2 * dt / (4 * M_PI) * 360;
+          const double mid = pose.theta + w * dt / 2;
+          pose.x += v * std::sin(mid) * dt;
+          pose.y += v * std::cos(mid) * dt;
+          pose.theta = mclib::wrapAngle(pose.theta + w * dt);
+          resetOdometry(pose);
+          hw.heading = pose.theta * 180 / M_PI;
+        };
+        const MotionResult result = motion();
+        on_delay = {};
+        return std::make_pair(result, followed);
+      };
+      const auto forward = arc_from_origin([] { return curveCircle(90_deg, 24_in, 8_s); });
+      std::printf("curveCircle(90 deg, 24 in) via RAMSETE, left 8%% slow: ended (%.2f, %.2f, "
+                  "%.1f deg) after %u ms\n", pose.x, pose.y, pose.theta * 180 / M_PI,
+                  static_cast<unsigned>(now_ms));
+      CHECK(forward.first == MotionResult::Reached);
+      CHECK(forward.second);
+      CHECK(std::hypot(pose.x - 24, pose.y - 24) < 2.0);
+      CHECK(std::fabs(mclib::wrapAngle(pose.theta - M_PI / 2)) * 180 / M_PI < 3.0);
+
+      // curveCircleReverse(-90 deg, 24 in) backs up to (24, -24).
+      const auto back = arc_from_origin([] { return curveCircleReverse(-90_deg, 24_in, 8_s); });
+      std::printf("curveCircleReverse(-90 deg, 24 in) via RAMSETE: ended (%.2f, %.2f, %.1f deg)\n",
+                  pose.x, pose.y, pose.theta * 180 / M_PI);
+      CHECK(back.first == MotionResult::Reached);
+      CHECK(back.second);
+      CHECK(std::hypot(pose.x - 24, pose.y + 24) < 2.0);
+
+      // A chained arc keeps the encoder arc.
+      const auto chained = arc_from_origin([] { return curveCircle(90_deg, 24_in, 100_ms, false); });
+      CHECK(!chained.second);
+
+      // And after useEncoderArcs(), so does a stopped one.
+      useEncoderArcs();
+      const auto encoder = arc_from_origin([] { return curveCircle(90_deg, 24_in, 100_ms); });
+      CHECK(!encoder.second);
+    }
 
     // Starting 6 in behind the plan, RAMSETE asks for more speed to catch
     // up. It must not ask for more than the plan's top speed: the average of

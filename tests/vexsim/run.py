@@ -43,7 +43,8 @@ def build(destination):
                "control/motion_math", "control/scaling", "control/robot_state",
                "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
                "control/ramsete", "path/trajectory", "path/path", "path/spline",
-               "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose"]
+               "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose",
+               "path/arc"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -83,6 +84,9 @@ def load_library(library):
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
+    if hasattr(lib, "sim_arcs_use_ramsete"):
+        lib.sim_arcs_use_ramsete.argtypes = [C.c_int]
+        lib.sim_arcs_use_ramsete.restype = None
     if hasattr(lib, "sim_filter_enable"):
         lib.sim_filter_enable.argtypes = [C.POINTER(C.c_double), C.c_int,
                                           C.c_double, C.c_double, C.c_double]
@@ -435,6 +439,9 @@ def scenarios():
             ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
             ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
             ("reverse_arc", 3, {"a": -90, "b": 24}, (24, -24), -90),
+            # curveCircle() / curveCircleReverse() after useRamseteForArcs().
+            ("arc_ramsete_config", 2, {"a": 90, "b": 24}, (24, 24), 90),
+            ("reverse_arc_ramsete_config", 3, {"a": -90, "b": 24}, (24, -24), -90),
             # The same two arcs through followTrajectory() (RAMSETE).
             ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
             ("ramsete_reverse_arc", 10, {"a": -90, "b": 24}, (24, -24), -90),
@@ -444,6 +451,7 @@ def scenarios():
             yield dict(name=f"{preset}/{name}", preset=preset, action=action,
                        args=args, target=target, angle=angle,
                        position_tolerance=(1.5 if action == 7 else
+                                           2.5 if name.endswith("_ramsete_config") else
                                            5.5 if action in (2, 3) else 2.5))
     # The same moves with a PoseFilter correcting odometry from four wall
     # distance sensors. Mostly matters with drive encoders only, whose
@@ -522,7 +530,7 @@ def main():
             # followTrajectory() settles after the plan: a turn, then either a
             # straight correction or a back-off and re-approach. Give it twice
             # the single-motion limit.
-            if case["action"] in (9, 10, 13):
+            if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
                 case["args"]["timeout"] = 2 * args.motion_timeout_ms
     sys.path.insert(0, str(args.vexsim.resolve()))
     destination = (args.output or Path(tempfile.mkdtemp(prefix="mclib-vexsim-"))).resolve()
@@ -533,7 +541,7 @@ def main():
     feedforward_cache = {}
     for case in cases:
         feedforward = None
-        if case["action"] in (9, 10, 13):
+        if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
             feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
                                               feedforward_cache)
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,
@@ -541,6 +549,8 @@ def main():
         if feedforward is not None:
             bridge.set_ramsete(feedforward, b=args.ramsete_b, zeta=args.ramsete_zeta,
                                accel=args.ramsete_accel)
+            if case["name"].endswith("_ramsete_config"):
+                lib.sim_arcs_use_ramsete(1)
         error = None
         try:
             wall_result = bridge.run(case["action"], **case["args"])
