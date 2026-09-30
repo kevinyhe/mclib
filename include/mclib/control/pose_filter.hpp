@@ -9,7 +9,12 @@
 #include "mclib/snapshot/collision_map.hpp"
 #include "mclib/snapshot/types.hpp"
 
+#include "mclib/sync.hpp"
+
 #include <cstdint>
+#include <functional>
+#include <optional>
+#include <vector>
 
 /**
  * @file pose_filter.hpp
@@ -141,6 +146,91 @@ class PoseFilter {
   Mat3 m_cov = Mat3::Identity();
   int m_accepted = 0;
   int m_rejected = 0;
+};
+
+/// @brief One distance sensor for `PoseFusion`.
+struct DistanceSensorInput {
+  /// @brief Where it is on the robot and what it may hit.
+  snapshot::SensorGeometry geometry{};
+  /// @brief The latest reading in inches. Zero, negative or NaN means no
+  ///        reading.
+  std::function<double()> read_in;
+  /// @brief How often the sensor gives a new reading. It is read no more
+  ///        often than this, so one reading is never counted twice. The V5
+  ///        distance sensor updates about every 33 ms.
+  std::uint32_t period_ms = 33;
+};
+
+/// @brief Tuning for `PoseFusion`.
+struct PoseFusionConfig {
+  PoseFilterConfig filter{};
+  /// @brief Field frame minus odometry frame. The distance readings are
+  ///        matched against the snapshot map (0-144 in), so this says where
+  ///        the odometry origin is on it: {72, 72} when odometry starts at 0
+  ///        in the field centre, {0, 0} when odometry is already in field
+  ///        coordinates. Heading is shared.
+  double field_offset_x_in = 0.0;
+  double field_offset_y_in = 0.0;
+  /// @brief Each tick, move odometry toward the filter by at most this
+  ///        fraction of the distance moved that tick ...
+  double correction_per_in = 0.6;
+  /// @brief ... plus this much, inches.
+  double correction_floor_in = 0.002;
+};
+
+/**
+ * @brief Runs a `PoseFilter` next to odometry and says how to correct it.
+ *
+ * Call `step()` once per odometry tick with the odometry pose. It predicts
+ * from the odometry step, reads the distance sensors that have a new
+ * reading, and returns the position odometry should move to. The move is
+ * limited in proportion to the distance moved that tick: drift comes from
+ * moving, so it follows the drift, but a robot settling on a target sees a
+ * still pose. Correcting all at once in the physics simulator made the pose
+ * jump with sensor noise and point moves never settled.
+ *
+ * Pass one to `OdometrySetup::fusion` and the odometry task runs it. It
+ * corrects position only; heading stays with the IMU.
+ */
+class PoseFusion {
+ public:
+  PoseFusion(PoseFusionConfig config, std::vector<DistanceSensorInput> sensors);
+
+  /**
+   * @brief Start from @p odometry_pose.
+   * @param position_sigma_in Initial position uncertainty.
+   * @param heading_sigma_deg Initial heading uncertainty.
+   */
+  void reset(const Pose2D& odometry_pose, double position_sigma_in = 0.5,
+             double heading_sigma_deg = 0.5);
+
+  /**
+   * @brief One tick.
+   * @param odometry_pose The odometry pose now.
+   * @param now_ms Clock, for sensor periods.
+   * @return Where to move odometry's position to (odometry frame), or
+   *         nothing when it is already there.
+   */
+  std::optional<Vec2> step(const Pose2D& odometry_pose, std::uint32_t now_ms);
+
+  /// @brief The filter's pose, in the odometry frame. Safe from any task.
+  Pose2D pose() const;
+  /// @brief Readings used and rejected. Safe from any task.
+  int accepted() const;
+  int rejected() const;
+  /// @brief Position uncertainty, inches. Safe from any task.
+  double positionSigmaIn() const;
+
+ private:
+  Pose2D toField(const Pose2D& odometry) const;
+
+  PoseFusionConfig m_config;
+  std::vector<DistanceSensorInput> m_sensors;
+  std::vector<std::uint32_t> m_last_read_ms;
+  PoseFilter m_filter;
+  Pose2D m_previous{};  // field frame
+  bool m_started = false;
+  mutable sync::Mutex m_mutex;
 };
 
 }  // namespace control

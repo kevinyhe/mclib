@@ -235,5 +235,66 @@ int main() {
     CHECK_NEAR(filter.pose().x, 72.0, 1e-6);
   }
 
+  std::printf("-- PoseFusion: laps with the correction written back into odometry\n");
+  {
+    // The same drifting odometry as above, but each tick the odometry
+    // position is replaced by what PoseFusion returns, as the odometry task
+    // does. Odometry here starts at 0 in the field centre: offset 72.
+    std::mt19937 rng(7);
+    std::normal_distribution<double> unit(0.0, 1.0);
+    Pose2D truth{-30, -30, 0};
+    Pose2D odom = truth;
+    std::vector<double> latest(kSensors.size(), -1);
+    std::vector<mclib::control::DistanceSensorInput> inputs;
+    for (std::size_t i = 0; i < kSensors.size(); ++i) {
+      inputs.push_back({kSensors[i], [&latest, i] { return latest[i]; }, 50});
+    }
+    mclib::control::PoseFusionConfig config;
+    config.field_offset_x_in = config.field_offset_y_in = 72;
+    mclib::control::PoseFusion fusion(config, inputs);
+    fusion.reset(odom);
+    std::uint32_t now_ms = 0;
+    double worst_step_in = 0;  // largest correction while standing still
+    auto tick = [&](double forward_in, double turn_rad) {
+      now_ms += 10;
+      truth.x += forward_in * std::sin(truth.theta);
+      truth.y += forward_in * std::cos(truth.theta);
+      truth.theta = mclib::wrapAngle(truth.theta + turn_rad);
+      odom.x += forward_in * 1.04 * std::sin(odom.theta);
+      odom.y += forward_in * 1.04 * std::cos(odom.theta);
+      odom.theta = mclib::wrapAngle(odom.theta + turn_rad * 91.0 / 90.0);
+      const Pose2D field_truth{truth.x + 72, truth.y + 72, truth.theta};
+      for (std::size_t i = 0; i < kSensors.size(); ++i) {
+        const double r = trueRange(kSensors[i], field_truth);
+        latest[i] = r > 0 ? r + 0.02 * r * unit(rng) : -1;
+      }
+      const auto corrected = fusion.step(odom, now_ms);
+      if (corrected.has_value()) {
+        if (forward_in == 0 && turn_rad == 0)
+          worst_step_in = std::max(worst_step_in,
+                                   std::hypot(corrected->x() - odom.x, corrected->y() - odom.y));
+        odom.x = corrected->x();
+        odom.y = corrected->y();
+      }
+    };
+    for (int lap = 0; lap < 4; ++lap)
+      for (int side = 0; side < 4; ++side) {
+        for (int i = 0; i < 250; ++i) tick(60.0 / 250, 0);
+        for (int i = 0; i < 50; ++i) tick(0, 90.0 * kDeg / 50);
+      }
+    const double drive_error = std::hypot(odom.x - truth.x, odom.y - truth.y);
+    for (int i = 0; i < 100; ++i) tick(0, 0);  // stand still for a second
+    std::printf("   odometry %.2f in off after 4 laps (12.18 uncorrected); largest "
+                "correction per tick standing still %.4f in; %d readings used\n",
+                drive_error, worst_step_in, fusion.accepted());
+    CHECK(drive_error < 2.0);
+    // Standing still, only the 0.002 in floor moves it.
+    CHECK(worst_step_in <= config.correction_floor_in + 1e-12);
+    // pose() is in the odometry frame.
+    CHECK(std::hypot(fusion.pose().x - truth.x, fusion.pose().y - truth.y) < 2.0);
+    // A non-finite pose is ignored.
+    CHECK(!fusion.step(Pose2D{NAN, 0, 0}, now_ms + 10).has_value());
+  }
+
   return mclib::test::summary("pose_filter");
 }
