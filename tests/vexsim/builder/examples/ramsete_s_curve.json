@@ -1,0 +1,43 @@
+{
+  "name": "RAMSETE S-curve out and back",
+  "preset": "six_motor_450",
+  "tracking_mode": "two",
+  "start_pose": {
+    "x": 0,
+    "y": 0,
+    "heading": 0
+  },
+  "environment": {
+    "soc": 1,
+    "friction": 1,
+    "encoder_heading": false,
+    "seed": 1,
+    "locked": false,
+    "constrained": false
+  },
+  "stop_on_failure": true,
+  "steps": [
+    {
+      "type": "follow",
+      "via_x": 12,
+      "via_y": 24,
+      "x": 0,
+      "y": 48,
+      "direction": 1,
+      "b": 50,
+      "timeout_ms": 6000,
+      "volts": 12
+    },
+    {
+      "type": "follow",
+      "via_x": -12,
+      "via_y": 24,
+      "x": 0,
+      "y": 0,
+      "direction": -1,
+      "b": 50,
+      "timeout_ms": 6000,
+      "volts": 12
+    }
+  ]
+}

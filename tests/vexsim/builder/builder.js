@@ -37,6 +37,17 @@ function motionReferencePath(spec, trackWidthIn) {
       pose.x = points.at(-1).x;
       pose.y = points.at(-1).y;
       pose.heading = step.heading;
+    } else if (step.type === "follow") {
+      // Same curve the library bakes: centripetal Catmull-Rom through the
+      // entry position, the via point and the end. Drawn with reflected end
+      // knots, so the ends can differ slightly from generateSpline()'s.
+      const knots = [{ x: pose.x, y: pose.y }, { x: step.via_x, y: step.via_y }, { x: step.x, y: step.y }];
+      points.push(...catmullRom(knots).slice(1));
+      const a = points.at(-2), b = points.at(-1);
+      pose.x = step.x;
+      pose.y = step.y;
+      pose.heading = Math.atan2(b.x - a.x, b.y - a.y) * 180 / Math.PI + (step.direction === -1 ? 180 : 0);
+      target = { x: step.x, y: step.y };
     } else {
       if (step.type === "point") pose.heading = Math.atan2(step.x - pose.x, step.y - pose.y) * 180 / Math.PI + (step.direction === -1 ? 180 : 0);
       pose.x = step.x;
@@ -47,6 +58,27 @@ function motionReferencePath(spec, trackWidthIn) {
     paths.push({ index, type: step.type, start, end: { ...pose }, points, target: target || { ...pose } });
   });
   return paths;
+}
+
+// Centripetal Catmull-Rom (alpha 0.5) through @p knots, 24 samples per span.
+function catmullRom(knots) {
+  if (knots.length < 2) return knots.slice();
+  const reflect = (p, q) => ({ x: 2 * p.x - q.x, y: 2 * p.y - q.y });
+  const all = [reflect(knots[0], knots[1]), ...knots, reflect(knots.at(-1), knots.at(-2))];
+  const gap = (p, q) => Math.max(Math.sqrt(Math.hypot(q.x - p.x, q.y - p.y)), 1e-6);
+  const out = [knots[0]];
+  for (let i = 1; i + 2 < all.length; i++) {
+    const [p0, p1, p2, p3] = [all[i - 1], all[i], all[i + 1], all[i + 2]];
+    const t1 = gap(p0, p1), t2 = t1 + gap(p1, p2), t3 = t2 + gap(p2, p3);
+    const lerp = (p, q, ta, tb, t) => ({ x: ((tb - t) * p.x + (t - ta) * q.x) / (tb - ta), y: ((tb - t) * p.y + (t - ta) * q.y) / (tb - ta) });
+    for (let s = 1; s <= 24; s++) {
+      const t = t1 + (t2 - t1) * s / 24;
+      const a1 = lerp(p0, p1, 0, t1, t), a2 = lerp(p1, p2, t1, t2, t), a3 = lerp(p2, p3, t2, t3, t);
+      const b1 = lerp(a1, a2, 0, t2, t), b2 = lerp(a2, a3, t1, t3, t);
+      out.push(lerp(b1, b2, t1, t2, t));
+    }
+  }
+  return out;
 }
 
 // A result-row inspection is an exact frame selection, not a time seek. At a
@@ -167,7 +199,7 @@ function motionTelemetry(frame, target) {
   };
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { motionReferencePath, motionFrameAt, motionVisibleTrace, motionTimelineMax, motionRecording, motionAcceptance, motionStepStatus, motionTelemetry, motionUnwrapSeries, motionTraceBounds };
+if (typeof module !== "undefined" && module.exports) module.exports = { catmullRom, motionReferencePath, motionFrameAt, motionVisibleTrace, motionTimelineMax, motionRecording, motionAcceptance, motionStepStatus, motionTelemetry, motionUnwrapSeries, motionTraceBounds };
 
 (() => {
   if (typeof document === "undefined") return;
@@ -182,10 +214,13 @@ if (typeof module !== "undefined" && module.exports) module.exports = { motionRe
     arc: { label: "Arc (auto direction)", description: "Follow a constant-radius arc to an absolute heading. The radius sign picks the arc side; travel direction is automatic.", fields: ["heading", "radius"], defaults: { heading: 90, radius: 24 } },
     reverse_arc: { label: "Reverse arc", description: "Reverse along a constant-radius arc. The signed radius and target heading must describe reverse travel from the entry pose.", fields: ["heading", "radius"], defaults: { heading: -90, radius: 24 } },
     swing: { label: "Swing turn", description: "Turn around one stationary side of the drivetrain.", fields: ["heading", "direction"], defaults: { heading: 90, direction: 1 } },
+    follow: { label: "Follow path (RAMSETE)", description: "Plan a spline from here through the via point to the target, then follow it with followTrajectory(). Feedforward and track width are measured in the simulator before the run. Heading is not checked; it ends wherever the path points.", fields: ["via_x", "via_y", "x", "y", "direction", "b"], defaults: { via_x: 24, via_y: 24, x: 0, y: 48, direction: 1, b: 50, timeout_ms: 6000 } },
     wall_reset: { label: "Wall reset", description: "Detect a sustained motor stall, then reset the estimated pose. Enable locked motors to model an ideal stall.", fields: ["x", "y", "heading", "current_ma"], defaults: { x: 0, y: 0, heading: 0, current_ma: 2500 } },
   };
   const FIELD_INFO = {
-    x: ["X / in", -500, 500, 0.5], y: ["Y / in", -500, 500, 0.5], heading: ["Heading / deg", -3600, 3600, 1],
+    x: ["X / in", -500, 500, 0.5], y: ["Y / in", -500, 500, 0.5],
+    via_x: ["Via X / in", -500, 500, 0.5], via_y: ["Via Y / in", -500, 500, 0.5],
+    b: ["RAMSETE b", 0.1, 500, 1], heading: ["Heading / deg", -3600, 3600, 1],
     distance: ["Distance / in", -500, 500, 1], radius: ["Signed radius / in", -250, 250, 0.5],
     timeout_ms: ["Timeout / ms", 50, 20000, 50], volts: ["Max output / V", 0.1, 12, 0.1],
     lead: ["Lead / ratio", 0, 0.99, 0.01], current_ma: ["Stall current / mA", 0, 10000, 50],
@@ -304,6 +339,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { motionRe
     if (step.type === "drive") return `${fmt(step.distance, 0)} in · ${timeout}`;
     if (["arc", "reverse_arc"].includes(step.type)) return `R ${fmt(step.radius, 0)} in → ${fmt(step.heading, 0)}° · ${timeout}`;
     if (["turn", "swing"].includes(step.type)) return `${fmt(step.heading, 0)}° · ${timeout}`;
+    if (step.type === "follow") return `via (${fmt(step.via_x, 0)}, ${fmt(step.via_y, 0)}) → (${fmt(step.x, 0)}, ${fmt(step.y, 0)}) in · b ${fmt(step.b, 0)} · ${timeout}`;
     return `(${fmt(step.x, 0)}, ${fmt(step.y, 0)}) in${step.type === "boomerang" ? ` / ${fmt(step.heading, 0)}°` : ""} · ${timeout}`;
   }
 
@@ -359,7 +395,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { motionRe
     form.append(grid); $("step-inspector").append(form);
   }
 
-  function newStep(type) { return { type, ...TYPE_INFO[type].defaults, timeout_ms: 4000, ...(type === "turn_to_point" ? {} : { volts: type === "wall_reset" ? 6 : 12 }) }; }
+  function newStep(type) { return { type, timeout_ms: 4000, ...TYPE_INFO[type].defaults, ...(type === "turn_to_point" ? {} : { volts: type === "wall_reset" ? 6 : 12 }) }; }
 
   function renderSettings() {
     $("routine-name").value = state.spec.name;
@@ -904,11 +940,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = { motionRe
       if (event.button !== 0 || !state.transform) return;
       const position = coordinates(event); const paths = referencePath(); let hit = null;
       for (const path of [...paths].reverse()) {
-        const screen = worldToScreen(path.target); if (Math.hypot(screen.x - position.x, screen.y - position.y) < 16 && ["point", "boomerang", "turn_to_point", "wall_reset"].includes(path.type)) { hit = { type: "target", index: path.index }; break; }
+        const screen = worldToScreen(path.target); if (Math.hypot(screen.x - position.x, screen.y - position.y) < 16 && ["point", "boomerang", "turn_to_point", "wall_reset", "follow"].includes(path.type)) { hit = { type: "target", index: path.index }; break; }
       }
       const start = worldToScreen(state.spec.start_pose);
       if (!hit && Math.hypot(start.x - position.x, start.y - position.y) < 18) hit = { type: "start" };
-      if (!hit && ["point", "boomerang", "turn_to_point", "wall_reset"].includes(selectedStep()?.type)) hit = { type: "target", index: state.selected };
+      if (!hit && ["point", "boomerang", "turn_to_point", "wall_reset", "follow"].includes(selectedStep()?.type)) hit = { type: "target", index: state.selected };
       if (hit) { state.drag = hit; if (hit.type === "target") selectStep(hit.index); canvas.setPointerCapture(event.pointerId); moveTarget(position); }
     });
     function moveTarget(position) {

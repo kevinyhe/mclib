@@ -6,6 +6,7 @@
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/ramsete.hpp"
+#include "mclib/path/spline.hpp"
 #include "mclib/path/trajectory.hpp"
 #include "mclib/math.hpp"
 #include <cmath>
@@ -161,6 +162,25 @@ mclib::path::Path sCurvePath(double radius_in) {
   return mclib::path::Path(points);
 }
 }  // namespace
+
+// Follow a centripetal Catmull-Rom spline from the current odometry position
+// through @p n field points (x, y pairs, inches) with followTrajectory(), the
+// same way an autonomous would plan one. Returns the MotionResult as an int,
+// or -1 when the points don't make a followable path.
+extern "C" int sim_follow_spline(const double* xy, int n, int reversed,
+                                 double timeout_ms, double volts) {
+  using namespace mclib::units;
+  const auto pose = mclib::control::robotState().pose();
+  std::vector<mclib::path::Waypoint> waypoints{{pose.x * inch, pose.y * inch}};
+  for (int i = 0; i < n; ++i) waypoints.push_back({xy[2 * i] * inch, xy[2 * i + 1] * inch});
+  auto limits = ramsete_limits;
+  limits.reversed = reversed != 0;
+  const auto trajectory =
+      mclib::path::Trajectory::generate(mclib::path::generateSpline(waypoints), limits);
+  if (trajectory.empty()) return -1;
+  return static_cast<int>(followTrajectory(trajectory, ramsete_config,
+                                           timeout_ms * millisecond, true, volts * volt));
+}
 
 extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
                                 double max_ips, double max_ips2, double max_lateral_ips2,

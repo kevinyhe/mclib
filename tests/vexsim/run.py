@@ -41,7 +41,7 @@ def build(destination):
     sources = ["control/motion", "control/chassis_io", "control/motion_config",
                "control/motion_math", "control/scaling", "control/robot_state",
                "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
-               "control/ramsete", "path/trajectory", "path/path"]
+               "control/ramsete", "path/trajectory", "path/path", "path/spline"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -81,6 +81,10 @@ def load_library(library):
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
+    if hasattr(lib, "sim_follow_spline"):
+        lib.sim_follow_spline.argtypes = [C.POINTER(C.c_double), C.c_int, C.c_int,
+                                          C.c_double, C.c_double]
+        lib.sim_follow_spline.restype = C.c_int
     lib.sim_heading_target.argtypes = []
     lib.sim_heading_target.restype = C.c_double
     if hasattr(lib, "sim_motion_telemetry"):
@@ -283,6 +287,24 @@ class PhysicsBridge:
             raise RuntimeError("; ".join(self.exceptions))
         return result
 
+    def set_ramsete(self, feedforward, b=50.0, zeta=0.7, accel=60.0, lateral=60.0):
+        """Tune followTrajectory() from a measure_feedforward() result: plan at
+        70% of the measured top speed."""
+        self.lib.sim_set_ramsete(feedforward["ks"], feedforward["kv"], b, zeta,
+                                 0.7 * feedforward["top_ips"], accel, lateral,
+                                 feedforward["track_in"])
+
+    def follow(self, points, reversed=False, timeout=4000, volts=12):
+        """followTrajectory() along a spline from the current pose through
+        @p points, a list of (x, y) in inches. Returns the MotionResult int."""
+        flat = (C.c_double * (2 * len(points)))(*[v for point in points for v in point])
+        result = self.lib.sim_follow_spline(flat, len(points), int(reversed), timeout, volts)
+        if self.exceptions:
+            raise RuntimeError("; ".join(self.exceptions))
+        if result < 0:
+            raise ValueError("The follow points don't make a path: two in a row are the same")
+        return result
+
     def pose(self):
         pose = (C.c_double * 3)()
         self.lib.sim_pose(pose)
@@ -430,12 +452,8 @@ def main():
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,
                                **case.get("options", {}))
         if feedforward is not None:
-            # Plan at 70% of the measured top speed, with --ramsete-accel
-            # and 60 in/s^2 cornering.
-            cruise = 0.7 * feedforward["top_ips"]
-            lib.sim_set_ramsete(feedforward["ks"], feedforward["kv"],
-                                args.ramsete_b, args.ramsete_zeta,
-                                cruise, args.ramsete_accel, 60.0, feedforward["track_in"])
+            bridge.set_ramsete(feedforward, b=args.ramsete_b, zeta=args.ramsete_zeta,
+                               accel=args.ramsete_accel)
         error = None
         try:
             wall_result = bridge.run(case["action"], **case["args"])

@@ -241,7 +241,19 @@ def transform(source):
     js = _replace_once(js, "fetch('/field')", "fetch('/native/field.json')")
     js = _replace_region(js, "// ------------------------------------------------------------------- input",
                          "// ------------------------------------------------------------------ camera", _INPUT)
-    js = _replace_region(js, "async function poll() {", "let lastHud = 0;", "")
+    # Recorded playback has no live pose buffer. The frame loop and reset code
+    # outside the removed region still read these, so keep them, inert:
+    # clockOffset stays null and the wall-clock branches never run.
+    js = _replace_region(js, "async function poll() {", "let lastHud = 0;",
+                         "const RENDER_DELAY = 0;\nconst poses = [];\nlet clockOffset = null;\n")
+    # The live page buffers poses and interpolates them on the wall clock
+    # (notePose/drawPose, inside the poll region removed above). A recorded
+    # frame is already the exact pose for its moment, so place the robot
+    # directly and drop the per-frame redraw.
+    js = _replace_once(js, "  notePose(s);",
+                       "  robot.position.copy(P(s.robot.x, s.robot.y, 0));\n"
+                       "  robot.rotation.y = s.robot.theta + modelYaw;")
+    js = _replace_once(js, "  drawPose();", "  // Recorded playback places the robot in apply().")
     js = _replace_once(js, "    hud(s);", "    // HUD is supplied by the parent from the same recorded frame.")
     js = _replace_region(js, "// ---------------------------------------------------------------------- HUD",
                          "// ------------------------------------------------------------------ startup", "")

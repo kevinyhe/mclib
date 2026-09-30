@@ -36,6 +36,14 @@ The server listens on localhost only.
 For boomerang, **Direction** picks forward or reverse and **Heading** is the
 final robot heading (`0°` = +Y, `+90°` = +X).
 
+**Follow path (RAMSETE)** plans a spline from wherever the robot is, through
+**Via X / Y**, to the target, and follows it with `followTrajectory()`. Before
+the run, the builder measures the preset's kS, kV and effective track width in
+the simulator, and plans at 70% of top speed. **Direction** −1 backs along the
+path. **RAMSETE b** is the correction gain (50 suits these presets). The step
+ends with the settle turn and straight correction, so it defaults to a 6 s
+limit. The final heading is not checked.
+
 Each step stops the robot and holds for 300 ms. Chained motions are not
 supported.
 
@@ -47,6 +55,7 @@ supported.
 | [two_tracker_boomerang.json](examples/two_tracker_boomerang.json) | the same move with tracking wheels |
 | [point_then_align.json](examples/point_then_align.json) | drive to a point, then turn |
 | [timeout_recovery.json](examples/timeout_recovery.json) | a turn that times out, followed by a drive |
+| [ramsete_s_curve.json](examples/ramsete_s_curve.json) | RAMSETE along an S-curve out, then backing along another |
 
 ## Telemetry
 

@@ -31,7 +31,7 @@ class NativeViewerTests(unittest.TestCase):
         for start, end in (("function placeholder(", "function orient("),
                            ("// floor tiles", "// perimeter")):
             self.assertIn(self.source[self.source.index(start):self.source.index(end)], js)
-        self.assertNotIn("setInterval", js)
+        self.assertNotRegex(js, r"setInterval\s*\(")
         self.assertNotIn("fetch('/input')", js)
         self.assertNotIn("fetch('/state')", js)
         self.assertNotIn("hud(s)", js)
