@@ -589,8 +589,11 @@ is always false, and `makeIndexCommand` finishes immediately.
 ### Jam recovery
 
 A jam is current above `jam_current_amps` with speed below `jam_velocity_rpm` for
-`jam_dwell_ms`. The conveyor then runs at `unjam_voltage` for `unjam_ms` and
-returns to its previous state. After `max_unjam_retries` jams in a row it stops,
+`jam_dwell_ms`. The conveyor then runs the other way at `unjam_voltage` for
+`unjam_ms` and returns to its previous state. The unjam is always opposite to
+the direction that jammed: a jam in Forward or IndexToSensor backs off toward
+the intake, a jam in Reverse pushes toward the scoring end. Only the size of
+`unjam_voltage` is used; its sign is ignored. After `max_unjam_retries` jams in a row it stops,
 and `isJammed()` stays true until the state changes or `clearJam()` is called.
 The retry count resets after `jam_clear_ms` of normal running.
 

@@ -55,6 +55,9 @@ struct ConveyorConfig {
   double jam_dwell_ms = 250.0;
   /// How long each unjam attempt runs.
   double unjam_ms = 250.0;
+  /// Size of the unjam voltage. The sign is ignored: an unjam always runs
+  /// opposite to the direction that jammed, so a jam in Forward backs off
+  /// toward the intake and a jam in Reverse pushes toward the scoring end.
   double unjam_voltage = -8.0;
   /// How long the conveyor must run unstalled before the retry budget refills.
   double jam_clear_ms = 1000.0;
@@ -154,6 +157,8 @@ private:
   double m_clear_start_ms = 0.0;
   bool m_unjamming = false;
   double m_unjam_end_ms = 0.0;
+  /// Voltage of the unjam in progress, opposite to the jammed direction.
+  double m_unjam_volts = 0.0;
   int m_unjam_retries = 0;
   bool m_jammed = false;
 };
