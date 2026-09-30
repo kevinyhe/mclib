@@ -211,3 +211,13 @@ summary { cursor: pointer; font-size: 11px; font-weight: 700; }
   .summary-cell:nth-last-child(-n+2) { border-bottom: 0; }
   .time-labels { font-size: 8px; }
 }
+
+/* Trajectory builder: waypoint editor and C++ export. */
+.waypoint-editor { margin-top: 12px; }
+.waypoint-editor h4 { margin: 0 0 6px; font-size: 12px; }
+.waypoint-row { align-items: end; }
+.waypoint-actions { display: flex; gap: 8px; margin: 6px 0; }
+.cpp-dialog { width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 16px; border: 1px solid #b1b1a7; border-radius: 6px; }
+.cpp-dialog h2 { margin: 0 0 8px; font-size: 15px; }
+.cpp-dialog textarea { width: 100%; height: 55vh; box-sizing: border-box; font: 12px/1.45 Consolas, monospace; white-space: pre; }
+.cpp-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }

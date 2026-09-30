@@ -14,7 +14,7 @@
     <h1>Motion debugger</h1>
     <div id="connection" class="connection"><span class="status-dot"></span><span>CONNECTING</span></div>
     <div class="document-tools">
-      <button id="new-project">New</button><button id="import-project">Import JSON</button><button id="export-project">Export JSON</button>
+      <button id="new-project">New</button><button id="import-project">Import JSON</button><button id="export-project">Export JSON</button><button id="export-cpp">Export C++</button>
       <input id="import-file" type="file" accept="application/json,.json" hidden>
     </div>
     <div class="run-actions"><button id="cancel-run" hidden>Cancel run</button><button id="run-sequence" class="primary">Build & run</button></div>
@@ -77,5 +77,11 @@
       <details id="diagnostic-details" class="diagnostic-details" hidden><summary>Run diagnostics & artifacts</summary><pre id="diagnostic-output"></pre></details>
     </section>
   </main>
+  <dialog id="cpp-dialog" class="cpp-dialog">
+    <h2>Autonomous as C++</h2>
+    <p id="cpp-note" class="motion-description"></p>
+    <textarea id="cpp-code" readonly spellcheck="false" aria-label="Generated C++"></textarea>
+    <div class="cpp-actions"><button id="cpp-copy">Copy</button><button id="cpp-download">Download .cpp</button><button id="cpp-close" class="primary">Close</button></div>
+  </dialog>
 </body>
 </html>

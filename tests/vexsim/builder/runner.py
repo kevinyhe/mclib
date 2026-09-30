@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validated motion sequences, executed by mclib C++ in an isolated process."""
 import argparse
+import contextlib
 import copy
 import csv
 import fcntl
@@ -10,6 +11,7 @@ import math
 from pathlib import Path
 import shutil
 import sys
+import tempfile
 import time
 
 sys.dont_write_bytecode = True
@@ -34,8 +36,8 @@ STEP_FIELDS = {
     "swing": {"heading", "direction"},
     "wall_reset": {"x", "y", "heading", "current_ma"},
     # followTrajectory() (RAMSETE) along a spline from the current pose,
-    # through (via_x, via_y), to (x, y).
-    "follow": {"via_x", "via_y", "x", "y", "direction", "b"},
+    # through each of `waypoints` ([{"x", "y"}, ...], up to 8), to (x, y).
+    "follow": {"waypoints", "x", "y", "direction", "b"},
 }
 DEFAULTS = dict(name="Boomerang / tracking wheels", preset="six_motor_450", tracking_mode="two",
                 start_pose=dict(x=0, y=0, heading=0),
@@ -145,6 +147,10 @@ def validate_spec(raw):
         kind = value["type"]
         if kind not in STEP_FIELDS:
             raise ValueError(f"{location}: unknown motion type")
+        if kind == "follow" and ("via_x" in value or "via_y" in value):
+            # Files saved before waypoints lists had exactly one via point.
+            value = dict(value)
+            value["waypoints"] = [dict(x=value.pop("via_x", 0), y=value.pop("via_y", 0))]
         obj(value, STEP_FIELDS[kind] | {"type", "timeout_ms", "volts"}, location)
         step = dict(type=kind, timeout_ms=4000, volts=6 if kind == "wall_reset" else 12)
         step.update(value)
@@ -154,6 +160,18 @@ def validate_spec(raw):
             step.setdefault("lead", .5)
         if kind == "follow":
             step.setdefault("b", 50)
+            step.setdefault("waypoints", [])
+            if not isinstance(step["waypoints"], list) or len(step["waypoints"]) > 8:
+                raise ValueError(f"{location}.waypoints must be a list of up to 8 points")
+            points = []
+            for n, point in enumerate(step["waypoints"]):
+                where = f"{location}.waypoints[{n}]"
+                obj(point, {"x", "y"}, where)
+                if "x" not in point or "y" not in point:
+                    raise ValueError(f"{where} needs x and y")
+                points.append(dict(x=number(point["x"], -500, 500, f"{where}.x"),
+                                   y=number(point["y"], -500, 500, f"{where}.y")))
+            step["waypoints"] = points
         if kind == "wall_reset":
             if index != len(steps) - 1:
                 raise ValueError("wall_reset must be last: it changes the odometry reference frame")
@@ -161,7 +179,7 @@ def validate_spec(raw):
         for key in STEP_FIELDS[kind]:
             if key not in step:
                 raise ValueError(f"{location}.{key} is required")
-        for key in ("x", "y", "distance", "via_x", "via_y"):
+        for key in ("x", "y", "distance"):
             if key in step:
                 number(step[key], -500, 500, f"{location}.{key}")
         if "heading" in step:
@@ -259,7 +277,7 @@ def invoke(bridge, step, feedforward=None):
     if step["type"] == "follow":
         # Heading is not checked: it is wherever the spline ends up pointing.
         bridge.set_ramsete(feedforward, b=step["b"])
-        return bridge.follow([(step["via_x"], step["via_y"]), (step["x"], step["y"])],
+        return bridge.follow([(p["x"], p["y"]) for p in step["waypoints"]] + [(step["x"], step["y"])],
                              reversed=step["direction"] == -1,
                              timeout=step["timeout_ms"], volts=step["volts"])
     actions = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4,
@@ -277,16 +295,11 @@ def invoke(bridge, step, feedforward=None):
     return bridge.run(actions[kind], **kwargs)
 
 
-def execute(spec, destination, vexsim, cache=None):
-    spec = validate_spec(spec)
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
-    write_json(destination / "spec.json", spec)
-    progress = dict(phase="build", step=0, total=len(spec["steps"]))
-    write_json(destination / "progress.json", progress)
+def load_library(vexsim, cache, fallback_dir):
+    """Build (or reuse) the simulator library for the current sources."""
     sys.path.insert(0, str(Path(vexsim).resolve()))
     fingerprint = source_fingerprint(vexsim)
-    build_dir = Path(cache) / fingerprint if cache else destination / "build"
+    build_dir = Path(cache) / fingerprint if cache else Path(fallback_dir)
     build_dir.mkdir(parents=True, exist_ok=True)
     library = build_dir / "libmclib_vexsim.so"
     marker = build_dir / "complete.json"
@@ -299,11 +312,80 @@ def execute(spec, destination, vexsim, cache=None):
             if source_fingerprint(vexsim) != fingerprint:
                 raise RuntimeError("Source changed during compilation; submit the run again")
             write_json(marker, dict(source_fingerprint=fingerprint))
+    return lib, fingerprint, build_dir
+
+
+def cached_feedforward(lib, build_dir, preset, tracking_mode):
+    """measure_feedforward(), kept next to the library it was measured with,
+    so only the first plan or run for a preset waits for it."""
+    path = Path(build_dir) / f"feedforward-{preset}-{tracking_mode}.json"
+    try:
+        return strict_json(path.read_text())
+    except (OSError, ValueError):
+        value = harness.measure_feedforward(lib, preset, tracking_mode, {})
+        write_json(path, value)
+        return value
+
+
+def plan(request, vexsim, cache=None):
+    """Plan every follow path in @p request without driving:
+    {"preset", "tracking_mode", "paths": [{"start": {"x", "y"}, "points": [[x, y], ...],
+    "direction", "b"}]} -> feedforward, the limits used, and each plan's states."""
+    if not isinstance(request, dict):
+        raise ValueError("plan request must be an object")
+    preset = request.get("preset")
+    if preset not in {item["id"] for item in PRESETS}:
+        raise ValueError("unknown preset")
+    tracking_mode = request.get("tracking_mode", "two")
+    if tracking_mode not in ("drive", "two"):
+        raise ValueError("tracking_mode must be drive or two")
+    paths = request.get("paths")
+    if not isinstance(paths, list) or len(paths) > LIMITS["max_steps"]:
+        raise ValueError("paths must be a list of up to 16 plans")
+    scratch = Path(cache or tempfile.mkdtemp(prefix="mclib-plan-"))
+    lib, _, build_dir = load_library(vexsim, cache, scratch / "build")
+    feedforward = cached_feedforward(lib, build_dir, preset, tracking_mode)
+    bridge = harness.PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+    plans = []
+    for index, item in enumerate(paths):
+        where = f"paths[{index}]"
+        start = item.get("start", {})
+        sx = number(start.get("x", 0), -500, 500, f"{where}.start.x")
+        sy = number(start.get("y", 0), -500, 500, f"{where}.start.y")
+        points = item.get("points", [])
+        if not isinstance(points, list) or not 1 <= len(points) <= 9:
+            raise ValueError(f"{where}.points must hold 1 to 9 points")
+        points = [(number(p[0], -500, 500, where), number(p[1], -500, 500, where)) for p in points]
+        bridge.set_ramsete(feedforward, b=number(item.get("b", 50), .1, 500, f"{where}.b"))
+        states = bridge.plan((sx, sy), points, reversed=item.get("direction", 1) == -1)
+        if states is None:
+            plans.append(dict(valid=False, reason="Two points in a row are the same"))
+            continue
+        length = sum(math.dist(a[1:3], b[1:3]) for a, b in zip(states, states[1:]))
+        plans.append(dict(valid=True, duration_s=states[-1][0], length_in=length,
+                          top_ips=max(s[3] for s in states),
+                          states=[[round(v, 4) for v in s] for s in states]))
+    cruise = 0.7 * feedforward["top_ips"]
+    return dict(feedforward=feedforward, b=50, zeta=0.7,
+                limits=dict(max_velocity_ips=cruise, max_acceleration_ips2=60.0,
+                            max_lateral_acceleration_ips2=60.0,
+                            track_width_in=feedforward["track_in"]),
+                plans=plans)
+
+
+def execute(spec, destination, vexsim, cache=None):
+    spec = validate_spec(spec)
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    write_json(destination / "spec.json", spec)
+    progress = dict(phase="build", step=0, total=len(spec["steps"]))
+    write_json(destination / "progress.json", progress)
+    lib, fingerprint, build_dir = load_library(vexsim, cache, destination / "build")
     shutil.copyfile(build_dir / "build.log", destination / "build.log")
     # followTrajectory() needs feedforward. Measure it the way the docs tell a
     # user to, on a healthy robot, before the run: measuring re-initialises
     # the library, so it can't happen once the sequence has started.
-    feedforward = (harness.measure_feedforward(lib, spec["preset"], spec["tracking_mode"], {})
+    feedforward = (cached_feedforward(lib, build_dir, spec["preset"], spec["tracking_mode"])
                    if any(step["type"] == "follow" for step in spec["steps"]) else None)
     bridge = harness.PhysicsBridge(lib, spec["preset"], **spec["environment"],
                                    tracking_mode=spec["tracking_mode"], tuning=spec["tuning"],
@@ -438,7 +520,8 @@ def execute(spec, destination, vexsim, cache=None):
                                failed_steps=sum(row["executed"] and not row["passed"] for row in rows),
                                skipped_steps=sum(not row["executed"] for row in rows),
                                elapsed_ms=round(bridge.sim.t * 1000), hold_ms=LIMITS["hold_ms"]),
-                  source_fingerprint=fingerprint, library=str(library), assumptions=ASSUMPTIONS)
+                  source_fingerprint=fingerprint, library=str(build_dir / "libmclib_vexsim.so"),
+                  assumptions=ASSUMPTIONS)
     write_json(destination / "result.json", result)
     write_json(destination / "partial.json", dict(steps=rows, trace=trace, live=False,
                                                  active_step=None, phase="complete"))
@@ -455,11 +538,26 @@ def execute(spec, destination, vexsim, cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--spec", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--plan", type=Path,
+                        help="plan the follow paths in this request and print JSON; no run")
     parser.add_argument("--vexsim", type=Path, default=ROOT.parent / "vexsim")
     parser.add_argument("--cache", type=Path)
     args = parser.parse_args()
+    if args.plan:
+        try:
+            # Standard output carries only the JSON answer; progress lines
+            # from building and measuring go to stderr.
+            with contextlib.redirect_stdout(sys.stderr):
+                answer = plan(strict_json(args.plan.read_text()), args.vexsim, args.cache)
+            print(json.dumps(answer))
+            return 0
+        except Exception as error:
+            print(json.dumps(dict(error=str(error))))
+            return 2
+    if not args.spec or not args.output:
+        parser.error("--spec and --output are required for a run")
     try:
         result = execute(strict_json(args.spec.read_text()), args.output, args.vexsim, args.cache)
         print(json.dumps(result["summary"]), flush=True)

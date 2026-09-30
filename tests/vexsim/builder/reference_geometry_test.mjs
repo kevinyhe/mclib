@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const { motionReferencePath, motionFrameAt, motionVisibleTrace, motionTimelineMax, motionRecording, motionAcceptance, motionStepStatus, motionTelemetry, motionUnwrapSeries, motionTraceBounds } = createRequire(import.meta.url)("./builder.js");
+const { catmullRom, followWaypoints, motionCppExport, motionReferencePath, motionFrameAt, motionVisibleTrace, motionTimelineMax, motionRecording, motionAcceptance, motionStepStatus, motionTelemetry, motionUnwrapSeries, motionTraceBounds } = createRequire(import.meta.url)("./builder.js");
 let checks = 0;
 function near(actual, expected, label) {
   assert(Math.abs(actual - expected) < 1e-9, `${label}: expected ${expected}, got ${actual}`);
@@ -219,4 +219,54 @@ function requestEqual(actual, expected, label) { assert.deepEqual(actual, expect
   requestEqual(f.state.job.id, "old", "Failed POST preserves the previous recording");
   requestEqual(f.$("run-history").value, "old", "Failed POST preserves the previous selection");
 }
+// Trajectory builder: a follow step's drawn path goes through every waypoint
+// and ends on its target; old files with one via point still draw.
+{
+  const [follow, after] = motionReferencePath(scenario([
+    { type: "follow", waypoints: [{ x: 12, y: 24 }, { x: -6, y: 30 }], x: 0, y: 48, direction: 1, b: 50 },
+    { type: "drive", distance: 10 },
+  ]));
+  const hits = (p) => follow.points.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 1e-9);
+  assert(hits({ x: 12, y: 24 }) && hits({ x: -6, y: 30 }), "Follow path passes through its waypoints"); checks += 1;
+  near(follow.points.at(-1).x, 0, "Follow ends on target X");
+  near(follow.points.at(-1).y, 48, "Follow ends on target Y");
+  near(after.start.y, 48, "The next step starts where the follow ends");
+  const old = motionReferencePath(scenario([{ type: "follow", via_x: 12, via_y: 24, x: 0, y: 48, direction: 1 }]))[0];
+  assert(old.points.some((q) => Math.hypot(q.x - 12, q.y - 24) < 1e-9), "Old via point still drawn"); checks += 1;
+  assert.deepEqual(followWaypoints({ via_x: 1, via_y: 2 }), [{ x: 1, y: 2 }]); checks += 1;
+  assert.deepEqual(followWaypoints({}), []); checks += 1;
+  // Reversed: the robot's heading is the path's end direction + 180.
+  const back = motionReferencePath(scenario([{ type: "follow", waypoints: [], x: 0, y: -24, direction: -1 }]))[0];
+  near(((back.end.heading % 360) + 360) % 360 % 360, 0, "Backing straight along -Y ends facing +Y");
+}
+
+// C++ export: every step becomes one mclib call, stop-on-failure checks the
+// result, and measured RAMSETE values appear when a plan is given.
+{
+  const spec = { name: "Test", preset: "six_motor_450", tracking_mode: "two", stop_on_failure: true,
+    start_pose: { x: 1, y: 2, heading: 90 },
+    steps: [
+      { type: "drive", distance: 24, timeout_ms: 1500, volts: 10 },
+      { type: "follow", waypoints: [{ x: 12, y: 24 }], x: 0, y: 48, direction: -1, b: 40, timeout_ms: 8000, volts: 12 },
+      { type: "wall_reset", x: 0, y: 0, heading: 0, current_ma: 2500, timeout_ms: 800, volts: 6 },
+    ] };
+  const code = motionCppExport(spec, { feedforward: { ks: 0.6989, kv: 0.13146, top_ips: 86, track_in: 13.454 },
+    limits: { max_velocity_ips: 60.18, max_acceleration_ips2: 60, max_lateral_acceleration_ips2: 60 } });
+  for (const line of [
+    "mclib::control::resetOdometry({1, 2, 90 * mclib::kPi / 180});",
+    "if (driveTo(24_in, 1500_ms, true, 10_V) != MotionResult::Reached) return;",
+    "follow.feedforward.kV = 0.1315_V / mclib::units::inps;",
+    "follow.track_width = 13.454_in;",
+    "limits.reversed = true;",
+    "follow.gains.b = 40;",
+    "generateSpline({{here.x * inch, here.y * inch}, {12_in, 24_in}, {0_in, 48_in}}), limits);",
+    "if (followTrajectory(path, follow, 8000_ms, true, 12_V) != MotionResult::Reached) return;",
+    "if (!wallReset(0_in, 0_in, 0_deg, 6_V, 800_ms, 2500 * mclib::units::milliampere)) return;",
+  ]) { assert(code.includes(line), `Export contains: ${line}`); checks += 1; }
+  const loose = motionCppExport({ ...spec, stop_on_failure: false }, null);
+  assert(loose.includes("  driveTo(24_in, 1500_ms, true, 10_V);"), "Without stop-on-failure the result is not checked"); checks += 1;
+  assert(loose.includes("measure these on your robot"), "No plan: placeholders say to measure"); checks += 1;
+  assert(!motionCppExport({ ...spec, steps: [spec.steps[0]] }, null).includes("RamseteConfig"), "No follow step: no RAMSETE setup"); checks += 1;
+}
+
 console.log(`PASS ${requestChecks} actual-handler asynchronous ownership checks; stub transport, no simulation results asserted.`);
