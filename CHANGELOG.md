@@ -37,6 +37,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- `MotorStateMechanism` kept its state through a disable, so after re-enable
+  it drove the pre-disable voltages for two ticks, or until a command changed
+  the state. It now goes to an off state on disable. New constructors take the
+  off state; the existing ones use the initial state.
 - Timed commands could finish one scheduler tick late. `makeStateForCommand`,
   `WaitCommand`, `WaitUntilTimeoutCommand`, and the timed commands of
   `PositionMechanism`, `PresetPositionMechanism` and `ToggleGroupMechanism`
