@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `useRamseteForArcs()`: `curveCircle()` and `curveCircleReverse()` plan
+  their arc (`path::planArc()`) and follow it with RAMSETE on the odometry
+  pose. In the simulator with tracking wheels, 24 in arcs land within
+  0.37-1.59 in instead of 5.9-15.1 in.
 - `mclib::control::PoseFilter`: a Kalman filter that blends odometry with
   distance sensor readings against the field walls and GPS poses, rejecting
   readings that don't fit.

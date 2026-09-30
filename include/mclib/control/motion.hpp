@@ -12,6 +12,7 @@
 namespace mclib {
 namespace path {
 class Trajectory;
+struct TrajectoryConstraints;
 }  // namespace path
 namespace control {
 struct RamseteConfig;
@@ -86,6 +87,30 @@ enum class MotionResult {
 
 /// @brief The enumerator's name, for logs and the brain screen.
 const char* toString(MotionResult result);
+
+/**
+ * @brief Make `curveCircle()` and `curveCircleReverse()` follow their arc with
+ *        RAMSETE, steering on the odometry pose.
+ *
+ * The encoder arcs measure progress with the drive encoders, which keep
+ * counting when a wheel slips; in the physics simulator they missed 24 in
+ * arcs by 5.9-15.1 in. After this call, an arc with `exit` true plans the
+ * same arc (`path::planArc()`) as a trajectory under @p limits and runs
+ * `followTrajectory()` with @p config, settle included. The call's
+ * `time_limit` and `max_output` still apply.
+ *
+ * The encoder arc still runs for a chained arc (`exit` false), a zero radius,
+ * and `curveCircleReverse()` / `reverse` when the geometry says forward.
+ *
+ * @param config RAMSETE gains and measured feedforward; `kV` must be
+ *        positive, or this does nothing.
+ * @param limits Speed, acceleration and cornering limits for the plan.
+ *        `reversed` is set per arc.
+ */
+void useRamseteForArcs(const RamseteConfig& config, const path::TrajectoryConstraints& limits);
+
+/// @brief Go back to the encoder arcs.
+void useEncoderArcs();
 
 }  // namespace mclib::control
 
