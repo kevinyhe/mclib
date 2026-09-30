@@ -19,7 +19,7 @@ Download `mclib@<version>.zip` from the
 project:
 
 ```sh
-pros c fetch mclib@0.1.0.zip
+pros c fetch mclib@0.2.0.zip
 pros c apply mclib
 ```
 

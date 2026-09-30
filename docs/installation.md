@@ -10,7 +10,7 @@ Requires the PROS CLI (`pip install pros-cli`) and a PROS 4 project.
 2. In the project directory:
 
 ```sh
-pros c fetch mclib@0.1.0.zip
+pros c fetch mclib@0.2.0.zip
 pros c apply mclib
 ```
 
@@ -23,7 +23,7 @@ current project and records it in `project.pros`.
 
 | Task | Command |
 | --- | --- |
-| Pin a version | `pros c apply mclib@0.1.0` |
+| Pin a version | `pros c apply mclib@0.2.0` |
 | Upgrade | fetch the new zip, then `pros c apply mclib --force-apply` |
 | Remove | `pros c uninstall mclib` |
 
