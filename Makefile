@@ -96,6 +96,7 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/control/profile.cpp \
 	$(SRCDIR)/mclib/control/feedforward.cpp \
 	$(SRCDIR)/mclib/control/ramsete.cpp \
+	$(SRCDIR)/mclib/control/pose_filter.cpp \
 	$(SRCDIR)/mclib/control/holonomic_follower.cpp \
 	$(SRCDIR)/mclib/pid.cpp \
 	$(SRCDIR)/mclib/path/path.cpp \

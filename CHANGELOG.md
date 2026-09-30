@@ -7,6 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `mclib::control::PoseFilter`: a Kalman filter that blends odometry with
+  distance sensor readings against the field walls and GPS poses, rejecting
+  readings that don't fit.
 - `mclib::control::AsyncMotion`: run a motion on its own task, wait for a
   time, distance or condition partway through, then collect its
   `MotionResult`. Starting a new one cancels the old one.
