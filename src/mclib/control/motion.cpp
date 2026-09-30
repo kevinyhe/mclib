@@ -1527,20 +1527,34 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
     }
     if (config.settle_position && result == MotionResult::Reached)
     {
-      // Only the part of the miss along the final heading: a tank drive can
-      // close that by driving straight. Closing a sideways miss of a few
-      // inches takes a pivot of up to 180 deg; in the physics simulator
-      // boomerang() did that, ran out of time and ended up to 179 deg off.
       const mclib::Pose2D pose = state().pose();
       const double h = end.heading.rad();
-      const double along_in = (end.x.in() - pose.x) * std::sin(h) +
-                              (end.y.in() - pose.y) * std::cos(h);
-      if (std::fabs(along_in) > cfg().distance_exit.big_error)
-      {
+      const double dx = end.x.in() - pose.x, dy = end.y.in() - pose.y;
+      const double along_in = dx * std::sin(h) + dy * std::cos(h);
+      const double side_in = dx * std::cos(h) - dy * std::sin(h);
+      const double band_in = cfg().distance_exit.big_error;
+      auto left = [&] {
         const double used = static_cast<uint32_t>(pros::millis() - start_time);
-        result = driveTo(along_in * mclib::units::inch,
-                         (time_limit.ms() - used) * mclib::units::millisecond, true,
-                         max_voltage);
+        return (time_limit.ms() - used) * mclib::units::millisecond;
+      };
+      if (std::fabs(side_in) > config.settle_side_tolerance.in())
+      {
+        // A tank drive can't slide sideways, and pivoting to face a point a
+        // few inches to the side and back took too long in the simulator.
+        // Back off along the heading instead, then come back in on a gentle
+        // boomerang: backing 4x the sideways miss keeps the approach within
+        // about 15 deg of the final heading. It costs 2-5 s, hence the
+        // separate, larger tolerance.
+        const int dir = trajectory.sample(duration * 0.5).velocity.raw() < 0 ? -1 : 1;
+        const double back_in = std::clamp(4 * std::fabs(side_in), 6.0, 18.0);
+        result = driveTo(-dir * back_in * mclib::units::inch, left(), true, max_voltage);
+        if (result == MotionResult::Reached)
+          result = boomerang(end.x, end.y, dir, end.heading, 0.6, left(), true, max_voltage);
+      }
+      else if (std::fabs(along_in) > band_in)
+      {
+        // Along the heading only: drive straight.
+        result = driveTo(along_in * mclib::units::inch, left(), true, max_voltage);
       }
     }
     return result;

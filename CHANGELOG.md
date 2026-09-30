@@ -37,6 +37,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- `followTrajectory()` could end several inches to the side of its end point
+  when the robot slid (12 in on low grip in the simulator). When the sideways
+  miss is over `RamseteConfig::settle_side_tolerance` (3 in), it now backs
+  off along its heading and comes back in with `boomerang()`.
 - `ConveyorMechanism` unjammed at a fixed `unjam_voltage` (-8 V), so a jam in
   Reverse was "unjammed" in the same direction it jammed. The unjam now runs
   opposite to the jammed direction; only the size of `unjam_voltage` is used.
