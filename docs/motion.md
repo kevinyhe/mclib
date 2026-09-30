@@ -321,34 +321,37 @@ cornering):
 | six_motor_450, forward / reverse | 9.54 / 9.53 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
 | speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
 
-RAMSETE stops correcting when the plan does, so a robot that lags ends with
-the error it had: up to 12° off heading on the fast drives. With `exit` true,
-`followTrajectory()` then settles in the time left:
+RAMSETE stops correcting when the plan does, so a robot that lags or slides
+ends with the error it had: up to 12° off heading on the fast drives, and up
+to 12 in off on low grip. With `exit` true, `followTrajectory()` then settles
+in the time left:
 
 1. It turns in place to the final heading
    (`RamseteConfig::turn_to_final_heading`).
-2. If the miss along that heading is more than
-   `distance_exit.big_error` (1.5 in by default), it drives straight to close
-   it (`RamseteConfig::settle_position`).
+2. If the robot is more than `settle_side_tolerance` (3 in) to the side of the
+   end point, it backs off along its heading (4x the sideways miss, 6-18 in)
+   and comes back in with `boomerang()` at lead 0.6. The approach then stays
+   within about 15° of the final heading. Turning to face a point a few inches
+   to the side instead ran out of time in the simulator, up to 179° off.
+3. Otherwise, if the miss along the heading is more than
+   `distance_exit.big_error` (1.5 in), it drives straight to close it.
 
-Both are on by default. It does not settle a sideways miss: a tank drive can
-only close a few inches sideways by pivoting, and settling with `boomerang()`
-that way ran out of time in the simulator, up to 179° off heading.
+Steps 2 and 3 are `RamseteConfig::settle_position`. Both settings are on by
+default. Settling takes up to 1.2 s for a turn and straight correction, and
+2-5 s for a back-off, so give `followTrajectory()` a time limit well above
+the trajectory's duration.
 
-With both on, all nine arc and S-curve scenarios pass with two tracking
-wheels: 0.38-1.60 in and 0.1-2.0° off. Settling takes up to 1.2 s of the time
-limit.
+In the simulator with two tracking wheels, all nine arc and S-curve
+scenarios pass (0.38-1.60 in, 0.1-2.0° off), and so do the stress cases:
 
-Two stress cases still fail, because what is left is mostly sideways:
+| Case (six_motor_450, 90° arc) | No settling | Turn + straight | With back-off |
+| --- | --- | --- | --- |
+| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in | 1.09 in, 6.48 s |
+| Starting 3.6 in and 8° off the path | 4.53 in | 3.67 in | 1.06 in, 5.80 s |
+| Battery at 8% | 2.44 in | 1.60 in | 1.60 in |
 
-| Case (six_motor_450, 90° arc) | Before settling | After |
-| --- | --- | --- |
-| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in |
-| Starting 3.6 in and 8° off the path | 4.53 in | 3.67 in |
-
-In both the robot slides outward through the arc. Lowering b to 10-30 changes
-the miss by at most 1.4 in, and capping the turn rate made every case worse.
-Plan slower on a slippery field.
+On a slippery field, planning slower is still the better fix: the back-off
+costs seconds.
 
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.

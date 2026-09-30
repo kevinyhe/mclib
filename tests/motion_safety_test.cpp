@@ -618,7 +618,7 @@ int main() {
              (1 * inps).raw();
     };
     double left_slip = 0.92, right_slip = 1.0;
-    auto run = [&](bool exit, bool settle = true) {
+    auto run = [&](bool exit, bool settle = true, QTime limit = 5_s) {
       pose = trajectory_start;
       resetOdometry(pose);
       hw.heading = pose.theta * 180 / M_PI;
@@ -641,7 +641,7 @@ int main() {
       RamseteConfig config = ramsete_config;
       config.turn_to_final_heading = settle;
       config.settle_position = settle;
-      return followTrajectory(trajectory, config, 5_s, exit);
+      return followTrajectory(trajectory, config, limit, exit);
     };
     const auto end = trajectory.states().back();
     auto headingMissDeg = [&] {
@@ -694,6 +694,27 @@ int main() {
     // travel, so it closes most of the gap rather than all of it.
     CHECK(std::fabs(alongIn()) < short_in / 2);
     CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+
+    // Left side 20% slow: the robot ends well off to the side, past
+    // settle_side_tolerance. The follower backs off and comes back in.
+    {
+      const double saved_left = left_slip, saved_right = right_slip;
+      left_slip = 0.80;
+      right_slip = 1.0;
+      CHECK(run(true, false, 10_s) == MotionResult::Reached);
+      const double side_unsettled = missIn();
+      const double side_part = std::sqrt(std::max(0.0, side_unsettled * side_unsettled -
+                                                         alongIn() * alongIn()));
+      CHECK(run(true, true, 10_s) == MotionResult::Reached);
+      std::printf("followTrajectory, left side 20%% slow: %.3f in off (%.3f sideways) "
+                  "without settling the position, %.3f in with it, after %u ms\n",
+                  side_unsettled, side_part, missIn(), static_cast<unsigned>(now_ms));
+      CHECK(side_part > ramsete_config.settle_side_tolerance.in());
+      CHECK(missIn() < side_unsettled / 2);
+      CHECK(headingMissDeg() <= motionConfig().turn_exit.big_error);
+      left_slip = saved_left;
+      right_slip = saved_right;
+    }
 
     // Position settling off: only the turn runs, and the lag stays.
     {

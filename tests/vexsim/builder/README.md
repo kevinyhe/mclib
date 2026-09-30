@@ -41,8 +41,8 @@ final robot heading (`0°` = +Y, `+90°` = +X).
 the run, the builder measures the preset's kS, kV and effective track width in
 the simulator, and plans at 70% of top speed. **Direction** −1 backs along the
 path. **RAMSETE b** is the correction gain (50 suits these presets). The step
-ends with the settle turn and straight correction, so it defaults to a 6 s
-limit. The final heading is not checked.
+ends with a settle (a turn, then a straight correction or a back-off and
+re-approach), so it defaults to an 8 s limit. The final heading is not checked.
 
 Each step stops the robot and holds for 300 ms. Chained motions are not
 supported.

@@ -437,6 +437,11 @@ def main():
     for case in cases:
         if not case.get("safety") and not case.get("timeout_safety") and "wall_expected" not in case:
             case["args"]["timeout"] = args.motion_timeout_ms
+            # followTrajectory() settles after the plan: a turn, then either a
+            # straight correction or a back-off and re-approach. Give it twice
+            # the single-motion limit.
+            if case["action"] in (9, 10, 13):
+                case["args"]["timeout"] = 2 * args.motion_timeout_ms
     sys.path.insert(0, str(args.vexsim.resolve()))
     destination = (args.output or Path(tempfile.mkdtemp(prefix="mclib-vexsim-"))).resolve()
     destination.mkdir(parents=True, exist_ok=True)
