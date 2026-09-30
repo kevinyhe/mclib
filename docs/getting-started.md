@@ -152,7 +152,28 @@ counts 4% too far and turns 91° per 90°. Raw odometry ends 12.18 in off. With
 four wall sensors at 2% noise, a tenth of their readings blocked, the filter
 ends 0.20 in and 0.58° off, and rejects the blocked readings.
 
-The filter does not feed the motions yet: they still use the odometry pose.
+In the physics simulator, with the same four sensors reading the true pose
+against a 144 in perimeter at 2% noise, the filter's position is pulled back
+into odometry each tick, by at most 60% of the distance moved that tick plus
+0.002 in. The limit keeps the pose still while a robot settles on a target;
+correcting all at once made it jump with sensor noise, and point moves timed
+out.
+
+| Drive encoders only | Odometry alone | With the filter |
+| --- | --- | --- |
+| speed_base boomerang | 10.05 in off (odometry 9.53) | 3.16 in (odometry 2.06) |
+| six_motor_450 boomerang | 6.74 in (5.79) | 1.11 in (0.26), passes |
+| six_motor_450 point move | 2.56 in (1.32) | 1.33 in (0.47), passes |
+| four_motor_200 RAMSETE arc | 4.06 in (4.32) | 2.36 in (2.03), passes |
+
+With drive encoders only, 5 of the 15 moves pass with the filter against 2
+without. With two tracking wheels the odometry is already within 0.1 in, and
+the filter adds 0.1-0.3 in of sensor noise to it: 6 of 15 pass either way.
+Use it on robots without tracking wheels. `curveCircle()` arcs don't improve
+either way, because they steer on the encoders, not the pose.
+
+The filter does not feed the motions on the robot yet: that loop so far runs
+only in the simulator's bridge (`tests/vexsim/bridge.cpp`).
 
 ## Driver control
 
