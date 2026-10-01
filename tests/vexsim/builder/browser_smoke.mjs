@@ -395,6 +395,34 @@ try {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Mobile layout must not overflow horizontally");
   await page.screenshot({ path: `${output}/motion-builder-mobile.png`, fullPage: true });
   pass("Recorded inputs load correctly and mobile layout has no page overflow");
+
+  // Trajectory builder: a follow step with an added waypoint plans through
+  // the C++ planner, and Export C++ carries the measured RAMSETE values.
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.locator("#new-project").click();
+  await page.locator("#new-step-type").selectOption("follow");
+  await page.locator("#add-step").click();
+  await page.waitForSelector(".waypoint-row");
+  assert.equal(await page.locator(".waypoint-row").count(), 1);
+  await page.getByRole("button", { name: "+ Waypoint" }).click();
+  assert.equal(await page.locator(".waypoint-row").count(), 2, "+ Waypoint adds a row");
+  const planned = page.waitForResponse(response => response.url().endsWith("/api/plan") && response.request().method() === "POST", { timeout: 600000 });
+  await page.getByRole("button", { name: "Plan speeds" }).click();
+  const plan = await (await planned).json();
+  assert(!plan.error, `Plan failed: ${plan.error}`);
+  assert(plan.feedforward.kv > 0 && plan.plans.every(item => item.valid), "Every follow step planned");
+  await page.waitForFunction(() => /Planned: [0-9.]+ s/.test(document.querySelector("#step-inspector").textContent));
+  assert.match(await page.locator("#step-list").innerText(), /[0-9.]+ s, top [0-9]+ in\/s/);
+  pass("Follow step waypoints plan through the C++ planner and report duration and top speed");
+  await page.locator("#export-cpp").click();
+  await page.waitForSelector("#cpp-dialog[open]");
+  const code = await page.locator("#cpp-code").inputValue();
+  assert.match(code, /#include "mclib\/mclib.hpp"/);
+  assert.match(code, /follow.feedforward.kV = [0-9.]+_V \/ mclib::units::inps;/);
+  assert.match(code, /generateSpline\(\{\{here.x \* inch, here.y \* inch\}, \{[-0-9.]+_in, [-0-9.]+_in\}, \{[-0-9.]+_in, [-0-9.]+_in\}, \{0_in, 48_in\}\}\), limits\);/);
+  assert(!/measure these on your robot/.test(code), "Planned export uses measured values");
+  await page.locator("#cpp-close").click();
+  pass("Export C++ shows the sequence with the simulator-measured RAMSETE setup");
   assert.deepEqual(errors, []);
   assertViewerNetwork();
   console.log(`${checks}/${checks} browser checks passed; artifacts: ${output}`);

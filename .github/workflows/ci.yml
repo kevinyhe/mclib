@@ -93,6 +93,26 @@ jobs:
           node reference_geometry_test.mjs
           python3 -m unittest -v test_builder test_native_viewer test_trajectory_builder
 
+      # The real page in headless Chrome against a running builder server:
+      # runs, playback, editing, cancellation, the trajectory builder's plan
+      # and the C++ export.
+      - name: Builder browser smoke test
+        if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1
+          npx playwright install --with-deps chromium
+          browser="$(node -e "import('playwright').then(p => console.log(p.chromium.executablePath()))")"
+          cd "$GITHUB_WORKSPACE"
+          python3 tests/vexsim/builder/server.py --vexsim vexsim --output "$RUNNER_TEMP/builder" > "$RUNNER_TEMP/builder-server.log" 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8765/api/config >/dev/null && break; sleep 1; done
+          node tests/vexsim/builder/browser_smoke.mjs \
+            --playwright "$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
+            --browser "$browser" --output "$RUNNER_TEMP/builder-browser"
+
       - uses: actions/upload-artifact@v4
         if: always() && env.HAS_VEXSIM_KEY == 'true'
         with:
