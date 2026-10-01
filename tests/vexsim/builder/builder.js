@@ -377,7 +377,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = { catmullR
     spec.steps = source.steps.map((step, index) => {
       if (!step || !Object.hasOwn(TYPE_INFO, step.type)) throw new Error(`Step ${index + 1} has an unsupported motion type.`);
       const info = TYPE_INFO[step.type];
-      const result = { type: step.type, ...info.defaults, timeout_ms: 4000 };
+      const result = { type: step.type, ...clone(info.defaults), timeout_ms: 4000 };
       if (step.type !== "turn_to_point") result.volts = step.type === "wall_reset" ? 6 : 12;
       for (const key of [...info.fields, "timeout_ms", ...(step.type !== "turn_to_point" ? ["volts"] : [])]) {
         if (step[key] !== undefined) result[key] = requireNumber(step[key], `Step ${index + 1} ${key}`);
@@ -543,7 +543,9 @@ if (typeof module !== "undefined" && module.exports) module.exports = { catmullR
     state.planning = false; renderSequence(); renderInspector(); draw();
   }
 
-  function newStep(type) { return { type, timeout_ms: 4000, ...TYPE_INFO[type].defaults, ...(type === "turn_to_point" ? {} : { volts: type === "wall_reset" ? 6 : 12 }) }; }
+  // Cloned: a follow step's default waypoint list must not be shared with
+  // the defaults or with other steps.
+  function newStep(type) { return { type, timeout_ms: 4000, ...clone(TYPE_INFO[type].defaults), ...(type === "turn_to_point" ? {} : { volts: type === "wall_reset" ? 6 : 12 }) }; }
 
   function renderSettings() {
     $("routine-name").value = state.spec.name;
