@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Fixed
+
+- `driveTo()` stopped short on fast drivetrains: it measured distance with the
+  drive encoders, which count wheel slip as progress. In the physics
+  simulator a 24 in drive on a 450 rpm base stopped 2.7-4.8 in short with
+  tracking wheels fitted. New `MotionConfig::drive_distance_source`; the
+  default, `Auto`, measures along the odometry pose when a forward tracking
+  wheel is fitted. Those drives now stop 1.1-1.3 in from the target.
+
 ## 0.2.0
 
 Upgrading from 0.1.0: the eight blocking motions (`turnToAngle`, `driveTo`,

@@ -434,6 +434,13 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
 
   // Store initial encoder values
   double start_left = safety.left(), start_right = safety.right();
+  const mclib::Pose2D start_pose = safety.pose();
+  // See MotionConfig::drive_distance_source.
+  const mclib::control::DistanceSource source = cfg().drive_distance_source;
+  const bool from_pose =
+      source == mclib::control::DistanceSource::Pose ||
+      (source == mclib::control::DistanceSource::Auto &&
+       mclib::control::getOdometryConfig().use_vertical_tracker);
   stopChassis(mclib::device::BrakeMode::Coast);
   state().setTurning(true);
   int drive_direction = distance_in > 0 ? 1 : -1;
@@ -473,8 +480,20 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
   // Main PID loop for driving straight
   while ((((!pid_distance.targetArrived()) && pros::millis() - start_time <= time_limit_msec && exit) || (exit == false && current_distance < distance_in && pros::millis() - start_time <= time_limit_msec)) && safety.running())
   {
-    // integrate wheel travel by converting encoder degrees into linear inches and averaging both treads
-    current_distance = (fabs(encoderDegreesToInches(safety.left() - start_left)) + fabs(encoderDegreesToInches(safety.right() - start_right))) / 2;
+    if (from_pose)
+    {
+      // Progress along the starting heading, signed so an overshoot reads
+      // as past the target. Compass frame: forward is (sin, cos).
+      const mclib::Pose2D pose = safety.pose();
+      current_distance = drive_direction *
+          ((pose.x - start_pose.x) * std::sin(start_pose.theta) +
+           (pose.y - start_pose.y) * std::cos(start_pose.theta));
+    }
+    else
+    {
+      // integrate wheel travel by converting encoder degrees into linear inches and averaging both treads
+      current_distance = (fabs(encoderDegreesToInches(safety.left() - start_left)) + fabs(encoderDegreesToInches(safety.right() - start_right))) / 2;
+    }
     current_angle = safety.heading();
     left_output = pid_distance.update(current_distance) * drive_direction;
     right_output = left_output;

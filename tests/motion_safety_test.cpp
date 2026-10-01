@@ -855,6 +855,44 @@ int main() {
     CHECK_EQ(hw.left, 0);
   }
 
+  // driveTo() with wheel slip: the encoders count 15% more than the robot
+  // moves. Measured on the encoders it stops short; measured on the pose
+  // (a forward tracking wheel fitted, so Auto picks it) it doesn't.
+  {
+    auto drive_slipping = [&](bool tracker) {
+      OdometryConfig odometry = getOdometryConfig();
+      odometry.use_vertical_tracker = tracker;
+      setOdometryConfig(odometry);
+      clearCancel();
+      mclib::Pose2D pose{0, 0, 0};
+      resetOdometry(pose);
+      hw.heading = 0;
+      hw.encoder = 0;
+      now_ms = 0;
+      on_delay = [&] {
+        // 0.2 V of command per in/s, flat, no inertia.
+        const double v = (hw.left + hw.right) / 2 / 0.2, dt = 0.01;
+        hw.encoder += v * 1.15 * dt / (4 * M_PI) * 360;
+        pose.y += v * dt;
+        resetOdometry(pose);
+      };
+      const MotionResult result = driveTo(24_in, 3_s);
+      on_delay = {};
+      return std::make_pair(result, pose.y);
+    };
+    const auto encoders = drive_slipping(false);
+    const auto tracked = drive_slipping(true);
+    std::printf("driveTo(24 in), encoders 15%% over: stopped at %.2f in on the encoders, "
+                "%.2f in on the pose\n", encoders.second, tracked.second);
+    CHECK(encoders.first == MotionResult::Reached);
+    CHECK(tracked.first == MotionResult::Reached);
+    CHECK(encoders.second < 24 - 2.5);  // 24 / 1.15 = 20.9 in, give or take the exit band
+    CHECK(std::fabs(tracked.second - 24) <= motionConfig().distance_exit.big_error);
+    OdometryConfig odometry = getOdometryConfig();
+    odometry.use_vertical_tracker = false;
+    setOdometryConfig(odometry);
+  }
+
   bindDrive(nullptr);
 
   // With no drive bound there is nothing to move, and the caller has to be
