@@ -187,6 +187,17 @@ class MotionObservation {
  * AsyncControlCommand cancel a motion by asking instead of by calling
  * pros::Task::remove() on a task that might be mid-store.
  */
+/**
+ * @brief Raise @p output to `MotionConfig::settle_min_voltage` while
+ *        @p error is outside @p small_error, pushing toward the error.
+ */
+double settleFloor(double output, double error, double small_error) {
+  const double floor = cfg().settle_min_voltage.volts();
+  if (!(floor > 0) || !std::isfinite(error) || std::fabs(error) <= small_error) return output;
+  if (std::fabs(output) >= floor && (output > 0) == (error > 0)) return output;
+  return std::copysign(floor, error);
+}
+
 bool cancelled() {
   return mclib::control::cancelRequested(
       mclib::control::CancelToken::Motion);
@@ -496,6 +507,13 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
     }
     current_angle = safety.heading();
     left_output = pid_distance.update(current_distance) * drive_direction;
+    if (exit)
+    {
+      // Keep pushing past friction until inside the small band; see
+      // MotionConfig::settle_min_voltage.
+      left_output = settleFloor(left_output, (distance_in - current_distance) * drive_direction,
+                                cfg().distance_exit.small_error);
+    }
     right_output = left_output;
     correction_output = telemetry.heading(pid_heading, current_angle);
     telemetry.value.remaining_in = distance_in - current_distance;
@@ -1152,7 +1170,15 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     current_angle = safety.heading();
     telemetry.value.heading_error_deg = telemetry.value.target_heading_deg - current_angle;
     // Calculate drive output based on heading and distance
-    left_output = pid_distance.update(0) * cos(degToRad(atan2(x_in - pose.x, y_in - pose.y) * 180 / M_PI + add - current_angle)) * dir;
+    const double along = cos(degToRad(atan2(x_in - pose.x, y_in - pose.y) * 180 / M_PI + add - current_angle));
+    left_output = pid_distance.update(0) * along * dir;
+    if (exit)
+    {
+      // The part of the distance left that lies along the heading; see
+      // MotionConfig::settle_min_voltage.
+      left_output = settleFloor(left_output, hypot(x_in - pose.x, y_in - pose.y) * along * dir,
+                                cfg().distance_exit.small_error);
+    }
     right_output = left_output;
     if (exit && pid_distance.targetArrived()) break;
     const double remaining = hypot(x_in - pose.x, y_in - pose.y);
@@ -1368,8 +1394,12 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
 
     // Do not abandon endpoint steering six inches away or declare success
     // five inches short. First settle position, then settle the final heading.
-    // If turning/drift leaves the position band, resume endpoint acquisition.
-    if (aligning_heading && hypotenuse > position_band) {
+    // If drift takes the robot well out of the position band, resume endpoint
+    // acquisition. "Well out" is twice the band: turning in place shifts the
+    // robot a little, and resuming at the band edge itself made it pivot,
+    // re-approach and turn again until the time limit (RAMSETE's settle on
+    // low grip in the physics simulator).
+    if (aligning_heading && hypotenuse > 2 * position_band) {
       aligning_heading = false;
       pid_distance.reset();
       pid_heading.reset();
