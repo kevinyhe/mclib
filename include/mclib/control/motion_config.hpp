@@ -70,6 +70,19 @@ struct SlewRates {
 
 namespace control {
 
+/// @brief What `driveTo()` measures its distance with.
+enum class DistanceSource {
+  /// @brief The odometry pose when a forward tracking wheel is fitted
+  ///        (`OdometryConfig::use_vertical_tracker`), otherwise the drive
+  ///        encoders.
+  Auto,
+  /// @brief Average travel of the two drive sides. Counts wheel slip as
+  ///        progress.
+  Encoders,
+  /// @brief How far the odometry pose has moved along the starting heading.
+  Pose,
+};
+
 /**
  * @brief Everything a drivetrain motion loop needs to know that is not the
  *        hardware or the geometry.
@@ -133,6 +146,17 @@ struct MotionConfig {
 
   /// @brief Whether straight moves and correctHeading() steer on the IMU at all.
   bool heading_correction = true;
+
+  /**
+   * @brief What `driveTo()` measures distance with.
+   *
+   * @details The drive encoders count wheel slip as progress. In the physics
+   * simulator a 24 in drive on a 450 rpm base stopped 2.7-4.8 in short with
+   * the encoders reporting 24, while tracking-wheel odometry was within
+   * 0.14 in. `Auto` uses the pose when a tracking wheel makes it better than
+   * the encoders.
+   */
+  DistanceSource drive_distance_source = DistanceSource::Auto;
 
   /// @brief Exit conditions for curveCircle's outer-wheel distance, in inches.
   ///        These preserve the original arc tolerances independently of the

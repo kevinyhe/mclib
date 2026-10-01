@@ -117,6 +117,11 @@ track width. Wheel slip affects this estimate.
 Snapshot position corrections update the odometry integrator and keep encoder
 baselines.
 
+With a forward tracking wheel fitted, `driveTo()` measures its distance along
+the odometry pose instead of the drive encoders, which count wheel slip as
+progress. `MotionConfig::drive_distance_source` picks `Auto` (the default),
+`Encoders` or `Pose`.
+
 ### Correcting odometry continuously: `PoseFilter`
 
 `mclib/control/pose_filter.hpp`. Odometry drifts: every slip adds error that
