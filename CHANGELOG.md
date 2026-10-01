@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- Drive tuning from a log. `characterizeDrive()`, `characterizeSpin()` and
+  `traceMotion()` (`mclib/control/characterize.hpp`) log fixed-voltage runs
+  and a traced motion; `tools/tune_drive.py` fits kS, kV, kA and the
+  effective track width and says which RAMSETE gain to change. In the
+  physics simulator the fit is within 1.2% of the true kV and 0.4% of the
+  true track width.
+
 ### Changed
 
 - Stopped distance moves (`driveTo()`, `moveToPoint()`) keep at least
