@@ -102,6 +102,46 @@ or the drivetrain is binding.
 
 `kA` matters least. Leave it at 0 if the fit is unreliable.
 
+### Tuning from a log
+
+`mclib/control/characterize.hpp` has robot routines that do the measuring
+above and log it, and `tools/tune_drive.py` fits the numbers on a computer.
+
+```cpp
+static mclib::telemetry::RowBuffer<512> buffer;
+mclib::telemetry::SdCardSink sink("tune");
+mclib::telemetry::Logger log(sink, buffer, {.period = 10_ms});
+mclib::control::TuningLog columns(log);
+mclib::telemetry::FlushTask flusher(log);
+mclib::control::characterizeDrive(columns);  // 3, 6, 9 V, forward and back
+mclib::control::characterizeSpin(columns);   // 4, 6, 8 V, both ways
+mclib::control::traceMotion(columns, [&] { return followTrajectory(path, follow, 8_s); });
+flusher.stop();
+```
+
+```
+python3 tools/tune_drive.py tune000.csv
+```
+
+It prints kS, kV and kA from the straight runs, the effective track width
+from the spins, and a `RamseteConfig` snippet to paste. Speed comes from the
+odometry position, so wheel slip is in the numbers. A fit error above about
+0.2 V RMS means slip or a dragging side.
+
+For a traced motion it splits the gap between the target and the robot into
+"behind" and "to the side", and says what to change:
+
+| What the log shows | Change |
+| --- | --- |
+| More than 1 in behind on average | Feedforward is too weak: refit kS, kV, kA |
+| More than 1 in ahead on average | Feedforward is too strong |
+| Crossing the path more than once a second | Lower b, or raise zeta toward 0.9 |
+| More than 1 in to the side, not crossing | Raise b (try 1.5x) |
+
+In the physics simulator (six_motor_450, two tracking wheels) the routines
+and script give kS 0.696 V, kV 0.1330 V per in/s and a 13.51 in track, against
+0.699, 0.1315 and 13.45 measured from the simulated robot's true motion.
+
 ### Following a profile
 
 ```cpp

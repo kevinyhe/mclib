@@ -44,7 +44,8 @@ def build(destination):
                "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
                "control/ramsete", "path/trajectory", "path/path", "path/spline",
                "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose",
-               "path/arc"]
+               "path/arc", "control/characterize", "control/async_motion",
+               "telemetry/file_sink"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -84,6 +85,9 @@ def load_library(library):
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
+    if hasattr(lib, "sim_characterize"):
+        lib.sim_characterize.argtypes = [C.c_char_p, C.c_int]
+        lib.sim_characterize.restype = C.c_int
     if hasattr(lib, "sim_arcs_use_ramsete"):
         lib.sim_arcs_use_ramsete.argtypes = [C.c_int]
         lib.sim_arcs_use_ramsete.restype = None

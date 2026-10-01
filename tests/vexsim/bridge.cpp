@@ -5,7 +5,10 @@
 #include "mclib/control/odometry.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
+#include "mclib/control/characterize.hpp"
 #include "mclib/control/pose_filter.hpp"
+#include "mclib/telemetry/file_sink.hpp"
+#include "mclib/telemetry/logger.hpp"
 #include "mclib/control/ramsete.hpp"
 #include "mclib/path/arc.hpp"
 #include "mclib/path/spline.hpp"
@@ -277,6 +280,23 @@ extern "C" int sim_plan_spline(double sx, double sy, const double* xy, int n, in
     out[4 * i + 3] = std::fabs(state.velocity.inps());
   }
   return count;
+}
+
+// Run the robot tuning routines (characterize.hpp) into a CSV at @p path:
+// which & 1 drives, which & 2 spins. Returns 0, or -1 when the file won't open.
+extern "C" int sim_characterize(const char* path, int which) {
+  static mclib::telemetry::RowBuffer<8192> buffer;
+  std::FILE* file = std::fopen(path, "w");
+  if (file == nullptr) return -1;
+  mclib::telemetry::FileSink sink(file);
+  mclib::telemetry::Logger log(sink, buffer, {.period = 10 * mclib::units::millisecond,
+                                              .max_rows = 8000});
+  mclib::control::TuningLog columns(log);
+  if (which & 1) mclib::control::characterizeDrive(columns);
+  if (which & 2) mclib::control::characterizeSpin(columns);
+  log.close();
+  std::fclose(file);
+  return 0;
 }
 
 extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,
