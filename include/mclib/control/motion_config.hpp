@@ -158,6 +158,20 @@ struct MotionConfig {
    */
   DistanceSource drive_distance_source = DistanceSource::Auto;
 
+  /**
+   * @brief Least voltage a stopped (`exit` true) distance move commands while
+   *        it is outside `distance_exit.small_error`. 0 turns it off.
+   *
+   * @details The distance PID's output shrinks with the distance left, so
+   * near the target it falls to about what the drive needs to overcome
+   * friction and the robot crawls. In the physics simulator a 24 in drive on
+   * a 200 rpm base spent its last 3 in at 0.6-1.2 V, took 3.9 s and gave up
+   * 1.3 in short. Inside the small band the PID alone finishes the move, so
+   * the floor can't make it hunt across the target. Set it above the
+   * drive's kS.
+   */
+  QVoltage settle_min_voltage = 1.5 * units::volt;
+
   /// @brief Exit conditions for curveCircle's outer-wheel distance, in inches.
   ///        These preserve the original arc tolerances independently of the
   ///        straight/point distance_exit rule; tune them for your drivetrain.

@@ -13,6 +13,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace {
@@ -891,6 +892,52 @@ int main() {
     OdometryConfig odometry = getOdometryConfig();
     odometry.use_vertical_tracker = false;
     setOdometryConfig(odometry);
+  }
+
+  // settle_min_voltage: a drive that needs 1 V just to start moving. With the
+  // PID alone the output falls below that near the target and the robot
+  // stalls short until the time limit; the floor keeps it moving until the
+  // distance exit (inside the big band for its duration) ends the move.
+  {
+    auto drive_sticky = [&](QVoltage floor) {
+      MotionConfig config = motionConfig();
+      config.settle_min_voltage = floor;
+      setMotionConfig(config);
+      OdometryConfig odometry = getOdometryConfig();
+      odometry.use_vertical_tracker = true;
+      setOdometryConfig(odometry);
+      clearCancel();
+      mclib::Pose2D pose{0, 0, 0};
+      resetOdometry(pose);
+      hw.heading = 0;
+      hw.encoder = 0;
+      now_ms = 0;
+      on_delay = [&] {
+        const double volts = (hw.left + hw.right) / 2;
+        const double push = std::fabs(volts) - 1.0;  // kS = 1 V
+        const double v = push > 0 ? std::copysign(push / 0.2, volts) : 0.0, dt = 0.01;
+        hw.encoder += v * dt / (4 * M_PI) * 360;
+        pose.y += v * dt;
+        resetOdometry(pose);
+      };
+      const MotionResult result = driveTo(24_in, 4_s);
+      on_delay = {};
+      OdometryConfig plain = getOdometryConfig();
+      plain.use_vertical_tracker = false;
+      setOdometryConfig(plain);
+      return std::make_tuple(result, pose.y, now_ms);
+    };
+    const MotionConfig saved = motionConfig();
+    const auto [no_floor, no_floor_y, no_floor_ms] = drive_sticky(0_V);
+    const auto [floored, floored_y, floored_ms] = drive_sticky(1.5_V);
+    setMotionConfig(saved);
+    std::printf("driveTo(24 in), kS 1 V: without the floor %.2f in after %u ms, with it "
+                "%.2f in after %u ms\n", no_floor_y, static_cast<unsigned>(no_floor_ms),
+                floored_y, static_cast<unsigned>(floored_ms));
+    CHECK(floored == MotionResult::Reached);
+    CHECK(std::fabs(floored_y - 24) <= motionConfig().distance_exit.big_error);
+    CHECK(24 - no_floor_y > std::fabs(floored_y - 24));
+    CHECK(floored_ms <= no_floor_ms);
   }
 
   bindDrive(nullptr);

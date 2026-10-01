@@ -122,6 +122,12 @@ the odometry pose instead of the drive encoders, which count wheel slip as
 progress. `MotionConfig::drive_distance_source` picks `Auto` (the default),
 `Encoders` or `Pose`.
 
+Near the target, a distance PID's output shrinks to about what the drive needs
+to overcome friction, and the robot crawls. Stopped distance moves keep at
+least `MotionConfig::settle_min_voltage` (1.5 V by default) until they are
+inside `distance_exit.small_error`. Set it above your drive's kS, or to 0 to
+turn it off.
+
 ### Correcting odometry continuously: `PoseFilter`
 
 `mclib/control/pose_filter.hpp`. Odometry drifts: every slip adds error that

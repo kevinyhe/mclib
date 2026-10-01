@@ -5,8 +5,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Changed
+
+- Stopped distance moves (`driveTo()`, `moveToPoint()`) keep at least
+  `MotionConfig::settle_min_voltage` (1.5 V; 0 turns it off) while outside
+  `distance_exit.small_error`, instead of crawling at the friction limit. In
+  the physics simulator, moves that passed before take 14% less time and end
+  44% closer (with tracking wheels 2.79 -> 2.41 s and 1.07 -> 0.60 in on
+  average); a 24 in drive on a 450 rpm base goes from 2.16 s and 1.26 in to
+  1.38 s and 0.03 in.
+
 ### Fixed
 
+- A `boomerang()` that turned in place to its final heading and drifted just
+  outside the position band went back to driving, then turned again, until
+  its time limit. It now resumes only past twice the band.
 - `driveTo()` stopped short on fast drivetrains: it measured distance with the
   drive encoders, which count wheel slip as progress. In the physics
   simulator a 24 in drive on a 450 rpm base stopped 2.7-4.8 in short with
