@@ -218,6 +218,37 @@ void initialize() {
 }
 ```
 
+### GPS
+
+`PoseFusion::setGps()` adds a V5 GPS sensor, with or without distance
+sensors. It corrects position only; heading stays with the IMU. The GPS
+reports from the field centre, so `GpsInput::origin_x_in` and `origin_y_in`
+(72 and 72 by default) say where that is on the 0-144 in map.
+
+```cpp
+mclib::device::Gps gps(5, 0.0, -4.0);  // port, mounted 4 in behind centre
+fusion.setGps({.read = [] { return gps.pose(); },
+               .error_in = [] { return gps.getErrorM() * 39.37; }});
+```
+
+In the physics simulator (GPS noise 0.47 in, 5% of reads stale), with drive
+encoders only, 9 of 12 GPS moves pass:
+
+| Drive encoders only | Odometry alone | Distance sensors | GPS |
+| --- | --- | --- | --- |
+| four_motor_200 point diagonal | 1.10 in | 1.13 in | 0.40 in, passes |
+| four_motor_200 boomerang | 3.41 in | 2.55 in | 0.47 in, passes |
+| four_motor_200 ramsete arc | 4.06 in | 2.36 in | 0.78 in, passes |
+| six_motor_450 point diagonal | 1.44 in | 0.37 in | 0.16 in, passes |
+| six_motor_450 boomerang | 5.90 in | 0.84 in | 2.19 in |
+| six_motor_450 ramsete arc | 5.30 in | 3.71 in | 1.44 in, passes |
+| speed_base point diagonal | 1.15 in | 1.19 in | 0.94 in, passes |
+| speed_base boomerang | 9.40 in | 2.28 in | 3.75 in |
+| speed_base ramsete arc | 5.64 in | 4.23 in | 1.06 in, passes |
+
+With two tracking wheels 11 of 12 pass; the four_motor_200 plain arc runs
+out its 4 s limit with or without it.
+
 `fusion.pose()`, `accepted()`, `rejected()` and `positionSigmaIn()` can be read
 from any task. Heading stays with the IMU; only position is corrected.
 

@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `PoseFusion::setGps()`: blend a V5 GPS into the pose, with or without
+  distance sensors. In the physics simulator with drive encoders only, RAMSETE
+  arcs end 0.78-1.44 in off with the GPS, against 2.36-4.23 in with distance
+  sensors.
 - `tools/tune_drive.py` prints the track width to use for heading from the
   encoders (no IMU), from the `characterizeSpin()` log.
 - Drive tuning from a log. `characterizeDrive()`, `characterizeSpin()` and

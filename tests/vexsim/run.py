@@ -32,6 +32,8 @@ class Sample(C.Structure):
                 ("heading", "left", "right", "current_ma", "velocity_rpm")]
     _fields_ += [("millis", C.c_uint32), ("disabled", C.c_int), ("cancel", C.c_int)]
     _fields_ += [("vertical", C.c_double), ("horizontal", C.c_double)]
+    _fields_ += [("gps_x", C.c_double), ("gps_y", C.c_double), ("gps_heading", C.c_double),
+                 ("gps_valid", C.c_int)]
 
 
 ADVANCE = C.CFUNCTYPE(None, C.c_uint32, C.POINTER(Sample))
@@ -85,6 +87,9 @@ def load_library(library):
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
+    if hasattr(lib, "sim_gps_enable"):
+        lib.sim_gps_enable.argtypes = [C.c_double, C.c_double]
+        lib.sim_gps_enable.restype = None
     if hasattr(lib, "sim_characterize"):
         lib.sim_characterize.argtypes = [C.c_char_p, C.c_int]
         lib.sim_characterize.restype = C.c_int
@@ -119,7 +124,7 @@ class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
                  start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0,
-                 distance_sensors=None):
+                 distance_sensors=None, gps=False):
         from vexsim import Simulator, presets
         from vexsim.chassis import add_tracking_wheels
         from vexsim.motor import BrakeMode
@@ -153,6 +158,7 @@ class PhysicsBridge:
         # true pose against a 144 in box centred on the start (the snapshot
         # map's perimeter, shifted), 2% noise, 78 in range, every 20 ms.
         self.distance_sensors = list(distance_sensors or [])
+        self.gps = gps
         self.distance_rng = random.Random(seed + 101)
         self.last_distance_ms = -20
         # Observer only: publishing a snapshot must never advance simulation time
@@ -187,6 +193,10 @@ class PhysicsBridge:
             # 0.002 in: fast enough to follow drive-encoder drift, still
             # enough that a robot settling on a target sees a steady pose.
             lib.sim_filter_enable(flat, len(distance_sensors), odom_var, 0.002, 0.6)
+        # The simulated GPS: 0.012 m (0.47 in) noise, 5% stale reads. Assume
+        # 1 in per reading, PoseFusion's default.
+        if gps:
+            lib.sim_gps_enable(0.0005 if tracking_mode == "two" else 0.09, 1.0)
 
     def set_tuning(self, tuning):
         if not isinstance(tuning, dict) or set(tuning) - DEFAULT_TUNING.keys():
@@ -309,6 +319,13 @@ class PhysicsBridge:
                     if value is not None:
                         value += self.distance_rng.gauss(0.0, 0.02 * value)
                         self.lib.sim_filter_reading(index, value)
+            if self.gps:
+                gps = self.sim.gps
+                reading.gps_valid = int(gps.valid)
+                # vexsim: x forward from the start, y left, theta CCW.
+                reading.gps_x = -gps.y / self.inch
+                reading.gps_y = gps.x / self.inch
+                reading.gps_heading = -math.degrees(gps.heading)
             triggered = self.sim.t >= 0.25
             self.fault_injected |= triggered and self.fault is not None
             reading.disabled = triggered and self.fault == "disabled"
@@ -488,6 +505,18 @@ def scenarios():
                        options={"distance_sensors": SENSOR_LAYOUT},
                        position_tolerance=(1.5 if action == 7 else
                                            5.5 if action in (2, 3) else 2.5))
+    # The same moves with the GPS instead of distance sensors.
+    for preset in ("four_motor_200", "six_motor_450", "speed_base"):
+        for name, action, args, target, angle in (
+            ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
+            ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
+            ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
+            ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
+        ):
+            yield dict(name=f"gps/{preset}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle, options={"gps": True},
+                       position_tolerance=(1.5 if action == 7 else
+                                           5.5 if action in (2, 3) else 2.5))
     for name, options in (("low_battery", {"soc": 0.08}),
                           ("low_grip", {"friction": 0.65}),
                           ("encoder_heading", {"encoder_heading": True})):
@@ -607,7 +636,7 @@ def main():
             else:
                 passed &= all(abs(a - b) < 1e-9 for a, b in
                               zip(estimated_at_exit, (50, 60, 0)))
-        if bridge.distance_sensors:
+        if bridge.distance_sensors or bridge.gps:
             fused = bridge.filter_state()
             filter_info = dict(filter_error_at_exit_in=math.dist(fused[:2], truth_at_exit[:2]),
                                filter_accepted=int(fused[3]), filter_rejected=int(fused[4]),
