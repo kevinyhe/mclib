@@ -21,7 +21,7 @@ BASELINE = Path(__file__).with_name("ci_baseline.json")
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=("drive", "two"), help="--tracking-mode of the run")
+    parser.add_argument("mode", choices=("drive", "two", "vertical", "horizontal"), help="--tracking-mode of the run")
     parser.add_argument("results", type=Path, help="results.json written by run.py")
     parser.add_argument("--update", action="store_true",
                         help="write this run's passing scenarios into the baseline")
@@ -31,6 +31,7 @@ def main():
     passed = {row["name"] for row in rows if row["passed"]}
     ran = {row["name"] for row in rows}
     baseline = json.loads(BASELINE.read_text())
+    baseline.setdefault(args.mode, [])
 
     if args.update:
         baseline[args.mode] = sorted(passed)

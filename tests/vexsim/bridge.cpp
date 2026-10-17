@@ -206,12 +206,14 @@ extern "C" int sim_follow_spline(const double* xy, int n, int reversed,
 
 // Run a PoseFusion alongside odometry with @p n distance sensors, given as
 // (x_right_in, y_fwd_in, rel_deg) triples, correcting odometry every tick.
-extern "C" void sim_filter_enable(const double* sensors, int n, double odom_var_per_in,
+extern "C" void sim_filter_enable(const double* sensors, int n, double odom_along_var_per_in,
+                                  double odom_side_var_per_in,
                                   double correction_floor_in, double correction_per_in) {
   fusion_rig = FusionRig{};
   fusion_rig.readings.assign(n, -1);
   mclib::control::PoseFusionConfig config;
-  config.filter.odom_along_var_per_in = config.filter.odom_side_var_per_in = odom_var_per_in;
+  config.filter.odom_along_var_per_in = odom_along_var_per_in;
+  config.filter.odom_side_var_per_in = odom_side_var_per_in;
   config.field_offset_x_in = config.field_offset_y_in = kFieldOffsetIn;
   config.correction_floor_in = correction_floor_in;
   config.correction_per_in = correction_per_in;
@@ -236,8 +238,10 @@ extern "C" void sim_filter_enable(const double* sensors, int n, double odom_var_
 
 // Also blend in the simulated GPS, assuming @p sigma_in of position error.
 // Starts a PoseFusion with no distance sensors if there is none yet.
-extern "C" void sim_gps_enable(double odom_var_per_in, double sigma_in) {
-  if (!fusion_rig.fusion) sim_filter_enable(nullptr, 0, odom_var_per_in, 0.002, 0.6);
+extern "C" void sim_gps_enable(double odom_along_var_per_in, double odom_side_var_per_in,
+                               double sigma_in) {
+  if (!fusion_rig.fusion)
+    sim_filter_enable(nullptr, 0, odom_along_var_per_in, odom_side_var_per_in, 0.002, 0.6);
   mclib::control::GpsInput gps;
   gps.read = []() -> std::optional<mclib::Pose2D> {
     if (!sample.gps_valid) return std::nullopt;
@@ -431,6 +435,15 @@ extern "C" void sim_set_trackers(double vertical_circumference,
   config.vertical_offset_right = vertical_right_offset * inch;
   config.horizontal_circumference = horizontal_circumference * inch;
   config.horizontal_offset_forward = horizontal_forward_offset * inch;
+  mclib::control::setOdometryConfig(config);
+  refresh(0);
+}
+
+// Which tracking wheels odometry reads, after sim_set_trackers().
+extern "C" void sim_use_trackers(int vertical, int horizontal) {
+  auto config = mclib::control::getOdometryConfig();
+  config.use_vertical_tracker = vertical != 0;
+  config.use_horizontal_tracker = horizontal != 0;
   mclib::control::setOdometryConfig(config);
   refresh(0);
 }

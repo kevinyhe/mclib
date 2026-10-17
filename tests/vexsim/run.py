@@ -88,8 +88,11 @@ def load_library(library):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
     if hasattr(lib, "sim_gps_enable"):
-        lib.sim_gps_enable.argtypes = [C.c_double, C.c_double]
+        lib.sim_gps_enable.argtypes = [C.c_double, C.c_double, C.c_double]
         lib.sim_gps_enable.restype = None
+    if hasattr(lib, "sim_use_trackers"):
+        lib.sim_use_trackers.argtypes = [C.c_int, C.c_int]
+        lib.sim_use_trackers.restype = None
     if hasattr(lib, "sim_characterize"):
         lib.sim_characterize.argtypes = [C.c_char_p, C.c_int]
         lib.sim_characterize.restype = C.c_int
@@ -98,7 +101,7 @@ def load_library(library):
         lib.sim_arcs_use_ramsete.restype = None
     if hasattr(lib, "sim_filter_enable"):
         lib.sim_filter_enable.argtypes = [C.POINTER(C.c_double), C.c_int,
-                                          C.c_double, C.c_double, C.c_double]
+                                          C.c_double, C.c_double, C.c_double, C.c_double]
         lib.sim_filter_enable.restype = None
         lib.sim_filter_reading.argtypes = [C.c_int, C.c_double]
         lib.sim_filter_reading.restype = None
@@ -120,6 +123,17 @@ def load_library(library):
     return lib
 
 
+# drive: drive encoders only. two: forward and sideways tracking wheels.
+# vertical / horizontal: one tracking wheel, drive encoders for the rest.
+TRACKING_MODES = ("drive", "two", "vertical", "horizontal")
+# PoseFusion's odometry variance per inch, (forward, sideways), for each mode.
+# A tracking wheel drifts far less than the drive encoders, but only in the
+# direction it rolls: with one wheel, the other direction is as unsure as
+# with none. 0.09 is ~3 in per 100 in, 0.0005 ~0.2.
+ODOM_VAR = dict(drive=(0.09, 0.09), two=(0.0005, 0.0005),
+                vertical=(0.0005, 0.09), horizontal=(0.09, 0.0005))
+
+
 class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
@@ -132,13 +146,13 @@ class PhysicsBridge:
         from vexsim.units import INCH
         self.lib, self.inch = lib, INCH
         chassis = presets.get(preset)
-        if tracking_mode not in ("drive", "two"):
-            raise ValueError("tracking_mode must be drive or two")
+        if tracking_mode not in TRACKING_MODES:
+            raise ValueError("tracking_mode must be one of " + ", ".join(TRACKING_MODES))
         self.tracking_mode = tracking_mode
         self.sim_time_limit = float(sim_time_limit)
         if not math.isfinite(self.sim_time_limit) or not 0 < self.sim_time_limit <= 120:
             raise ValueError("sim_time_limit must be in (0, 120] seconds")
-        if tracking_mode == "two" and not any(u.name == "track_parallel" for u in chassis.wheel_units):
+        if tracking_mode != "drive" and not any(u.name == "track_parallel" for u in chassis.wheel_units):
             add_tracking_wheels(chassis, forward_offset_in=-3.0)
         chassis.surface_mu = friction
         self.sim = Simulator(chassis, config=SimConfig(log_every=10))
@@ -172,13 +186,17 @@ class PhysicsBridge:
         wheel = chassis.left_units()[0]
         lib.sim_init(self.step_callback, self.output_callback, 2 * wheel.radius / INCH,
                      chassis.track_width / INCH, 1.0 / wheel.gear_ratio, encoder_heading)
-        if tracking_mode == "two":
+        if tracking_mode != "drive":
             trackers = {u.name: u for u in chassis.wheel_units if u.name.startswith("track_")}
             vertical, horizontal = trackers["track_parallel"], trackers["track_perp"]
             lib.sim_set_trackers(2 * math.pi * vertical.radius / INCH,
                                  -(vertical.y - chassis.cg_y) / INCH,
                                  2 * math.pi * horizontal.radius / INCH,
                                  (horizontal.x - chassis.cg_x) / INCH)
+            # Both wheels are on the robot (and carry its weight) in every
+            # tracker mode; odometry reads only the ones the mode names.
+            lib.sim_use_trackers(int(tracking_mode in ("two", "vertical")),
+                                 int(tracking_mode in ("two", "horizontal")))
         if tuning:
             self.set_tuning(tuning)
         if tuple(start_pose) != (0.0, 0.0, 0.0):
@@ -188,15 +206,15 @@ class PhysicsBridge:
                 *[v for sensor in distance_sensors for v in sensor])
             # Tracking wheels drift far less than drive encoders: trust them
             # more. Variance per inch: 0.09 is ~3 in per 100 in, 0.005 ~0.7.
-            odom_var = 0.0005 if tracking_mode == "two" else 0.09
+            along_var, side_var = ODOM_VAR[tracking_mode]
             # Feed back at most 60% of the distance moved each tick, plus
             # 0.002 in: fast enough to follow drive-encoder drift, still
             # enough that a robot settling on a target sees a steady pose.
-            lib.sim_filter_enable(flat, len(distance_sensors), odom_var, 0.002, 0.6)
+            lib.sim_filter_enable(flat, len(distance_sensors), along_var, side_var, 0.002, 0.6)
         # The simulated GPS: 0.012 m (0.47 in) noise, 5% stale reads. Assume
         # 1 in per reading, PoseFusion's default.
         if gps:
-            lib.sim_gps_enable(0.0005 if tracking_mode == "two" else 0.09, 1.0)
+            lib.sim_gps_enable(*ODOM_VAR[tracking_mode], 1.0)
 
     def set_tuning(self, tuning):
         if not isinstance(tuning, dict) or set(tuning) - DEFAULT_TUNING.keys():
@@ -248,7 +266,7 @@ class PhysicsBridge:
                                   ("perpendicular", "track_perp", -1)):
             unit = next((u for u in self.sim.chassis.wheel_units if u.name == name), None)
             frame[f"{label}_tracker_in"] = (sign * self.sim.tracking[name].position * unit.radius / self.inch
-                                            if self.tracking_mode == "two" and unit is not None else None)
+                                            if self.tracking_mode != "drive" and unit is not None else None)
         values = (C.c_double * 10)(*[math.nan] * 10)
         if hasattr(self.lib, "sim_motion_telemetry"):
             self.lib.sim_motion_telemetry(values)
@@ -303,7 +321,7 @@ class PhysicsBridge:
             for side, name in zip(self.sides, ("left", "right")):
                 setattr(reading, name, sum(math.degrees(self.sim.encoders[m.name].position)
                                           for m in side) / len(side))
-            if self.tracking_mode == "two":
+            if self.tracking_mode != "drive":
                 reading.vertical = math.degrees(self.sim.tracking["track_parallel"].position)
                 # The perpendicular wheel rolls left-positive in vexsim;
                 # mclib's horizontal tracking measurement is right-positive.
@@ -556,7 +574,7 @@ def main():
     parser.add_argument("--vexsim", type=Path, default=ROOT.parent / "vexsim")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--filter", default="", help="Run names containing this substring")
-    parser.add_argument("--tracking-mode", choices=("drive", "two"), default="drive",
+    parser.add_argument("--tracking-mode", choices=TRACKING_MODES, default="drive",
                         help="Drive encoders (baseline) or two modeled passive tracking wheels")
     parser.add_argument("--motion-timeout-ms", type=int, default=4000,
                         help="Deadline for nominal motion cases (default: 4000)")
