@@ -165,19 +165,21 @@ std::int32_t MotorGroup::voltsToMillivolts(double volts) {
 
 std::int32_t MotorGroup::percentToPower(double percent) {
   if (!std::isfinite(percent)) return 0;
-  return static_cast<std::int32_t>(std::clamp(percent, -1.0, 1.0) * 127.0);
+  // Round, don't truncate: 0.999 is 127, not 126.
+  return static_cast<std::int32_t>(std::lround(std::clamp(percent, -1.0, 1.0) * 127.0));
 }
 
 double MotorGroup::average(const std::vector<double>& values) {
-  if (values.empty()) {
-    return 0.0;
-  }
-
+  // Skip motors that are not reporting: one unplugged motor used to make the
+  // average infinite, or add ~2e9 / n mA to the current. NaN when none are.
   double total = 0.0;
+  int counted = 0;
   for (const double value : values) {
+    if (!isReading(value)) continue;
     total += value;
+    ++counted;
   }
-  return total / static_cast<double>(values.size());
+  return counted > 0 ? total / counted : NAN;
 }
 
 }  // namespace device

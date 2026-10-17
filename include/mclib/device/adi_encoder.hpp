@@ -44,7 +44,7 @@ public:
   /// @brief Cumulative ticks since reset(). PROS_ERR on failure.
   std::int32_t getTicks() const;
 
-  /// @brief Cumulative degrees (1 tick == 1 degree). PROS_ERR on failure.
+  /// @brief Cumulative degrees (1 tick == 1 degree). NaN on failure.
   double getPositionDeg() const;
 
   /**

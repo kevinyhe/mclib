@@ -30,14 +30,13 @@ bool Controller::isConnected() const {
 }
 
 std::int32_t Controller::getAnalog(AnalogAxis axis) const {
-  return m_controller.get_analog(toProsAnalogAxis(axis));
+  const std::int32_t raw = m_controller.get_analog(toProsAnalogAxis(axis));
+  // A failed read returns PROS_ERR, which is full stick and then some.
+  return ok(raw) ? raw : 0;
 }
 
 units::QNumber Controller::analog(AnalogAxis axis) const {
-  const std::int32_t raw = getAnalog(axis);
-  // A disconnected controller returns PROS_ERR, not a stick position.
-  if (!ok(raw)) return 0.0;
-  return static_cast<double>(raw) / 127.0;
+  return static_cast<double>(getAnalog(axis)) / 127.0;
 }
 
 bool Controller::getDigital(DigitalButton button) const {

@@ -30,10 +30,9 @@ public:
    * unbounded (non-wrapping) accumulation. Feed it straight to
    * `DriveGeometry::encoderToDistance()`.
    *
-   * getPositionDeg() turns a disconnected sensor's PROS_ERR into 21 474 836.47
-   * degrees, which odometry differences into a 21-million-degree jump in the
-   * pose. Same reasoning as Inertial: a dropout has to be unwrappable, not
-   * silently numeric.
+   * getPositionDeg() returns NaN for a disconnected sensor. It used to return
+   * 21 474 836.47 degrees, which odometry differenced into a 21-million-degree
+   * jump in the pose.
    */
   std::optional<units::QAngle> position() const;
   void resetPosition();

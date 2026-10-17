@@ -32,7 +32,7 @@ public:
   /// @brief True when the controller is connected to the brain.
   bool isConnected() const;
 
-  /// @brief Stick position, raw -127..127.
+  /// @brief Stick position, raw -127..127. 0 when the read fails.
   std::int32_t getAnalog(AnalogAxis axis) const;
 
   /**

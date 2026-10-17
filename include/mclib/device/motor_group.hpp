@@ -55,8 +55,7 @@ public:
    * @brief Per-motor positions, typed, one entry per motor in port order.
    *
    * Sibling of getPositionsDeg(). A motor that is not reporting is nullopt in
-   * its slot rather than the infinity the untyped version leaves there, so a
-   * single dead motor does not disguise itself as a reading.
+   * its slot rather than the infinity the untyped version leaves there.
    */
   std::vector<std::optional<units::QAngle>> positions() const;
   /// @brief Per-motor speeds, typed. Sibling of getActualVelocities() (RPM);
@@ -70,10 +69,9 @@ public:
    * @brief Mean position, typed, or nullopt if the group is empty or any
    *        motor is not reporting.
    *
-   * Sibling of getAveragePositionDeg(), which averages the error sentinels in
-   * with the real readings and returns a number that looks fine. An average
-   * over a partly-dead drive side is not a position, so this refuses to give
-   * you one.
+   * Sibling of getAveragePositionDeg(), which skips motors that are not
+   * reporting and averages the rest (NaN when none are). This one refuses an
+   * average over a partly-dead drive side.
    */
   std::optional<units::QAngle> averagePosition() const;
   /// @brief Mean speed, typed. Sibling of getAverageActualVelocity(); nullopt

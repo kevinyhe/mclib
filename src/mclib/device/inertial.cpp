@@ -13,7 +13,9 @@ namespace mclib {
 namespace device {
 
 Inertial::Inertial(std::uint8_t port, double gain)
-    : m_imu(port), m_gain(gain) {}
+    // A gain of 0 or not finite would make every heading 0 and
+    // setRotationDeg() divide by zero: use 1.
+    : m_imu(port), m_gain(std::isfinite(gain) && gain > 0 ? gain : 1.0) {}
 
 void Inertial::reset(bool blocking) {
   m_imu.reset(blocking);
@@ -32,7 +34,10 @@ double Inertial::getHeadingDeg() const {
   if (raw == PROS_ERR_F) {
     return NAN;
   }
-  return raw * m_gain;
+  // Wrap after the gain: PROS's heading is already [0, 360), and scaling
+  // it moved 359 to 362.6 with a gain of 1.01.
+  const double heading = std::fmod(raw * m_gain, 360.0);
+  return heading < 0 ? heading + 360.0 : heading;
 }
 
 void Inertial::setRotationDeg(double heading_deg) {

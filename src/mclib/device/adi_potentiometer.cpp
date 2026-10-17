@@ -34,7 +34,8 @@ AdiPotentiometer::AdiPotentiometer(std::uint8_t expander_port, char port,
             toPros(type)) {}
 
 double AdiPotentiometer::getAngleDeg() const {
-  return m_pot.get_angle();
+  const double degrees = m_pot.get_angle();
+  return std::isfinite(degrees) ? degrees : NAN;
 }
 
 std::optional<units::QAngle> AdiPotentiometer::angle() const {

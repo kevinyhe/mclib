@@ -26,7 +26,9 @@ std::int32_t AdiEncoder::getTicks() const {
 }
 
 double AdiEncoder::getPositionDeg() const {
-  return static_cast<double>(m_encoder.get_value());
+  const std::int32_t ticks = m_encoder.get_value();
+  // PROS_ERR used to come out as 2147483647 degrees.
+  return ticks == PROS_ERR ? NAN : static_cast<double>(ticks);
 }
 
 std::optional<units::QAngle> AdiEncoder::position() const {

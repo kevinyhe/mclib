@@ -61,7 +61,7 @@ std::optional<Pose2D> Gps::pose() const {
 double Gps::getHeadingDeg() const {
   const double raw = m_gps.get_heading();
   if (!std::isfinite(raw)) {
-    return raw;
+    return NAN;
   }
   return wrapDeg360(raw + m_heading_offset_deg);
 }
@@ -76,16 +76,17 @@ std::optional<units::QAngle> Gps::heading() const {
 
 double Gps::getXIn() const {
   const double metres = m_gps.get_position_x();
-  return std::isfinite(metres) ? metresToInches(metres) : metres;
+  return std::isfinite(metres) ? metresToInches(metres) : NAN;
 }
 
 double Gps::getYIn() const {
   const double metres = m_gps.get_position_y();
-  return std::isfinite(metres) ? metresToInches(metres) : metres;
+  return std::isfinite(metres) ? metresToInches(metres) : NAN;
 }
 
 double Gps::getErrorM() const {
-  return m_gps.get_error();
+  const double metres = m_gps.get_error();
+  return std::isfinite(metres) ? metres : NAN;
 }
 
 std::optional<units::QLength> Gps::error() const {

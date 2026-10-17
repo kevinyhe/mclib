@@ -13,7 +13,9 @@ namespace device {
 Vision::Vision(std::uint8_t port) : m_vision(port, pros::E_VISION_ZERO_CENTER) {}
 
 std::int32_t Vision::count() const {
-  return m_vision.get_object_count();
+  // PROS_ERR on a dead sensor: a `for (i < count())` loop ran 2^31 times.
+  const std::int32_t n = m_vision.get_object_count();
+  return n == PROS_ERR || n < 0 ? 0 : n;
 }
 
 std::optional<VisionObject> Vision::convert(const pros::vision_object_s_t& raw) {

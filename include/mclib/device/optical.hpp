@@ -45,11 +45,11 @@ public:
 
   explicit Optical(std::uint8_t port);
 
-  /// @brief Hue in degrees [0, 360). PROS_ERR_F on failure.
+  /// @brief Hue in degrees [0, 360). NaN on failure.
   double getHue() const;
-  /// @brief Saturation [0, 1]. PROS_ERR_F on failure.
+  /// @brief Saturation [0, 1]. NaN on failure.
   double getSaturation() const;
-  /// @brief Brightness [0, 1]. PROS_ERR_F on failure.
+  /// @brief Brightness [0, 1]. NaN on failure.
   double getBrightness() const;
   /// @brief Proximity [0, 255]; larger is closer. PROS_ERR on failure.
   std::int32_t getProximity() const;

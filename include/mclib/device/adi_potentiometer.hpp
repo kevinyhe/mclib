@@ -44,7 +44,7 @@ public:
   AdiPotentiometer(std::uint8_t expander_port, char port,
                    PotentiometerType type = PotentiometerType::V2);
 
-  /// @brief Angle in degrees, 0 to the type's travel. PROS_ERR_F on failure.
+  /// @brief Angle in degrees, 0 to the type's travel. NaN on failure.
   double getAngleDeg() const;
 
   /// @brief Typed sibling of getAngleDeg(): nullopt when not reporting.

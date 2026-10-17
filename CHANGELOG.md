@@ -37,6 +37,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- Device getters that return a plain number no longer pass PROS's error
+  value through on an unplugged or misconfigured device. Decimal getters
+  (motor position, velocity, current and temperature; `Rotation`,
+  `AdiEncoder` and `AdiPotentiometer` angles; `Distance::getDistanceIn`;
+  GPS x, y, heading and error; optical hue, saturation and brightness)
+  return NaN, which fails every comparison: `temperature > 55` and
+  `current > 2500` are false on an unplugged motor instead of true.
+  `Vision::count` and `AiVision::count` return 0 (a loop to `count()` ran
+  2^31 times), `Controller::getAnalog` returns 0, and `Line::get` reads no
+  line instead of "dark line found". Raw integer getters (`getTicks`,
+  `getRaw`, `getDistanceMm`, `getConfidence`) still return the raw value.
+- `MotorGroup` averages skip motors that are not reporting; one dead motor
+  made `getAveragePositionDeg()` infinite. None reporting gives NaN, not 0.
+- `setPercent()` rounds: 0.999 sent 126 of 127.
+- `Inertial::getHeadingDeg()` wraps after applying the gain (359 deg at gain
+  1.01 read 362.6), and a gain of 0 is replaced by 1.
+- `Pneumatic` records its new state only when the write succeeds; a failed
+  write reported the new state and the next `toggle()` went the wrong way.
+- The example `src/main.cpp` shows "ODOM NOT RUNNING" on the controller if
+  `startOdometry()` rejects its setup.
 - `boomerang()` started its final turn at the closest approach while still
   moving, and coasted out of the band: speed_base backed in at 7.6 in/s and
   ended 1.67 in off. It now waits until the robot is under 4 in/s.

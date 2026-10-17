@@ -14,16 +14,20 @@ namespace device {
 
 Optical::Optical(std::uint8_t port) : m_optical(port) {}
 
+// PROS_ERR_F (infinity) on a dead sensor; NaN instead, like the motors.
 double Optical::getHue() const {
-  return m_optical.get_hue();
+  const double value = m_optical.get_hue();
+  return std::isfinite(value) ? value : NAN;
 }
 
 double Optical::getSaturation() const {
-  return m_optical.get_saturation();
+  const double value = m_optical.get_saturation();
+  return std::isfinite(value) ? value : NAN;
 }
 
 double Optical::getBrightness() const {
-  return m_optical.get_brightness();
+  const double value = m_optical.get_brightness();
+  return std::isfinite(value) ? value : NAN;
 }
 
 std::int32_t Optical::getProximity() const {

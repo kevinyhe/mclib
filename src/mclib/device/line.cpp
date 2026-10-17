@@ -22,6 +22,8 @@ Line::Line(pros::adi::AnalogIn adi_port,
       dark_line(detect_dark_line) {}
 
 bool Line::get() const {
+  // A failed read (PROS_ERR, INT32_MAX) is no line, not "dark line found".
+  if (sensor.get_value() == PROS_ERR) return false;
   const std::int32_t value = get_raw();
   return dark_line ? (value >= threshold_value) : (value <= threshold_value);
 }

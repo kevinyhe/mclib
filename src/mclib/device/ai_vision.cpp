@@ -52,7 +52,9 @@ std::int32_t AiVision::enabledMask() const {
 }
 
 std::int32_t AiVision::count() const {
-  return m_camera.get_object_count();
+  // PROS_ERR on a dead sensor: a `for (i < count())` loop ran 2^31 times.
+  const std::int32_t n = m_camera.get_object_count();
+  return n == PROS_ERR || n < 0 ? 0 : n;
 }
 
 std::optional<AiVisionObject> AiVision::convert(

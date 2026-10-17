@@ -82,7 +82,7 @@ public:
   /// @brief Bitmask of currently enabled detectors (AiVisionMode values). PROS_ERR on failure.
   std::int32_t enabledMask() const;
 
-  /// @brief Objects in the last frame. PROS_ERR on failure.
+  /// @brief Objects in the last frame. 0 on failure.
   std::int32_t count() const;
 
   /// @brief Every detection in the last frame. Empty on error.

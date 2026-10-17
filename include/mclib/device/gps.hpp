@@ -59,18 +59,18 @@ public:
    */
   std::optional<Pose2D> pose() const;
 
-  /// @brief Heading [0, 360) degrees, offset applied. PROS_ERR_F on failure.
+  /// @brief Heading [0, 360) degrees, offset applied. NaN on failure.
   double getHeadingDeg() const;
   /// @brief Typed sibling of getHeadingDeg().
   std::optional<units::QAngle> heading() const;
 
-  /// @brief X in inches from field centre. PROS_ERR_F on failure.
+  /// @brief X in inches from field centre. NaN on failure.
   double getXIn() const;
-  /// @brief Y in inches from field centre. PROS_ERR_F on failure.
+  /// @brief Y in inches from field centre. NaN on failure.
   double getYIn() const;
 
   /**
-   * @brief Position RMS error in metres, as PROS reports it. PROS_ERR_F on
+   * @brief Position RMS error in metres, as PROS reports it. NaN on
    *        failure. Large values mean the sensor cannot see enough of the
    *        field strip; treat the pose as untrustworthy.
    */

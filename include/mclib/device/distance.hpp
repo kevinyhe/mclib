@@ -30,11 +30,9 @@ public:
    * Units-typed sibling of getDistanceMm() / getDistanceIn(), built from the
    * sensor's native millimetres.
    *
-   * The optional is not decoration. PROS returns PROS_ERR (INT32_MAX) for a
-   * bad port, which getDistanceMm() hands straight back and getDistanceIn()
-   * turns into 84.5 million inches - a plausible-looking number that no range
-   * check catches, and get_confidence() fails the same way, so gating on
-   * confidence does not save you. nullopt makes the caller face it.
+   * PROS returns PROS_ERR (INT32_MAX) for a bad port. getDistanceMm() and
+   * getConfidence() hand it straight back (a confidence gate passes on it);
+   * getDistanceIn() returns NaN. nullopt here makes the caller face it.
    *
    * A live sensor with nothing in front of it is NOT an error: it reports
    * 9999 mm, and that comes back as a real length.

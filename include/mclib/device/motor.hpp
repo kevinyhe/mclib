@@ -53,8 +53,8 @@ public:
   /**
    * @brief Motor position, typed, or nullopt when the motor is not reporting.
    *
-   * Sibling of getPositionDeg(), which returns PROS_ERR_F - positive infinity
-   * - on a dead or misconfigured port.
+   * Sibling of getPositionDeg(), which returns NaN on a dead or misconfigured
+   * port.
    */
   std::optional<units::QAngle> position() const;
 
@@ -62,7 +62,7 @@ public:
    * @brief Shaft speed, typed, or nullopt when the motor is not reporting.
    *
    * Sibling of getActualVelocity(), which returns gearset-dependent RPM, and
-   * positive infinity on a dead port.
+   * NaN on a dead port.
    */
   std::optional<units::QAngularVelocity> velocity() const;
 
@@ -72,9 +72,8 @@ public:
    * Sibling of getCurrentDraw(), which returns MILLIAMPS - the 1000x trap this
    * accessor exists to close. Compare against `2.5_A`, not against 2500.
    *
-   * The optional closes the other half of that trap: a dead port reads
-   * PROS_ERR = 2 147 483 647 mA, so `getCurrentDraw() > 2500` is true for an
-   * unplugged motor and a stall check would fire on nothing.
+   * getCurrentDraw() returns NaN on a dead port, so `getCurrentDraw() > 2500`
+   * is false for an unplugged motor. (PROS itself reports 2 147 483 647 mA.)
    */
   std::optional<units::QCurrent> current() const;
 
