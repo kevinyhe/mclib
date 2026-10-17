@@ -26,6 +26,8 @@
 // and auton_selector_test gets pros::millis() from tests/support/host_screen.cpp.
 #include "support/host_devices.hpp"
 
+#include "pros/error.h"
+
 #include "pros/imu.hpp"
 #include "pros/misc.hpp"
 #include "pros/motor_group.hpp"
@@ -46,12 +48,25 @@ std::map<int, double> imu_rotation_deg;
 std::map<int, int> analog;
 std::map<int, bool> button_down;
 std::vector<std::string> controller_text;
+bool controller_connected = true;
+int controller_battery_capacity = 100;
+int controller_battery_level = 100;
+std::map<int, int> new_presses;
+std::map<int, int> new_releases;
+std::vector<std::string> rumbles;
+std::vector<int> cleared_lines;
 void reset() {
   motors.clear();
   imu_rotation_deg.clear();
   analog.clear();
   button_down.clear();
   controller_text.clear();
+  controller_connected = true;
+  controller_battery_capacity = controller_battery_level = 100;
+  new_presses.clear();
+  new_releases.clear();
+  rumbles.clear();
+  cleared_lines.clear();
 }
 }  // namespace host_devices
 }  // namespace test
@@ -271,6 +286,48 @@ std::int32_t Controller::set_text(std::uint8_t line, std::uint8_t col, const cha
 
 std::int32_t Controller::set_text(std::uint8_t line, std::uint8_t col, const std::string& str) {
   return set_text(line, col, str.c_str());
+}
+
+std::int32_t Controller::is_connected() { return hd::controller_connected ? 1 : 0; }
+
+std::int32_t Controller::get_battery_capacity() {
+  return hd::controller_battery_capacity < 0 ? PROS_ERR : hd::controller_battery_capacity;
+}
+
+std::int32_t Controller::get_battery_level() {
+  return hd::controller_battery_level < 0 ? PROS_ERR : hd::controller_battery_level;
+}
+
+namespace {
+std::int32_t takeEdge(std::map<int, int>& edges, controller_digital_e_t button) {
+  auto found = edges.find(static_cast<int>(button));
+  if (found == edges.end() || found->second <= 0) return 0;
+  --found->second;
+  return 1;
+}
+}  // namespace
+
+std::int32_t Controller::get_digital_new_press(controller_digital_e_t button) {
+  return takeEdge(hd::new_presses, button);
+}
+
+std::int32_t Controller::get_digital_new_release(controller_digital_e_t button) {
+  return takeEdge(hd::new_releases, button);
+}
+
+std::int32_t Controller::clear_line(std::uint8_t line) {
+  hd::cleared_lines.push_back(line);
+  return 1;
+}
+
+std::int32_t Controller::clear() {
+  hd::cleared_lines.push_back(-1);
+  return 1;
+}
+
+std::int32_t Controller::rumble(const char* rumble_pattern) {
+  hd::rumbles.emplace_back(rumble_pattern);
+  return 1;
 }
 
 // ---------------------------------------------- Unused, present for vtables

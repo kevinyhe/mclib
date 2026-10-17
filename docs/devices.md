@@ -30,6 +30,33 @@ ADI wrappers take a port char (`'A'`..`'H'`). A second constructor,
 | `AdiUltrasonic` | `pros::adi::Ultrasonic` | `mclib/device/adi_ultrasonic.hpp` |
 | `AdiLed` | `pros::adi::Led` | `mclib/device/adi_led.hpp` |
 
+## Controller
+
+```cpp
+mclib::device::Controller master;  // ControllerId::Partner for the second one
+
+const double forward = master.analog(AnalogAxis::LeftY);  // -1..1
+if (master.getNewPress(DigitalButton::A)) intake.toggle();  // once per press
+master.print(0, 0, "Auton %d", slot);                       // 3 lines x 15 chars
+master.rumble(".-");
+if (auto battery = master.batteryCapacity()) { /* percent */ }
+```
+
+| Call | Returns |
+| --- | --- |
+| `getAnalog(axis)` / `analog(axis)` | stick, -127..127 / -1..1 (0 when disconnected) |
+| `getDigital(button)` | held down |
+| `getNewPress(button)`, `getNewRelease(button)` | true once per press or release |
+| `setText`, `print`, `clearLine`, `clear` | true when PROS took the write |
+| `rumble(pattern)` | `.` short, `-` long, ` ` pause, up to 8 |
+| `isConnected()` | connected to the brain |
+| `batteryCapacity()`, `batteryLevel()` | value, or nothing when unreadable |
+
+The controller takes a screen or rumble write about every 50 ms and drops
+faster ones, so write the screen when its text changes, not every loop.
+PROS keeps one press flag per button per task: read a button's presses from
+one place.
+
 ## Notes
 
 - `Gps::pose()` is in the field frame: inches, 0° = +Y, clockwise. Offsets are

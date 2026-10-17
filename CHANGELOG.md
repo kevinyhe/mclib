@@ -7,6 +7,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `device::Controller` covers the rest of `pros::Controller`: press and
+  release edges (`getNewPress`, `getNewRelease`), `print`, `clearLine`,
+  `clear`, `rumble`, `isConnected`, `batteryCapacity`, `batteryLevel` and
+  `id`. Writes return whether PROS took them; a disconnected controller's
+  stick reads 0 from `analog()` instead of PROS_ERR / 127.
 - `PoseFusion::setGps()`: blend a V5 GPS into the pose, with or without
   distance sensors. In the physics simulator with drive encoders only, RAMSETE
   arcs end 0.78-1.44 in off with the GPS, against 2.36-4.23 in with distance
