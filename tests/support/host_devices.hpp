@@ -70,6 +70,19 @@ extern std::map<int, int> analog;
 extern std::map<int, bool> button_down;
 /// @brief Every Controller::set_text() string, in order.
 extern std::vector<std::string> controller_text;
+/// @brief Controller connected. True after reset().
+extern bool controller_connected;
+/// @brief Controller battery capacity and level. PROS_ERR when < 0.
+extern int controller_battery_capacity;
+extern int controller_battery_level;
+/// @brief Presses and releases not yet read, by pros::controller_digital_e_t.
+///        get_digital_new_press() / _release() take one each call.
+extern std::map<int, int> new_presses;
+extern std::map<int, int> new_releases;
+/// @brief Every Controller::rumble() pattern, in order.
+extern std::vector<std::string> rumbles;
+/// @brief Lines cleared by clear_line(), in order; -1 for clear().
+extern std::vector<int> cleared_lines;
 
 /// @brief Forget every device. Call at the start of each test case.
 void reset();
