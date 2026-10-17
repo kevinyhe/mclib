@@ -172,8 +172,8 @@ out.
 
 | Drive encoders only | Odometry alone | With the filter |
 | --- | --- | --- |
-| speed_base boomerang | 10.05 in off (odometry 9.53) | 3.16 in (odometry 2.06) |
-| six_motor_450 boomerang | 6.74 in (5.79) | 1.11 in (0.26), passes |
+| speed_base boomerang | 9.40 in off (odometry 9.34) | 2.28 in (odometry 1.56) |
+| six_motor_450 boomerang | 5.90 in (5.75) | 0.84 in (0.68), passes |
 | six_motor_450 point move | 2.56 in (1.32) | 1.33 in (0.47), passes |
 | four_motor_200 RAMSETE arc | 4.06 in (4.32) | 2.36 in (2.03), passes |
 
