@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `tools/tune_drive.py` prints the track width to use for heading from the
+  encoders (no IMU), from the `characterizeSpin()` log.
 - Drive tuning from a log. `characterizeDrive()`, `characterizeSpin()` and
   `traceMotion()` (`mclib/control/characterize.hpp`) log fixed-voltage runs
   and a traced motion; `tools/tune_drive.py` fits kS, kV, kA and the

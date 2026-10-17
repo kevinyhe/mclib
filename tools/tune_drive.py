@@ -22,6 +22,10 @@ feedforward predicts for the spin voltage, against the turn rate the IMU saw,
 2 * (V - kS) / kV / turn rate. A skid-steer drive's wheels scrub sideways, so
 this is wider than the real track.
 
+From phase 2 it also works out the track width to give a robot that takes
+heading from the encoders instead of an IMU: the difference in left and
+right travel divided by the turn the IMU saw.
+
 From phase 3 it splits the gap between the target and the robot into the
 part along the target's heading (behind or ahead) and the part across it
 (off to the side), and says which gain to change.
@@ -149,6 +153,27 @@ def fit_track(rows, ks, kv):
                 spread_in=(max(widths) - min(widths)) if len(widths) > 1 else 0.0)
 
 
+def fit_encoder_track(rows):
+    """Track width that turns encoder travel into the turn the IMU saw:
+    difference in left and right travel / turn, from the spins. Use it as
+    the drive's track width on a robot that takes heading from the encoders.
+    On a skid-steer drive it is wider than the real track: the wheels scrub
+    sideways and count more travel than the turn needs."""
+    widths = []
+    for run in segments(rows, PHASE_SPIN):
+        if len(run) < 20:
+            continue
+        tail = run[len(run) // 2:]
+        turn = abs(math.radians(tail[-1]["heading_deg"] - tail[0]["heading_deg"]))
+        travel = abs((tail[-1]["left_in"] - tail[-1]["right_in"]) - (tail[0]["left_in"] - tail[0]["right_in"]))
+        if turn > 1e-3 and travel > 0:
+            widths.append(travel / turn)
+    if not widths:
+        return None
+    return dict(track_in=statistics.fmean(widths), spins=len(widths),
+                spread_in=(max(widths) - min(widths)) if len(widths) > 1 else 0.0)
+
+
 def analyse_trace(rows):
     along, side, times = [], [], []
     for row in rows:
@@ -210,6 +235,7 @@ def main(argv=None):
     result = dict(rows=len(rows), feedforward=fit_feedforward(rows))
     ff = result["feedforward"]
     result["track"] = fit_track(rows, ff["ks"], ff["kv"]) if ff else None
+    result["encoder_track"] = fit_encoder_track(rows)
     result["trace"] = analyse_trace(rows)
     result["advice"] = advice(result["trace"]) if result["trace"] else []
     if args.json:
@@ -230,6 +256,10 @@ def main(argv=None):
               f" (spread {track['spread_in']:.2f} in)")
     elif ff:
         print("No spins (phase 2): run characterizeSpin() for the effective track width.")
+    encoder_track = result["encoder_track"]
+    if encoder_track:
+        print(f"Track width for heading from encoders (no IMU): {encoder_track['track_in']:.2f} in"
+              f" (spread {encoder_track['spread_in']:.2f} in)")
     trace = result["trace"]
     if trace:
         print(f"Motion trace, {trace['duration_s']:.2f} s:")
