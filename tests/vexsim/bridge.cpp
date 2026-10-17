@@ -23,6 +23,10 @@ struct Sample {
   std::uint32_t millis;
   int disabled, cancel;
   double vertical, horizontal;
+  // GPS pose in mclib's frame, inches from the field centre and degrees;
+  // gps_valid 0 when the sensor gave nothing this tick.
+  double gps_x, gps_y, gps_heading;
+  int gps_valid;
 };
 using Advance = void (*)(std::uint32_t, Sample*);
 using Output = void (*)(int side, int mode, double volts);
@@ -228,6 +232,22 @@ extern "C" void sim_filter_enable(const double* sensors, int n, double odom_var_
   }
   fusion_rig.fusion = std::make_unique<mclib::control::PoseFusion>(config, inputs);
   fusion_rig.fusion->reset(mclib::control::robotState().pose());
+}
+
+// Also blend in the simulated GPS, assuming @p sigma_in of position error.
+// Starts a PoseFusion with no distance sensors if there is none yet.
+extern "C" void sim_gps_enable(double odom_var_per_in, double sigma_in) {
+  if (!fusion_rig.fusion) sim_filter_enable(nullptr, 0, odom_var_per_in, 0.002, 0.6);
+  mclib::control::GpsInput gps;
+  gps.read = []() -> std::optional<mclib::Pose2D> {
+    if (!sample.gps_valid) return std::nullopt;
+    return mclib::Pose2D{sample.gps_x, sample.gps_y, sample.gps_heading * std::acos(-1.0) / 180};
+  };
+  gps.position_sigma_in = sigma_in;
+  // The simulated robot starts at the field centre and so does odometry, so
+  // the map frame is odometry + 72; the GPS origin is the field centre.
+  gps.origin_x_in = gps.origin_y_in = kFieldOffsetIn;
+  fusion_rig.fusion->setGps(gps);
 }
 
 // A distance reading for sensor @p index, used on the next tick. Called from

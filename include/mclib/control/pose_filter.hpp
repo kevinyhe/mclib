@@ -161,6 +161,25 @@ struct DistanceSensorInput {
   std::uint32_t period_ms = 33;
 };
 
+/// @brief A GPS sensor for `PoseFusion`.
+struct GpsInput {
+  /// @brief The latest GPS pose: inches from the field centre and compass
+  ///        radians, as `device::Gps::pose()` gives it, or nothing.
+  std::function<std::optional<Pose2D>()> read;
+  /// @brief The sensor's own error estimate, inches, e.g. from
+  ///        `device::Gps::getErrorM()`. Optional; the larger of it and
+  ///        `position_sigma_in` is used.
+  std::function<double()> error_in;
+  /// @brief Position error to assume per reading, inches.
+  double position_sigma_in = 1.0;
+  /// @brief How often the GPS gives a new reading. About 20 ms.
+  std::uint32_t period_ms = 20;
+  /// @brief Where the GPS origin (the field centre) is on the snapshot map
+  ///        `PoseFusion` works in. {72, 72} on a 144 in field.
+  double origin_x_in = 72.0;
+  double origin_y_in = 72.0;
+};
+
 /// @brief Tuning for `PoseFusion`.
 struct PoseFusionConfig {
   PoseFilterConfig filter{};
@@ -197,6 +216,17 @@ class PoseFusion {
   PoseFusion(PoseFusionConfig config, std::vector<DistanceSensorInput> sensors);
 
   /**
+   * @brief Also blend in a GPS. Position only; heading stays with the IMU.
+   *
+   * ```cpp
+   * mclib::device::Gps gps(5, 0.0, -4.0);
+   * fusion.setGps({.read = [&] { return gps.pose(); },
+   *                .error_in = [&] { return gps.getErrorM() * 39.37; }});
+   * ```
+   */
+  void setGps(GpsInput gps);
+
+  /**
    * @brief Start from @p odometry_pose.
    * @param position_sigma_in Initial position uncertainty.
    * @param heading_sigma_deg Initial heading uncertainty.
@@ -227,6 +257,8 @@ class PoseFusion {
   PoseFusionConfig m_config;
   std::vector<DistanceSensorInput> m_sensors;
   std::vector<std::uint32_t> m_last_read_ms;
+  std::optional<GpsInput> m_gps;
+  std::uint32_t m_last_gps_ms = 0;
   PoseFilter m_filter;
   Pose2D m_previous{};  // field frame
   bool m_started = false;

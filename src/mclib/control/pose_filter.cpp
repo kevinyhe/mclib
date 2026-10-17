@@ -175,6 +175,12 @@ PoseFusion::PoseFusion(PoseFusionConfig config, std::vector<DistanceSensorInput>
       m_last_read_ms(m_sensors.size(), 0),
       m_filter(config.filter) {}
 
+void PoseFusion::setGps(GpsInput gps) {
+  sync::LockGuard lock(m_mutex);
+  m_gps = std::move(gps);
+  m_last_gps_ms = 0;
+}
+
 Pose2D PoseFusion::toField(const Pose2D& odometry) const {
   return {odometry.x + m_config.field_offset_x_in, odometry.y + m_config.field_offset_y_in,
           odometry.theta};
@@ -186,6 +192,7 @@ void PoseFusion::reset(const Pose2D& odometry_pose, double position_sigma_in,
   m_previous = toField(odometry_pose);
   m_filter.reset(m_previous, position_sigma_in, heading_sigma_deg);
   std::fill(m_last_read_ms.begin(), m_last_read_ms.end(), 0);
+  m_last_gps_ms = 0;
   m_started = true;
 }
 
@@ -206,6 +213,19 @@ std::optional<Vec2> PoseFusion::step(const Pose2D& odometry_pose, std::uint32_t 
     if (static_cast<std::uint32_t>(now_ms - m_last_read_ms[i]) < sensor.period_ms) continue;
     m_last_read_ms[i] = now_ms;
     m_filter.updateDistance(sensor.geometry, sensor.read_in());
+  }
+  if (m_gps && m_gps->read &&
+      static_cast<std::uint32_t>(now_ms - m_last_gps_ms) >= m_gps->period_ms) {
+    m_last_gps_ms = now_ms;
+    if (const std::optional<Pose2D> gps = m_gps->read()) {
+      double sigma = m_gps->position_sigma_in;
+      if (m_gps->error_in) {
+        const double reported = m_gps->error_in();
+        if (std::isfinite(reported) && reported > sigma) sigma = reported;
+      }
+      m_filter.updateGps({gps->x + m_gps->origin_x_in, gps->y + m_gps->origin_y_in, gps->theta},
+                         sigma);
+    }
   }
 
   const Pose2D fused = m_filter.pose();

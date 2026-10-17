@@ -296,5 +296,48 @@ int main() {
     CHECK(!fusion.step(Pose2D{NAN, 0, 0}, now_ms + 10).has_value());
   }
 
+  std::printf("-- PoseFusion: GPS only\n");
+  {
+    // Odometry 4% long; a GPS reporting the true pose from the field centre
+    // (0.5 in noise, every 20 ms, a reading missing every 10th time) pulls
+    // it back. Odometry starts at 0 in the field centre: offset 72.
+    std::mt19937 rng(11);
+    std::normal_distribution<double> unit(0.0, 1.0);
+    Pose2D truth{-30, -30, 0};
+    Pose2D odom = truth;
+    mclib::control::PoseFusionConfig config;
+    config.field_offset_x_in = config.field_offset_y_in = 72;
+    mclib::control::PoseFusion fusion(config, {});
+    int reads = 0;
+    fusion.setGps({.read = [&]() -> std::optional<Pose2D> {
+                     if (++reads % 10 == 0) return std::nullopt;
+                     return Pose2D{truth.x + 0.5 * unit(rng), truth.y + 0.5 * unit(rng), truth.theta};
+                   },
+                   .error_in = [] { return 0.5; }});
+    fusion.reset(odom);
+    std::uint32_t now_ms = 0;
+    for (int side = 0; side < 8; ++side) {
+      for (int i = 0; i < 250; ++i) {
+        now_ms += 10;
+        truth.y += 60.0 / 250;
+        odom.y += 60.0 / 250 * 1.04;
+        if (const auto corrected = fusion.step(odom, now_ms)) {
+          odom.x = corrected->x();
+          odom.y = corrected->y();
+        }
+      }
+      truth.y -= 60;  // jump back: the same 60 in again, odometry follows
+      odom.y -= 60;
+      fusion.step(odom, now_ms);
+    }
+    const double error = std::hypot(odom.x - truth.x, odom.y - truth.y);
+    std::printf("   odometry %.2f in off after 480 in (19.2 uncorrected); %d readings used, "
+                "%d GPS reads\n", error, fusion.accepted(), reads);
+    CHECK(error < 1.5);
+    // Read no more often than every 20 ms.
+    CHECK(reads <= static_cast<int>(now_ms / 20) + 1);
+    CHECK(fusion.accepted() > 0);
+  }
+
   return mclib::test::summary("pose_filter");
 }
