@@ -27,6 +27,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- `Inertial::reset()` waits for calibration (about 2 s) by default.
+  `reset(false)` keeps the old return-at-once behaviour.
 - Stopped distance moves (`driveTo()`, `moveToPoint()`) keep at least
   `MotionConfig::settle_min_voltage` (1.5 V; 0 turns it off) while outside
   `distance_exit.small_error`, instead of crawling at the friction limit. In

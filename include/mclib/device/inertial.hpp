@@ -19,7 +19,13 @@ class Inertial {
 public:
   explicit Inertial(std::uint8_t port, double gain = 1.0);
 
-  void reset(bool blocking = false);
+  /**
+   * @brief Calibrate. Keep the robot still: it takes about 2 s.
+   * @param blocking Wait until calibration finishes (the default). With
+   *        false it returns at once, and every reading until calibration
+   *        finishes is NaN / nullopt.
+   */
+  void reset(bool blocking = true);
   double getRotationDeg() const;
   double getHeadingDeg() const;
   void setRotationDeg(double heading_deg);
