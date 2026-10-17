@@ -268,7 +268,8 @@ int main() {
       CHECK_NEAR(acceleration.second, accelerating_mean, 1e-10);
       const auto deceleration = first_boomerang_output(
           0, direction * 2, direction, 0, 0, -1_V, 12_V, direction * 8, stop);
-      const double slowing_mean = stop ? direction * .8 : (direction > 0 ? 6 : -4);
+      // A stopped move 2 in out keeps settle_min_voltage (1.5 V) on the way in.
+      const double slowing_mean = stop ? direction * 1.5 : (direction > 0 ? 6 : -4);
       CHECK_NEAR(deceleration.first, slowing_mean, 1e-10);
       CHECK_NEAR(deceleration.second, slowing_mean, 1e-10);
     }

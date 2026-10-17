@@ -26,6 +26,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- `boomerang()` arrived facing the wrong way on some drives (#101). Close
+  in, the bearing to the carrot swung by up to 150 deg, and four_motor_200
+  and speed_base ran out their 4 s limit 43 and 102 deg off. Within 3x the
+  position band it now holds the bearing it had, turns toward the final
+  heading over the last few inches, and starts the final turn at its
+  closest approach, with the same `settle_min_voltage` push as `driveTo()`.
+  If that approach is too far out it re-aims at the target, at most twice.
+  In the physics simulator with tracking wheels every boomerang scenario
+  passes (2 of 6 before), ending 0.23-1.05 in and 0.8-2.4 deg off.
+  RAMSETE's low-grip back-off, which uses `boomerang()`, ends 2.34 in off
+  in 6.33 s, against 1.09 in in 6.48 s before.
 - A `boomerang()` that turned in place to its final heading and drifted just
   outside the position band went back to driving, then turned again, until
   its time limit. It now resumes only past twice the band.

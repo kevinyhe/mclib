@@ -1358,6 +1358,11 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
   double prev_left_output = state().prevLeftOutput();
   double prev_right_output = state().prevRightOutput();
   double current_angle = 0, hypotenuse = 0, carrot_x = 0, carrot_y = 0;
+  const double freeze_radius = 3 * position_band;
+  bool frozen = false;
+  int reaims = 0;
+  double align_start_in = 0;
+  double frozen_heading = 0;
 
   // Main PID loop for boomerang path
   while (pros::millis() - start_time <= time_limit_msec && safety.running())
@@ -1372,10 +1377,48 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
     telemetry.value.carrot_y = carrot_y;
     pid_distance.setTarget(hypotenuse * dir);
     current_angle = safety.heading();
-    const double carrot_heading = radToDeg(atan2(carrot_x - pose.x, carrot_y - pose.y)) + add;
+    // Close in, the bearing to the carrot swings fast with any sideways miss:
+    // in the physics simulator it went from 102 to -46 deg over the last 4 in,
+    // and the robot arrived with a 120 deg turn still to do (#101). Inside
+    // the freeze radius, hold the bearing from the moment the robot crossed
+    // it and drive only the distance along it; the final turn does the rest.
+    // Only freeze facing roughly toward the carrot: on low grip the robot
+    // reached the radius spinning out, 85 deg off, and froze that.
+    const double carrot_bearing = radToDeg(atan2(carrot_x - pose.x, carrot_y - pose.y)) + add;
+    if (!frozen && hypotenuse < freeze_radius && hypotenuse > position_band &&
+        fabs(mclib::wrapAngle(degToRad(carrot_bearing - current_angle))) < M_PI / 4) {
+      frozen = true;
+      frozen_heading = carrot_bearing;
+    } else if (frozen && hypotenuse > 2 * freeze_radius) {
+      frozen = false;
+      reaims = 0;
+    }
+    double carrot_heading = carrot_bearing;
+    double frozen_along = 0;
+    if (frozen) {
+      // Turn from the frozen bearing toward the final heading over the last
+      // few inches, so the final turn is short: a 16 deg final turn alone
+      // ran four_motor_200 past its 4 s limit.
+      const double share = std::clamp((hypotenuse - position_band) / (freeze_radius - position_band),
+                                      0.0, 1.0);
+      carrot_heading = reaims > 0 ? frozen_heading
+                               : a + share * radToDeg(mclib::wrapAngle(degToRad(frozen_heading - a)));
+      // Signed distance to the target along the robot's heading, so the
+      // robot stops at its closest approach instead of circling for the rest.
+      const double along_rad = degToRad(current_angle - add);
+      frozen_along = (x_in - pose.x) * sin(along_rad) + (y_in - pose.y) * cos(along_rad);
+      pid_distance.setTarget(frozen_along * dir);
+    }
     const double bearing_error = mclib::wrapAngle(degToRad(carrot_heading - current_angle));
     // Calculate drive output based on carrot point
     left_output = pid_distance.update(0) * cos(bearing_error);
+    if (frozen && exit && (left_output > 0) == (frozen_along * dir > 0)) {
+      // The same minimum push as driveTo(): without it the robot crawled at
+      // 0.6 V for 2 s just outside the band and never started the final turn.
+      // Only toward the target: a PID braking hard must keep braking.
+      left_output = settleFloor(left_output, frozen_along * dir,
+                                cfg().distance_exit.small_error);
+    }
     right_output = left_output;
     // A moving handoff uses the same configured position band as a stopped
     // arrival, without waiting for settlement or final heading. An infinite
@@ -1399,14 +1442,43 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
     // robot a little, and resuming at the band edge itself made it pivot,
     // re-approach and turn again until the time limit (RAMSETE's settle on
     // low grip in the physics simulator).
-    if (aligning_heading && hypotenuse > 2 * position_band) {
+    // Measured from where the turn began: a frozen approach may start it a
+    // little outside the band, and resuming at a fixed 2x band then flipped
+    // between turning and driving until the time limit (low grip).
+    if (aligning_heading && hypotenuse > std::max(2 * position_band, align_start_in + position_band)) {
       aligning_heading = false;
       pid_distance.reset();
       pid_heading.reset();
       final_turn.reset();
     }
-    if (exit && pid_distance.targetArrived() && hypotenuse <= position_band) {
+    if (exit && !frozen && pid_distance.targetArrived() && hypotenuse <= position_band) {
       aligning_heading = true;
+      align_start_in = hypotenuse;
+    }
+    // At the closest approach on the frozen bearing, driving on only moves
+    // away. Just outside the band, turn to the final heading from here:
+    // speed_base stopped 1.57 in out and sat there until its time limit.
+    // Further out, aim straight at the target and come in again. Only once
+    // the robot faces where it is steering: while it is still turning, the
+    // distance along its heading is small without it being close.
+    const double small_error = cfg().distance_exit.small_error;
+    if (exit && frozen && !aligning_heading && fabs(frozen_along) <= small_error &&
+        fabs(bearing_error) < M_PI / 4) {
+      // Two re-aims at most: on low grip each one spun the robot 80-100 deg,
+      // and with no limit it circled the target 2-3.5 in out until its time
+      // limit. With one, it stopped 3.6 in out.
+      if (reaims >= 2 || hypotenuse <= position_band + 0.5 * small_error) {
+        aligning_heading = true;
+        align_start_in = hypotenuse;
+      } else {
+        // Face the target or directly away from it, whichever is nearer the
+        // final heading, and drive forward or back to it. Facing it head-on
+        // on low grip left a 180 deg final turn that slid out of the band.
+        frozen_heading = radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add;
+        if (fabs(mclib::wrapAngle(degToRad(frozen_heading - a))) > M_PI / 2) frozen_heading += 180;
+        ++reaims;
+        pid_distance.reset();
+      }
     }
     if (aligning_heading) {
       telemetry.target(final_turn, safety.normalize(a));

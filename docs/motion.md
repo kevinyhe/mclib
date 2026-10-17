@@ -386,7 +386,7 @@ scenarios pass (0.38-1.60 in, 0.1-2.0° off), and so do the stress cases:
 
 | Case (six_motor_450, 90° arc) | No settling | Turn + straight | With back-off |
 | --- | --- | --- | --- |
-| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in | 1.09 in, 6.48 s |
+| Low grip (friction 0.65), feedforward measured at full grip | 12.09 in | 9.59 in | 2.34 in, 6.33 s |
 | Starting 3.6 in and 8° off the path | 4.53 in | 3.67 in | 1.06 in, 5.80 s |
 | Battery at 8% | 2.44 in | 1.60 in | 1.60 in |
 
