@@ -5,6 +5,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+## 0.3.0
+
+Upgrading from 0.2.0:
+
+- Device getters that return a plain number give NaN (or 0 for counts and
+  the raw controller stick) when a device is unplugged, instead of PROS's
+  2147483647 or infinity. A check like `if (motor.getTemperature() > 55)`
+  is now false on a dead port. Code that compared against `PROS_ERR` /
+  `PROS_ERR_F` from those getters should use `std::isnan()` or the
+  `std::optional` versions.
+- `Inertial::reset()` waits for calibration by default. Call
+  `reset(false)` for the old behaviour.
+- Stopped moves keep at least `MotionConfig::settle_min_voltage` (1.5 V)
+  near the target, and `curveCircle()` steers on the odometry pose. Set
+  `settle_min_voltage` to 0 to turn the floor off.
+
 ### Added
 
 - `device::Controller` covers the rest of `pros::Controller`: press and
@@ -27,6 +43,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- `Inertial::reset()` waits for calibration (about 2 s) by default.
+  `reset(false)` keeps the old return-at-once behaviour.
 - Stopped distance moves (`driveTo()`, `moveToPoint()`) keep at least
   `MotionConfig::settle_min_voltage` (1.5 V; 0 turns it off) while outside
   `distance_exit.small_error`, instead of crawling at the friction limit. In
