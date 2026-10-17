@@ -300,9 +300,10 @@ heading jump at every corner.
 
 `followTrajectory()` drives a tank drive along a trajectory. Each 10 ms it
 compares the odometry pose with where the trajectory says the robot should be,
-and corrects speed and turn rate toward it. `driveTo()` and `curveCircle()`
-measure progress with the drive encoders, which keep counting when a wheel
-slips. RAMSETE uses the pose, so slip shows up as error and gets corrected.
+and corrects speed and turn rate toward it, along a planned speed.
+`curveCircle()` also measures progress on the pose, but drives at the voltage
+you give it, slowing only to keep sideways acceleration under
+`MotionConfig::arc_max_lateral_accel`.
 
 ```cpp
 control::RamseteConfig follow;
@@ -357,9 +358,9 @@ cornering):
 
 | Drive | `curveCircle()` | RAMSETE b = 2 | RAMSETE b = 50 |
 | --- | --- | --- | --- |
-| four_motor_200, forward / reverse | 7.31 / 5.93 in | 6.01 / 4.84 in | 0.42 / 0.37 in |
-| six_motor_450, forward / reverse | 9.54 / 9.53 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
-| speed_base, forward / reverse | 12.51 / 15.10 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
+| four_motor_200, forward / reverse | 1.70 / 1.07 in | 6.01 / 4.84 in | 0.42 / 0.37 in |
+| six_motor_450, forward / reverse | 1.83 / 1.68 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
+| speed_base, forward / reverse | 2.27 / 3.35 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
 
 RAMSETE stops correcting when the plan does, so a robot that lags or slides
 ends with the error it had: up to 12° off heading on the fast drives, and up
@@ -395,8 +396,12 @@ costs seconds.
 
 ### Arcs with RAMSETE
 
-`curveCircle()` and `curveCircleReverse()` measure progress with the drive
-encoders, which keep counting when a wheel slips. After one call to
+`curveCircle()` and `curveCircleReverse()` measure progress on the pose: the
+angle swept around the arc's centre, fixed at the start. They steer back
+toward the circle when the robot drifts off it, slow down to keep sideways
+acceleration under `arc_max_lateral_accel` (60 in/s^2), and finish a stopped
+arc with a turn if it ends off heading. A zero radius still runs on the
+encoders. After one call to
 `useRamseteForArcs()`, they plan the same arc with `path::planArc()` and follow
 it with `followTrajectory()` instead, settle included. The calls, targets,
 time limits and voltage caps in your autonomous stay the same.
@@ -422,20 +427,22 @@ switches back.
 In the physics simulator, on the 90° arcs of 24 in radius, with two tracking
 wheels:
 
-| Drive | Encoder arc (fwd / rev) | With `useRamseteForArcs()` |
+| Drive | `curveCircle()` (fwd / rev) | With `useRamseteForArcs()` |
 | --- | --- | --- |
-| four_motor_200 | 7.31 / 5.93 in | 0.41 / 0.37 in |
-| six_motor_450 | 9.54 / 9.53 in | 1.59 / 1.55 in |
-| speed_base | 12.51 / 15.10 in | 0.77 / 0.98 in |
+| four_motor_200 | 1.70 / 1.07 in | 0.41 / 0.37 in |
+| six_motor_450 | 1.83 / 1.68 in | 1.59 / 1.55 in |
+| speed_base | 2.27 / 3.35 in | 0.77 / 0.98 in |
 
-With drive encoders only they improve from 6.65-14.56 in to 4.06-4.94 in,
+four_motor_200 still runs out its 4 s limit: its arc distance PID slows from
+20 in out and crawls the last few inches. With drive encoders only, plain arcs
+end 4.21-7.97 in off and RAMSETE arcs 4.06-4.94 in,
 limited by the odometry, which is 4-5 in off there. Add distance sensors and a
 `PoseFusion` for those robots (see getting-started.md).
 
 The default b = 2 is the usual value for full-size robots, and it is too soft
 at VEX scale. Start near 50 and lower it if the robot weaves about the path.
 With drive encoders only (no tracking wheels), RAMSETE at b = 50 missed the
-same arcs by 4.07-4.42 in, against 6.65-14.56 in for `curveCircle()`. It
+same arcs by 4.07-4.42 in, against 4.21-7.97 in for `curveCircle()`. It
 can't do better than the pose it corrects toward, and that pose came from the
 same slipping wheels: odometry was 4.3-4.9 in off at the end.
 
