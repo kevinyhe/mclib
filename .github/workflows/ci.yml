@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tracking: [drive, two]
+        tracking: [drive, two, vertical, horizontal]
     steps:
       - uses: actions/checkout@v4
 

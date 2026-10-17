@@ -17,14 +17,14 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/vexsim/run.py
 | `--output DIR` | where results go (default: a new `/tmp` directory) |
 | `--filter NAME/` | run matching scenarios, e.g. `safety/`, `wall/`, `six_motor_450/` |
 | `--motion-timeout-ms MS` | per-move time limit |
-| `--tracking-mode two` | add two tracking wheels |
+| `--tracking-mode MODE` | `drive` (default): drive encoders only. `two`: forward and sideways tracking wheels. `vertical` / `horizontal`: one tracking wheel, drive encoders for the rest |
 
 Output includes a build log, `results.json`, and a physics CSV and controller
 trace CSV per scenario. The command exits nonzero if any check fails.
 
 ## CI
 
-The `Physics simulator` job in `.github/workflows/ci.yml` runs both tracking
+The `Physics simulator` job in `.github/workflows/ci.yml` runs all four tracking
 modes on every push and pull request. Some scenarios fail on main (arcs and
 some boomerangs), so the job does not use `run.py`'s exit code. It runs
 `check_baseline.py`, which fails only when a scenario listed in
@@ -106,8 +106,8 @@ Results are in [BUILDER_VALIDATION.md](BUILDER_VALIDATION.md).
 - Odometry runs in step with the simulation, so task timing is not tested.
 - Locked motors are an ideal stall. A pinned robot slides against a constraint;
   there is no wall collision.
-- `driveTo` and `curveCircle` use drive encoders for distance in both tracking
-  modes.
+- Every simulated drive has omni wheels on all corners. A drive with
+  traction wheels slides sideways less in turns.
 - Holonomic drives, mechanisms and path following are covered by the host tests
   instead.
 

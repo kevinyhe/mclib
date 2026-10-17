@@ -32,6 +32,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- `boomerang()` started its final turn at the closest approach while still
+  moving, and coasted out of the band: speed_base backed in at 7.6 in/s and
+  ended 1.67 in off. It now waits until the robot is under 4 in/s.
+- The physics simulator put 30-38% of the robot's weight on the two
+  spring-loaded tracking wheels (vexsim PR #1), so robots with tracking
+  wheels lost grip and spun their wheels at launch. Every tracking-wheel
+  result before this was measured on that robot. The simulator also runs
+  with only a vertical or only a horizontal tracker now; see
+  getting-started.md for which to fit first.
 - `curveCircle()` arcs ended 6-15 in off and ran out their time limit in the
   physics simulator. They measured progress on the outer wheel's encoder,
   which slips forward, and crawled the last inches. They now measure

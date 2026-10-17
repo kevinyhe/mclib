@@ -1421,6 +1421,8 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
   bool frozen = false;
   int reaims = 0;
   double align_start_in = 0;
+  // Speed over the ground from the pose, in/s, smoothed over about 50 ms.
+  double speed_ips = 0, last_pose_x = NAN, last_pose_y = NAN;
   double frozen_heading = 0;
 
   // Main PID loop for boomerang path
@@ -1428,6 +1430,11 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
   {
     pose = safety.pose();
     hypotenuse = hypot(pose.x - x_in, pose.y - y_in); // Distance to target
+    if (std::isfinite(last_pose_x)) {
+      speed_ips += (hypot(pose.x - last_pose_x, pose.y - last_pose_y) / 0.01 - speed_ips) * 0.2;
+    }
+    last_pose_x = pose.x;
+    last_pose_y = pose.y;
     // Calculate carrot point for path leading
     carrot_x = x_in - hypotenuse * sin(degToRad(a + add)) * dlead;
     carrot_y = y_in - hypotenuse * cos(degToRad(a + add)) * dlead;
@@ -1521,8 +1528,10 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
     // the robot faces where it is steering: while it is still turning, the
     // distance along its heading is small without it being close.
     const double small_error = cfg().distance_exit.small_error;
+    // And only nearly stopped: speed_base started the final turn backing in
+    // at 7.6 in/s and coasted from 1.05 to 1.67 in out during it.
     if (exit && frozen && !aligning_heading && fabs(frozen_along) <= small_error &&
-        fabs(bearing_error) < M_PI / 4) {
+        fabs(bearing_error) < M_PI / 4 && speed_ips < 4.0) {
       // Two re-aims at most: on low grip each one spun the robot 80-100 deg,
       // and with no limit it circled the target 2-3.5 in out until its time
       // limit. With one, it stopped 3.6 in out.

@@ -106,7 +106,25 @@ Any sensor whose `position()` returns `std::optional<QAngle>` works with
 | --- | --- | --- |
 | Drive encoders only | drive encoders | not measured |
 | Vertical tracker | tracker | not measured |
+| Horizontal tracker | drive encoders | tracker |
 | Vertical and horizontal trackers | tracker | tracker |
+
+Which wheel to fit first, from the physics simulator. All three simulated
+drives have omni wheels on every corner, which slide sideways in turns; a
+drive with traction wheels slides less, which favours a vertical tracker
+more than this does. Odometry error at the end of a move, mean / worst:
+
+| Sensors | Straight moves | Curves (arcs, boomerang, S-curve) | Scenarios passing |
+| --- | --- | --- | --- |
+| Drive encoders only | 0.28 / 0.64 in | 4.20 / 9.34 in | 103 of 130 |
+| Vertical tracker | 0.25 / 0.30 in | 4.47 / 10.02 in | 102 of 130 |
+| Horizontal tracker | 0.44 / 1.14 in | 0.54 / 2.20 in | 124 of 130 |
+| Both | 0.25 / 0.30 in | 0.12 / 0.24 in | 127 of 130 |
+
+On curves the drive-encoder error is almost all sideways sliding, which only
+a horizontal tracker sees. Forward slip is small on these drives. With
+`PoseFusion`, set `odom_along_var_per_in` and `odom_side_var_per_in` apart
+for one tracker: low in the direction it measures, about 0.09 in the other.
 
 Reset the IMU and the pose together. `Chassis::setPose()` sets both.
 
