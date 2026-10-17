@@ -177,6 +177,15 @@ struct MotionConfig {
   ///        straight/point distance_exit rule; tune them for your drivetrain.
   PIDExit arc_exit{0.3, 0.9, 50.0 * units::millisecond,
                    250.0 * units::millisecond, 2.25};
+
+  /**
+   * @brief curveCircle() slows to keep sideways acceleration under this,
+   *        in in/s^2, measured from the pose: speed at most sqrt(a * radius),
+   *        about 38 in/s on a 24 in radius. 0 turns it off. At full voltage
+   *        a 450 rpm drive slid off a 24 in arc in the physics simulator and
+   *        ended 28 deg off.
+   */
+  double arc_max_lateral_accel = 60.0;
 };
 
 /**

@@ -180,8 +180,7 @@ out.
 With drive encoders only, 5 of the 15 moves pass with the filter against 2
 without. With two tracking wheels the odometry is already within 0.1 in, and
 the filter adds 0.1-0.3 in of sensor noise to it: 6 of 15 pass either way.
-Use it on robots without tracking wheels. `curveCircle()` arcs don't improve
-either way, because they steer on the encoders, not the pose.
+Use it on robots without tracking wheels.
 
 To have the motions steer on the corrected pose, hand the odometry task a
 `PoseFusion`. It runs the filter after every odometry tick and writes the

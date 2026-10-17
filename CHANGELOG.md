@@ -26,6 +26,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- `curveCircle()` arcs ended 6-15 in off and ran out their time limit in the
+  physics simulator. They measured progress on the outer wheel's encoder,
+  which slips forward, and crawled the last inches. They now measure
+  progress on the pose (the angle swept around the arc's centre), steer
+  back onto the circle, keep `settle_min_voltage`, slow to keep sideways
+  acceleration under the new `MotionConfig::arc_max_lateral_accel` (60
+  in/s^2), and finish a stopped arc with a turn if it ends off heading. With
+  tracking wheels 8 of the 12 arc scenarios pass (0 before); with drive
+  encoders only, 8 of 12 (0 before). four_motor_200 still runs out its 4 s
+  limit with tracking wheels.
 - `boomerang()` arrived facing the wrong way on some drives (#101). Close
   in, the bearing to the carrot swung by up to 150 deg, and four_motor_200
   and speed_base ran out their 4 s limit 43 and 102 deg off. Within 3x the

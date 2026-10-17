@@ -705,6 +705,24 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
   pid_turn.setDerivativeTolerance(0);
   pid_turn.setArrive(false);
 
+  // Progress and position come from the pose, not the outer wheel's
+  // encoder: that wheel slips forward, and in the physics simulator the arcs
+  // turned their full angle 6-15 in short of the end point. The centre is
+  // fixed at the start; on the arc, centre = pose + radius * (robot's right).
+  // Zero-radius turns have no centre to measure from and stay on encoders.
+  const mclib::Pose2D start_pose = safety.pose();
+  const double radius_abs = fabs(center_radius_in);
+  const bool on_pose = radius_abs >= 1.0;
+  const double entry_rad = degToRad(entry_angle_deg);
+  const double centre_x = start_pose.x + center_radius_in * cos(entry_rad);
+  const double centre_y = start_pose.y - center_radius_in * sin(entry_rad);
+  const double sweep_deg = result_angle_deg - entry_angle_deg;
+  double swept_deg = 0, last_bearing_deg = entry_angle_deg;
+  double last_x = start_pose.x, last_y = start_pose.y, speed_ips = 0;
+  const double max_arc_speed_ips = cfg().arc_max_lateral_accel > 0
+      ? std::sqrt(cfg().arc_max_lateral_accel * radius_abs) : INFINITY;
+  double speed_scale = 1.0;
+
   uint32_t start_time = pros::millis();
   double left_output = 0, right_output = 0, correction_output = 0;
   while (!pid_out.targetArrived() &&
@@ -714,13 +732,45 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
     const double encoder_delta = curve_direction < 0
         ? safety.right() - start_right : safety.left() - start_left;
     // Backward travel is progress only when this arc requests reverse.
-    const double progress = encoderDegreesToInches(encoder_delta) * drive_direction;
+    double progress = encoderDegreesToInches(encoder_delta) * drive_direction;
+    double steer_deg = 0;
+    if (on_pose) {
+      const mclib::Pose2D pose = safety.pose();
+      const double vx = pose.x - centre_x, vy = pose.y - centre_y;
+      // The heading whose arc point lies in the robot's direction from the
+      // centre, unwrapped tick to tick.
+      const double bearing_deg =
+          radToDeg(atan2(vy / center_radius_in, -vx / center_radius_in));
+      swept_deg += radToDeg(mclib::wrapAngle(degToRad(bearing_deg - last_bearing_deg)));
+      last_bearing_deg = bearing_deg;
+      progress = swept_deg / sweep_deg * out_arc;
+      // Outside the circle, turn toward the centre; inside, away. 4 deg per
+      // inch, at most 30 deg.
+      const double off_circle_in = hypot(vx, vy) - radius_abs;
+      // Speed from the pose, smoothed over about 50 ms. Over the limit,
+      // scale the drive down in proportion; recover slowly.
+      speed_ips += (hypot(pose.x - last_x, pose.y - last_y) / 0.01 - speed_ips) * 0.2;
+      last_x = pose.x;
+      last_y = pose.y;
+      if (speed_ips > max_arc_speed_ips) {
+        speed_scale = std::max(0.2, speed_scale * max_arc_speed_ips / speed_ips);
+      } else {
+        speed_scale = std::min(1.0, speed_scale + 0.02);
+      }
+      steer_deg = std::clamp(4.0 * off_circle_in, -30.0, 30.0) * curve_direction * drive_direction;
+    }
     // Preserve the preceding live command at a successful chaining boundary;
     // updating the PID after the crossing can reverse the drive for one tick.
     if (!exit && progress >= out_arc) break;
-    real_angle = progress / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg;
+    real_angle = progress / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg + steer_deg;
     telemetry.target(pid_turn, safety.normalize(real_angle));
-    const double outer_output = pid_out.update(progress) * drive_direction;
+    double outer_output = pid_out.update(progress) * drive_direction * speed_scale;
+    // The same minimum push as driveTo(): without it the arcs crawled at
+    // 0.5 in/s for their last 2 in until the time limit.
+    if (exit) {
+      outer_output = settleFloor(outer_output, (out_arc - progress) * drive_direction,
+                                 cfg().arc_exit.small_error);
+    }
     left_output = curve_direction > 0 ? outer_output : outer_output * ratio;
     right_output = curve_direction < 0 ? outer_output : outer_output * ratio;
     correction_output = telemetry.heading(pid_turn, current_angle);
@@ -753,6 +803,15 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
   // Update the global heading
   safety.setCorrectHeading(result_angle_deg);
   state().setTurning(false);
+  // A stopped arc that slid ends off its heading; finish with a turn in
+  // whatever time is left.
+  const double elapsed_ms = static_cast<double>(pros::millis() - start_time);
+  if (exit && on_pose && safety.running() &&
+      fabs(result_angle_deg - safety.heading()) > cfg().turn_exit.big_error &&
+      elapsed_ms + 50 < time_limit_msec) {
+    return turnToAngle(result_angle_deg * mclib::units::degree,
+                       (time_limit_msec - elapsed_ms) * mclib::units::millisecond, true, max_voltage);
+  }
   return safety.result();
 }
 

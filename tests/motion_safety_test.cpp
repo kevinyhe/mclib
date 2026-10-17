@@ -369,6 +369,14 @@ int main() {
     }
   }
 
+  // curveCircle() measures progress on the pose. Put the pose where the arc
+  // of signed radius @p radius from the origin, heading 0, reaches
+  // @p heading_deg: the centre is at (radius, 0).
+  const auto arc_pose = [](double radius, double heading_deg) {
+    const double theta = heading_deg * mclib::kPi / 180;
+    resetOdometry({radius - radius * std::cos(theta), radius * std::sin(theta), theta});
+  };
+
   // Arc chaining must keep controlling inside its settlement band until
   // the outer wheel actually crosses the endpoint. Check both sides and
   // drive directions; the synthetic readings follow the requested arc.
@@ -387,6 +395,7 @@ int main() {
         const double progress = outer_arc + (now_ms < 500 ? -0.5 : 0.1);
         hw.encoder = direction * progress / (4 * mclib::kPi) * 360;
         hw.heading = side * direction * 90 * progress / outer_arc;
+        arc_pose(side * 24.0, hw.heading);
       };
       curveCircle(side * direction * 90_deg, side * 24_in, 2_s, false);
       CHECK(drove_after_settle);
@@ -413,7 +422,10 @@ int main() {
   now_ms = 0;
   hw.heading = hw.encoder = 0;
   robotState().setCorrectAngleDeg(0);
-  on_delay = [&] { hw.encoder = -60 / (4 * mclib::kPi) * 360; };
+  on_delay = [&] {
+    hw.encoder = -60 / (4 * mclib::kPi) * 360;
+    resetOdometry({0, -60, 0});
+  };
   curveCircle(90_deg, 24_in, 100_ms, false);
   CHECK_EQ(now_ms, 100);
   CHECK_EQ(hw.left, 0);
@@ -428,11 +440,13 @@ int main() {
     setMotionConfig(config);
     now_ms = 0;
     hw.heading = hw.encoder = 0;
+    arc_pose(24.0, 0);
     robotState().setCorrectAngleDeg(0);
     on_delay = [&] {
       const double outer_arc = 30 * mclib::kPi / 2;
       hw.encoder = (outer_arc - 1.2) / (4 * mclib::kPi) * 360;
       hw.heading = 90 * (outer_arc - 1.2) / outer_arc;
+      arc_pose(24.0, hw.heading);
     };
     curveCircle(90_deg, 24_in, 1_s);
     CHECK(wider_arc_band ? now_ms < 500 : now_ms == 1000);
