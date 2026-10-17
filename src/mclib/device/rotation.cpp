@@ -21,7 +21,9 @@ Rotation::Rotation(std::int8_t port, bool reversed)
     : m_rotation(signedPort(port, reversed)) {}
 
 double Rotation::getPositionDeg() const {
-  return m_rotation.get_position() / 100.0;
+  const std::int32_t centidegrees = m_rotation.get_position();
+  // A missing sensor read 21474836.47 degrees.
+  return centidegrees == PROS_ERR ? NAN : centidegrees / 100.0;
 }
 
 std::optional<units::QAngle> Rotation::position() const {

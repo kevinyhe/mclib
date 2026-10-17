@@ -31,11 +31,17 @@ Pneumatic::Pneumatic(int extender_port, char adi_port, bool default_state,
 
 void Pneumatic::set_value(bool value)
 {
-    current_state = value;
-    if (m_solenoid)
+    // Record the state only once the write is accepted: a failed write (bad
+    // port, expander unplugged) used to report the new state while the valve
+    // stayed put, and the next toggle() flipped from the wrong state.
+    if (!m_solenoid)
     {
-        const bool raw_value = (value == extended_state);
-        m_solenoid->set_value(raw_value);
+        return;
+    }
+    const bool raw_value = (value == extended_state);
+    if (m_solenoid->set_value(raw_value) != PROS_ERR)
+    {
+        current_state = value;
     }
 }
 

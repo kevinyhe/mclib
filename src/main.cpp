@@ -74,7 +74,11 @@ void initialize() {
   auto odometry = mclib::control::odometrySetupFrom(chassis);
   odometry.vertical = mclib::control::TrackingWheelSensor{
       mclib::control::encoderReader(vertical_tracker), vertical_wheel};
-  mclib::control::startOdometry(odometry);
+  // False means the setup was rejected or odometry is already running: every
+  // motion would then steer on a pose that never moves. Say so.
+  if (!mclib::control::startOdometry(odometry)) {
+    master.setText(0, 0, "ODOM NOT RUNNING");
+  }
   mclib::control::resetOdometry(mclib::Pose2D{});
 
   // Pick the autonomous on the brain screen or with the controller's left and

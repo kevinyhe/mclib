@@ -25,5 +25,8 @@ double MockIMU::get_heading() const {
   if (raw == PROS_ERR_F) {
     return NAN;
   }
-  return raw * imu_gain;
+  // Wrap after the gain: PROS's heading is already [0, 360), and scaling
+  // it moved 359 to 362.6 with a gain of 1.01.
+  const double heading = std::fmod(raw * imu_gain, 360.0);
+  return heading < 0 ? heading + 360.0 : heading;
 }

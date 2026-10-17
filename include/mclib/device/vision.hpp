@@ -52,7 +52,7 @@ public:
 
   explicit Vision(std::uint8_t port);
 
-  /// @brief Number of objects in the last frame. PROS_ERR on failure.
+  /// @brief Number of objects in the last frame. 0 on failure.
   std::int32_t count() const;
 
   /**

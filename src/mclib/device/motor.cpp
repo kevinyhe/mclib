@@ -36,20 +36,30 @@ void Motor::tarePosition() {
   m_motor.tare_position();
 }
 
+// PROS reports a dead port as PROS_ERR_F (infinity) from the double getters
+// and PROS_ERR (INT32_MAX) from the integer ones. The plain getters return
+// NaN instead: it fails every comparison, so `temperature > 55` stays false
+// on an unplugged motor rather than true.
+namespace {
+double orNan(double value) {
+  return std::isfinite(value) && value != static_cast<double>(PROS_ERR) ? value : NAN;
+}
+}  // namespace
+
 double Motor::getPositionDeg() const {
-  return m_motor.get_position();
+  return orNan(m_motor.get_position());
 }
 
 double Motor::getActualVelocity() const {
-  return m_motor.get_actual_velocity();
+  return orNan(m_motor.get_actual_velocity());
 }
 
 double Motor::getCurrentDraw() const {
-  return m_motor.get_current_draw();
+  return orNan(m_motor.get_current_draw());
 }
 
 double Motor::getTemperature() const {
-  return m_motor.get_temperature();
+  return orNan(m_motor.get_temperature());
 }
 
 void Motor::setVoltage(units::QVoltage voltage) {
@@ -74,7 +84,7 @@ std::optional<units::QAngularVelocity> Motor::velocity() const {
 
 std::optional<units::QCurrent> Motor::current() const {
   const double milliamps = getCurrentDraw();
-  if (!std::isfinite(milliamps) || milliamps == static_cast<double>(PROS_ERR)) {
+  if (!std::isfinite(milliamps)) {
     return std::nullopt;
   }
   return milliamps * units::milliampere;
@@ -87,7 +97,8 @@ std::int32_t Motor::voltsToMillivolts(double volts) {
 
 std::int32_t Motor::percentToPower(double percent) {
   if (!std::isfinite(percent)) return 0;
-  return static_cast<std::int32_t>(std::clamp(percent, -1.0, 1.0) * 127.0);
+  // Round, don't truncate: 0.999 is 127, not 126.
+  return static_cast<std::int32_t>(std::lround(std::clamp(percent, -1.0, 1.0) * 127.0));
 }
 
 }  // namespace device

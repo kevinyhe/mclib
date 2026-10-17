@@ -17,7 +17,9 @@ std::int32_t Distance::getDistanceMm() const {
 }
 
 double Distance::getDistanceIn() const {
-  return static_cast<double>(getDistanceMm()) / 25.4;
+  const std::int32_t mm = getDistanceMm();
+  // PROS_ERR used to come out as 84.5 million inches.
+  return mm == PROS_ERR ? NAN : static_cast<double>(mm) / 25.4;
 }
 
 std::optional<units::QLength> Distance::distance() const {
