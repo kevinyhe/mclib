@@ -28,13 +28,16 @@ import tune_drive  # noqa: E402
 COLUMNS = ["t_ms", "phase", "left_cmd_V", "right_cmd_V", "left_in", "right_in", "heading_deg",
            "x_in", "y_in", "target_x_in", "target_y_in", "target_heading_deg"]
 KS, KV, KA, TRACK = 0.8, 0.15, 0.02, 14.0
+# The wheels scrub in a spin, so the encoders count more than the turn needs.
+ENCODER_TRACK = 19.0
 
 
 def drive_log():
     """Holds at 3, 6, 9 V forward and back, then spins, from the model."""
     rows, t, x, y, heading = [], 0, 0.0, 0.0, 0.0
+    left_in = right_in = 0.0
     def hold(phase, volts, ms):
-        nonlocal t, x, y, heading
+        nonlocal t, x, y, heading, left_in, right_in
         v = 0.0
         for _ in range(ms // 10):
             push = abs(volts) - KS
@@ -46,14 +49,17 @@ def drive_log():
             if (target - v) * (target - v_next) < 0:
                 v_next = target
             if phase == 2:
-                heading += math.degrees(2 * v_next / TRACK * 0.01)
+                turn = 2 * v_next / TRACK * 0.01
+                heading += math.degrees(turn)
+                left_in += turn * ENCODER_TRACK / 2
+                right_in -= turn * ENCODER_TRACK / 2
             else:
                 x += v_next * math.sin(math.radians(heading)) * 0.01
                 y += v_next * math.cos(math.radians(heading)) * 0.01
             v = v_next
             left, right = volts, (-volts if phase == 2 else volts)
-            rows.append(dict(t_ms=t, phase=phase, left_cmd_V=left, right_cmd_V=right, left_in=0, right_in=0,
-                             heading_deg=heading, x_in=x, y_in=y, target_x_in=float("nan"),
+            rows.append(dict(t_ms=t, phase=phase, left_cmd_V=left, right_cmd_V=right, left_in=left_in,
+                             right_in=right_in, heading_deg=heading, x_in=x, y_in=y, target_x_in=float("nan"),
                              target_y_in=float("nan"), target_heading_deg=float("nan")))
             t += 10
     for volts in (3, 6, 9):
@@ -91,6 +97,8 @@ class FitTests(unittest.TestCase):
         track = tune_drive.fit_track(rows, ff["ks"], ff["kv"])
         self.assertAlmostEqual(track["track_in"], TRACK, delta=0.2)
         self.assertEqual(track["spins"], 6)
+        encoder_track = tune_drive.fit_encoder_track(rows)
+        self.assertAlmostEqual(encoder_track["track_in"], ENCODER_TRACK, delta=0.05)
 
     def test_reads_logger_csv_with_trailer_and_nan(self):
         rows = drive_log()[:50]

@@ -112,7 +112,12 @@ Reset the IMU and the pose together. `Chassis::setPose()` sets both.
 
 Without an IMU, a differential `Chassis` computes heading from the difference in
 left and right wheel travel divided by track width. Set a measured, positive
-track width. Wheel slip affects this estimate.
+track width: `tools/tune_drive.py` prints it ("track width for heading from
+encoders") from a `characterizeSpin()` log taken with an IMU fitted, or spin
+the robot 10 turns by hand and divide the difference in left and right travel
+by 20π. Wheel slip still affects this estimate: in the physics simulator, a
+robot with spring-loaded tracking wheels spun its drive wheels at the start of
+a 12 V turn and ended 31° off.
 
 Snapshot position corrections update the odometry integrator and keep encoder
 baselines.
