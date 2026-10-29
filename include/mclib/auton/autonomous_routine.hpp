@@ -115,6 +115,27 @@ public:
     MotionStep& withVelocityThreshold(QAngularVelocity velocity_threshold);
 
     /**
+     * @brief End this step as soon as @p condition returns true.
+     *
+     * Checked when the step starts and then every tick. If it is already true
+     * at the start, the motion never runs. If it comes true first, the motion
+     * is cancelled, the drive brakes with Hold, and the next step starts; this
+     * happens even with withoutExit(). If the motion finishes first, the step
+     * ends as it would without this.
+     *
+     * Each run of the routine starts from a fresh copy of @p condition, so
+     * state it captures by value does not carry over between runs. An empty
+     * @p condition is a configuration error; see hasConfigurationError().
+     *
+     * @code
+     * routine.moveToPoint(Point{24_in, 36_in}, 1, 2_s).until([] {
+     *   return chassis.getPose().distanceTo(mclib::Pose2D(24, 36, 0)) < 3;
+     * });
+     * @endcode
+     */
+    MotionStep& until(std::function<bool()> condition);
+
+    /**
      * @brief Run this step even if the routine's time budget has expired.
      *
      * Marking a long drive `mustRun()` mostly defeats the point of the budget;
@@ -212,6 +233,16 @@ public:
   Routine& wait(QTime duration);
 
   /**
+   * @brief Deleted so `.until()` only compiles on a motion step.
+   *
+   * Without this, `.runOnce(f).until(cond)` resolved to Command::until() on
+   * the whole routine, and the race it returned was discarded, so @p cond was
+   * never checked. Use MotionStep::until(), or waitUntil() for a step that
+   * only waits.
+   */
+  std::unique_ptr<Command> until(const std::function<bool()>& condition) = delete;
+
+  /**
    * @brief Wait for a predicate, giving up after @p timeout.
    *
    * @param condition Checked once per scheduler tick.
@@ -297,10 +328,12 @@ public:
   QTime stepTimeout(std::size_t index) const;
 
   /**
-   * @brief True when a motion was added with no chassis to run it on.
+   * @brief True when a motion was added with no chassis to run it on, or a
+   *        motion step was given an empty until() condition.
    *
    * @details Those motions become no-ops instead of taking the program down.
-   * See the note on the missing-chassis path in the source.
+   * See the note on the missing-chassis path in the source. A step with an
+   * empty condition runs without ending early.
    */
   bool hasConfigurationError() const;
 
@@ -477,6 +510,8 @@ private:
      * settling and stopping the way it would at any other timeout.
      */
     QTime timeout{};
+    /// @brief Ends the step early once it returns true. Empty means never.
+    std::function<bool()> until;
   };
 
   using MotionFactory =
