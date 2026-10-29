@@ -113,3 +113,9 @@ public:
 inline std::unique_ptr<Command> Command::race(Command *other) {
 	return std::unique_ptr<Command>(new ParallelRaceGroup({this, other}));
 }
+
+inline std::unique_ptr<Command> Command::race(std::unique_ptr<Command> first,
+                                              std::unique_ptr<Command> second) {
+	auto group = first->race(second.get());
+	return adopt(adopt(std::move(group), std::move(first)), std::move(second));
+}

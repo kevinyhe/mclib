@@ -56,3 +56,9 @@ inline std::unique_ptr<Command> Command::withTimeout(const QTime duration) {
 	return group;
 }
 
+inline std::unique_ptr<Command> Command::withTimeout(std::unique_ptr<Command> command,
+                                                     const QTime duration) {
+	auto group = command->withTimeout(duration);
+	return adopt(std::move(group), std::move(command));
+}
+

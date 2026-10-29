@@ -75,3 +75,8 @@ inline std::unique_ptr<Command> Command::asProxy() {
 	return std::make_unique<ProxyCommand>(this);
 }
 
+inline std::unique_ptr<Command> Command::asProxy(std::unique_ptr<Command> command) {
+	auto proxy = command->asProxy();
+	return adopt(std::move(proxy), std::move(command));
+}
+
