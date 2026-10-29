@@ -27,6 +27,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   `atTarget()` and the D term did nothing. A `makeStateUntilCommand()` that
   waited for `atTarget()` never ended. They now restart the loop only when
   the target changes or a manual voltage has taken over.
+- A `Sequence` with no commands read past the end of its list when it
+  started, which crashed on the host (segfault) and is undefined behaviour
+  on the brain. It now finishes on its first tick.
 
 ## 0.3.0
 

@@ -183,5 +183,11 @@ int main() {
     translation.update(NAN);
     CHECK(!translation.targetArrived()); CHECK_EQ(translation.getOutput(), 0);
   }
+  {
+    Sequence empty({});
+    empty.schedule();
+    CommandScheduler::run();
+    CHECK(!empty.scheduled());
+  }
   return mclib::test::summary("review regressions");
 }
