@@ -125,7 +125,8 @@ public:
      *
      * Each run of the routine starts from a fresh copy of @p condition, so
      * state it captures by value does not carry over between runs. An empty
-     * @p condition is a configuration error; see hasConfigurationError().
+     * @p condition is a configuration error, so the routine will not run; see
+     * hasConfigurationError().
      *
      * @code
      * routine.moveToPoint(Point{24_in, 36_in}, 1, 2_s).until([] {
@@ -331,9 +332,9 @@ public:
    * @brief True when a motion was added with no chassis to run it on, or a
    *        motion step was given an empty until() condition.
    *
-   * @details Those motions become no-ops instead of taking the program down.
-   * See the note on the missing-chassis path in the source. A step with an
-   * empty condition runs without ending early.
+   * @details A routine with a configuration error does not run at all: it
+   * prints why on the terminal and finishes on its first tick, without
+   * running any step.
    */
   bool hasConfigurationError() const;
 

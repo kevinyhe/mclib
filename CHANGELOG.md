@@ -33,6 +33,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   `Command::until()` on the whole routine and throw the result away, so the
   condition was never checked. Use `until()` on a motion step, or
   `waitUntil()`.
+- A `Routine` with a configuration error no longer runs at all. It prints
+  why and finishes on its first tick. A motion added with no chassis used
+  to become a step that did nothing while the rest of the routine ran, so
+  a missing `setChassis()` showed up as a robot that ran its mechanisms and
+  never drove.
 
 ### Fixed
 
