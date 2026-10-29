@@ -17,6 +17,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   It added the 180 deg after wrapping the target to the nearest turn instead
   of before, so the back of a robot at heading 0 reached a point at bearing
   170 deg by turning 350 deg instead of -10 deg. It now takes the short way.
+- `correctHeading()` sized its integral window from the target heading
+  instead of the error: no window at all for a target of 0 deg, 360 deg
+  wide at 900 deg. With a non-zero `heading_pid` ki, the same error was
+  integrated differently depending on where the robot pointed. It now uses
+  the same 1 deg window as the heading correction inside the drive motions.
 
 ## 0.3.0
 

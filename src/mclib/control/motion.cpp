@@ -936,7 +936,7 @@ void correctHeading()
   PID pid = makePid(cfg().heading_pid);
 
   pid.setTarget(state().correctAngleDeg()); // Set PID target to current heading
-  pid.setIntegralRange(fabs(state().correctAngleDeg()) / 2.5);
+  pid.setIntegralRange(1);
 
   pid.setSmallBigErrorTolerance(0, 0);
   pid.setSmallBigErrorDuration(0, 0);
