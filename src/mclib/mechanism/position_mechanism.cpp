@@ -136,7 +136,7 @@ std::unique_ptr<Command> PositionMechanism::makeStopCommand() {
 }
 
 std::unique_ptr<Command> PositionMechanism::makeStateCommand(double state) {
-  return run([this, state]() { moveTo(state); });
+  return run([this, state]() { holdTarget(state); });
 }
 
 std::unique_ptr<Command> PositionMechanism::makeStateOnceCommand(double state) {
@@ -145,7 +145,7 @@ std::unique_ptr<Command> PositionMechanism::makeStateOnceCommand(double state) {
 
 std::unique_ptr<Command> PositionMechanism::makeStateUntilCommand(
     double state, std::function<bool()> is_finished) {
-  return runUntil([this, state]() { moveTo(state); }, std::move(is_finished));
+  return runUntil([this, state]() { holdTarget(state); }, std::move(is_finished));
 }
 
 std::unique_ptr<Command> PositionMechanism::makeStateForCommand(
@@ -216,6 +216,13 @@ void PositionMechanism::applyState(const double& target) {
 
 void PositionMechanism::onStateChanged(const double& target) {
   beginClosedLoop(target);
+}
+
+void PositionMechanism::holdTarget(double target) {
+  if (!m_manual && getState() == target) {
+    return;
+  }
+  moveTo(target);
 }
 
 void PositionMechanism::beginClosedLoop(double target) {

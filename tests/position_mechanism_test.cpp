@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 
 using mclib::mechanism::PositionMechanism;
 using mclib::mechanism::PositionMechanismConfig;
@@ -203,6 +204,41 @@ int main() {
   on.tick();
   CHECK_NEAR(on.volts, 0.0, 1e-12);
   CHECK(!on.mechanism.atTarget());
+
+  // --- The state commands let the loop settle -------------------------------
+  {
+    Rig rig(true);
+    rig.position = 10.0;
+    auto command = rig.mechanism.makeStateCommand(10.0);
+    command->initialize();
+    int arrived_tick = -1;
+    for (int i = 1; i <= 100 && arrived_tick < 0; ++i) {
+      rig.tick();
+      command->execute();
+      if (rig.mechanism.atTarget()) arrived_tick = i;
+    }
+    std::printf("makeStateCommand(10) on target: atTarget() on tick %d\n", arrived_tick);
+    CHECK(arrived_tick > 0);
+
+    rig.mechanism.setManualVoltage(3.0);
+    command->execute();
+    rig.tick();
+    CHECK_NEAR(rig.volts, 0.0, 1e-12);
+  }
+  {
+    Rig rig(true);
+    rig.position = 10.0;
+    auto command = rig.mechanism.makeStateUntilCommand(
+        10.0, [&rig]() { return rig.mechanism.atTarget(); });
+    command->initialize();
+    bool finished = false;
+    for (int i = 0; i < 100 && !finished; ++i) {
+      rig.tick();
+      command->execute();
+      finished = command->isFinished();
+    }
+    CHECK(finished);
+  }
 
   return mclib::test::summary("position_mechanism");
 }

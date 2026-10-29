@@ -190,6 +190,15 @@ protected:
 
 private:
   void beginClosedLoop(double target);
+  /**
+   * @brief moveTo(), but only when @p target is not already in charge.
+   *
+   * moveTo() restarts the loop on every call. The state commands execute
+   * every tick, so calling it there reset the PID 100 times a second: the
+   * mechanism never reported atTarget() and the D term never saw a second
+   * sample. Same idea as PresetPositionMechanism::holdPreset().
+   */
+  void holdTarget(double target);
   double clampVoltage(double volts) const;
 
   PositionSource m_position_source;
