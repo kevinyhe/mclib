@@ -98,3 +98,9 @@ public:
 inline std::unique_ptr<Command> Command::andThen(Command *other) {
 	return std::unique_ptr<Command>(new Sequence({this, other}));
 }
+
+inline std::unique_ptr<Command> Command::andThen(std::unique_ptr<Command> first,
+                                                 std::unique_ptr<Command> second) {
+	auto sequence = first->andThen(second.get());
+	return adopt(adopt(std::move(sequence), std::move(first)), std::move(second));
+}

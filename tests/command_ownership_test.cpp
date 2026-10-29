@@ -79,6 +79,14 @@ void returnTypes() {
   static_assert(std::is_same_v<decltype(a.repeatedly()), Owned>);
   static_assert(std::is_same_v<decltype(a.asProxy()), Owned>);
 
+  static_assert(std::is_same_v<decltype(Command::andThen(Owned{}, Owned{})), Owned>);
+  static_assert(std::is_same_v<decltype(Command::with(Owned{}, Owned{})), Owned>);
+  static_assert(std::is_same_v<decltype(Command::race(Owned{}, Owned{})), Owned>);
+  static_assert(std::is_same_v<decltype(Command::withTimeout(Owned{}, 1.0 * second)), Owned>);
+  static_assert(std::is_same_v<decltype(Command::until(Owned{}, [] { return true; })), Owned>);
+  static_assert(std::is_same_v<decltype(Command::repeatedly(Owned{})), Owned>);
+  static_assert(std::is_same_v<decltype(Command::asProxy(Owned{})), Owned>);
+
   static Trigger t1([] { return true; });
   static Trigger t2([] { return false; });
   static_assert(std::is_same_v<decltype(t1.andOther(&t2)), std::unique_ptr<Trigger>>);
@@ -167,6 +175,62 @@ void groupsBorrowTheirMembers() {
   CHECK_EQ(static_cast<double>(g_destroyed), 2.0);
 }
 
+// ---------------------------------------------------------------------------
+// 5. The static decorators own what they are given, so it can be inline.
+// ---------------------------------------------------------------------------
+void owningDecoratorsKeepInlineCommands() {
+  std::printf("-- owning decorators keep inline commands alive\n");
+
+  g_destroyed = 0;
+  auto counting = std::make_unique<CountingCommand>();
+  const CountingCommand* watched = counting.get();
+  auto raced = Command::until(std::move(counting),
+                              [watched] { return watched->executions >= 3; });
+  raced->schedule();
+  for (int i = 0; i < 20 && raced->scheduled(); ++i) {
+    CommandScheduler::run();
+  }
+  CHECK(!raced->scheduled());
+  CHECK(watched->executions >= 3);
+  CHECK_EQ(static_cast<double>(g_destroyed), 0.0);
+  retire(raced);
+  raced.reset();
+  CHECK_EQ(static_cast<double>(g_destroyed), 1.0);
+
+  g_destroyed = 0;
+  {
+    auto sequence = Command::andThen(std::make_unique<CountingCommand>(),
+                                     std::make_unique<CountingCommand>());
+    auto parallel = Command::with(std::make_unique<CountingCommand>(),
+                                  std::make_unique<CountingCommand>());
+    auto race = Command::race(std::make_unique<CountingCommand>(),
+                              std::make_unique<CountingCommand>());
+    auto timed = Command::withTimeout(std::make_unique<CountingCommand>(), 1.0 * second);
+    auto repeated = Command::repeatedly(std::make_unique<CountingCommand>());
+    auto proxy = Command::asProxy(std::make_unique<CountingCommand>());
+    auto nested = Command::withTimeout(
+        Command::until(std::make_unique<CountingCommand>(), [] { return false; }),
+        1.0 * second);
+    CHECK_EQ(static_cast<double>(g_destroyed), 0.0);
+  }
+  CHECK_EQ(static_cast<double>(g_destroyed), 10.0);
+
+  g_destroyed = 0;
+  g_fake_ms = 0;
+  auto timed = Command::withTimeout(std::make_unique<CountingCommand>(),
+                                    100.0 * millisecond);
+  timed->schedule();
+  int ticks = 0;
+  for (; ticks < 50 && timed->scheduled(); ++ticks) {
+    CommandScheduler::run();
+    g_fake_ms += 10;
+  }
+  CHECK(ticks >= 10 && ticks <= 12);
+  retire(timed);
+  timed.reset();
+  CHECK_EQ(static_cast<double>(g_destroyed), 1.0);
+}
+
 }  // namespace
 
 int main() {
@@ -175,5 +239,6 @@ int main() {
   ownershipIsExclusive();
   decoratedCommandsStillRun();
   groupsBorrowTheirMembers();
+  owningDecoratorsKeepInlineCommands();
   return mclib::test::summary("command_ownership");
 }

@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- Owning forms of the command decorators: `Command::andThen(a, b)`,
+  `with(a, b)`, `race(a, b)`, `withTimeout(a, t)`, `until(a, condition)`,
+  `repeatedly(a)` and `asProxy(a)` take the commands by `std::unique_ptr`
+  and keep them alive inside the result. The member forms borrow, so
+  `drive.makeMoveToPointCommand(...)->until(c)` left the result pointing at
+  a command destroyed at the end of the statement.
+
 ### Changed
 
 - A `VelocityMechanism` ratio that is not finite and > 0 is now a

@@ -142,5 +142,22 @@ std::unique_ptr<Command> sequence = a.andThen(&b);
 std::unique_ptr<Command> timed = sequence->withTimeout(2.0 * second);
 ```
 
+Each method also has a static form on `Command` that takes the commands by
+`std::unique_ptr` and keeps them alive inside the result. Use it to build a
+command inline:
+
+```cpp
+// The moveToPoint command lives as long as `to_goal`.
+std::unique_ptr<Command> to_goal = Command::until(
+    drive.makeMoveToPointCommand(24_in, 36_in, 1, 2_s), near_goal);
+
+std::unique_ptr<Command> timed = Command::withTimeout(
+    Command::andThen(lift.makeMoveToCommand(90.0), conveyor.makeForwardCommand()),
+    2.0 * second);
+```
+
+The static forms are `Command::andThen(a, b)`, `with(a, b)`, `race(a, b)`,
+`withTimeout(a, t)`, `until(a, condition)`, `repeatedly(a)` and `asProxy(a)`.
+
 `Trigger::andOther()`, `orOther()` and `negate()` return
 `std::unique_ptr<Trigger>` and hold pointers to the triggers they combine.

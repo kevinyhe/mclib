@@ -262,6 +262,40 @@ public:
      */
     [[nodiscard]] std::unique_ptr<Command> asProxy();
 
+    /**
+     * @name Owning decorators
+     *
+     * @brief The decorators above, taking ownership of the commands they
+     * combine.
+     *
+     * @details The member decorators borrow `this` and `other`, so a
+     * command built inline is destroyed at the end of the statement and
+     * the result is left pointing at freed memory. These take each command
+     * by std::unique_ptr and store it in the result, which destroys it.
+     *
+     * @code
+     * // Wrong: the moveToPoint command is destroyed at the semicolon.
+     * auto bad = drive.makeMoveToPointCommand(x, y, 1, 2_s)->until(near);
+     *
+     * // Right: `good` owns it.
+     * auto good = Command::until(drive.makeMoveToPointCommand(x, y, 1, 2_s), near);
+     * @endcode
+     */
+    ///@{
+    [[nodiscard]] static std::unique_ptr<Command> andThen(std::unique_ptr<Command> first,
+                                                          std::unique_ptr<Command> second);
+    [[nodiscard]] static std::unique_ptr<Command> withTimeout(std::unique_ptr<Command> command,
+                                                              QTime duration);
+    [[nodiscard]] static std::unique_ptr<Command> until(std::unique_ptr<Command> command,
+                                                        const std::function<bool()> &isFinish);
+    [[nodiscard]] static std::unique_ptr<Command> with(std::unique_ptr<Command> first,
+                                                       std::unique_ptr<Command> second);
+    [[nodiscard]] static std::unique_ptr<Command> race(std::unique_ptr<Command> first,
+                                                       std::unique_ptr<Command> second);
+    [[nodiscard]] static std::unique_ptr<Command> repeatedly(std::unique_ptr<Command> command);
+    [[nodiscard]] static std::unique_ptr<Command> asProxy(std::unique_ptr<Command> command);
+    ///@}
+
     virtual ~Command() = default;
 
 protected:
@@ -273,8 +307,16 @@ protected:
      * withTimeout(), the \refitem WaitUntilCommand inside until().
      * Those have no other owner, so without this they would leak.
      *
-     * Commands the caller passes in are never adopted here. The caller
-     * keeps owning those, and they must outlive this command.
+     * The member decorators never adopt the commands the caller passes
+     * in: the caller keeps owning those, and they must outlive this
+     * command. The static owning decorators adopt them here instead.
      */
     std::vector<std::unique_ptr<Command>> ownedHelpers;
+
+private:
+    static std::unique_ptr<Command> adopt(std::unique_ptr<Command> owner,
+                                          std::unique_ptr<Command> command) {
+        owner->ownedHelpers.push_back(std::move(command));
+        return owner;
+    }
 };

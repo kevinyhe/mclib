@@ -115,3 +115,9 @@ public:
 inline std::unique_ptr<Command> Command::with(Command *other) {
     return std::unique_ptr<Command>(new ParallelCommandGroup({this, other}));
 }
+
+inline std::unique_ptr<Command> Command::with(std::unique_ptr<Command> first,
+                                              std::unique_ptr<Command> second) {
+    auto group = first->with(second.get());
+    return adopt(adopt(std::move(group), std::move(first)), std::move(second));
+}

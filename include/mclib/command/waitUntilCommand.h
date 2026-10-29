@@ -34,3 +34,9 @@ inline std::unique_ptr<Command> Command::until(const std::function<bool()>& isFi
 	group->ownedHelpers.push_back(std::move(wait));
 	return group;
 }
+
+inline std::unique_ptr<Command> Command::until(std::unique_ptr<Command> command,
+                                               const std::function<bool()>& isFinish) {
+	auto group = command->until(isFinish);
+	return adopt(std::move(group), std::move(command));
+}

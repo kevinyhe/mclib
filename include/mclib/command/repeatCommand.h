@@ -69,3 +69,8 @@ inline std::unique_ptr<Command> Command::repeatedly() {
 	return std::make_unique<RepeatCommand>(this);
 }
 
+inline std::unique_ptr<Command> Command::repeatedly(std::unique_ptr<Command> command) {
+	auto repeat = command->repeatedly();
+	return adopt(std::move(repeat), std::move(command));
+}
+
