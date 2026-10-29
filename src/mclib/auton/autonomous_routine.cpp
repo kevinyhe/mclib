@@ -226,6 +226,63 @@ private:
   std::unique_ptr<SharedRequirementCommand> m_command;
   Routine* m_parent = nullptr;
 };
+
+/**
+ * @brief A motion raced against a condition; whichever finishes first ends it.
+ *
+ * Command::until() does the same race but borrows the motion, so a motion
+ * built inline in the routine chain would be freed before it ran. This owns
+ * it.
+ */
+class UntilCommand : public Command {
+public:
+  UntilCommand(std::unique_ptr<Command> motion, std::function<bool()> condition)
+      : m_motion(std::move(motion)), m_condition(std::move(condition)) {}
+
+  void initialize() override {
+    m_this_run_condition = m_condition;
+    m_condition_met = m_this_run_condition();
+    m_motion_started = !m_condition_met;
+    if (m_motion_started) {
+      m_motion->initialize();
+    }
+  }
+
+  void execute() override {
+    if (m_motion_started) {
+      m_motion->execute();
+    }
+  }
+
+  bool isFinished() override {
+    if (m_condition_met || m_motion->isFinished()) {
+      return true;
+    }
+    m_condition_met = m_this_run_condition();
+    return m_condition_met;
+  }
+
+  void end(bool interrupted) override {
+    if (m_motion_started) {
+      m_motion->end(interrupted || m_condition_met);
+    }
+  }
+
+  std::vector<Subsystem*> getRequirements() override {
+    return m_motion->getRequirements();
+  }
+
+  CommandCancelBehavior getCancelBehavior() override {
+    return m_motion->getCancelBehavior();
+  }
+
+private:
+  std::unique_ptr<Command> m_motion;
+  std::function<bool()> m_condition;
+  std::function<bool()> m_this_run_condition;
+  bool m_condition_met = false;
+  bool m_motion_started = false;
+};
 }  // namespace
 
 Routine::MotionStep::MotionStep(Routine& routine, std::size_t index)
@@ -301,6 +358,18 @@ Routine::MotionStep& Routine::MotionStep::withCurrentThreshold(
 Routine::MotionStep& Routine::MotionStep::withVelocityThreshold(
     QAngularVelocity velocity_threshold) {
   m_routine->m_steps[m_index].options.velocity_threshold = velocity_threshold;
+  return rebuild();
+}
+
+Routine::MotionStep& Routine::MotionStep::until(std::function<bool()> condition) {
+  if (!condition) {
+    std::fprintf(stderr,
+                 "mclib: until() was given an empty condition; that step "
+                 "will not end early.\n");
+    m_routine->m_configuration_error = true;
+    return *this;
+  }
+  m_routine->m_steps[m_index].options.until = std::move(condition);
   return rebuild();
 }
 
@@ -1080,7 +1149,7 @@ Routine::MotionStep Routine::addMotion(MotionFactory factory,
   step.reserve_requirements = true;
   step.factory = std::move(factory);
   step.timeout = timeout;
-  step.options = options;
+  step.options = std::move(options);
   // The factories read options.timeout, so the requested timeout has to land
   // there and not only in step.timeout. Leaving it at the zero default built
   // every motion with no time limit at all: motion.cpp's loops are
@@ -1088,9 +1157,9 @@ Routine::MotionStep Routine::addMotion(MotionFactory factory,
   // moved, while ChassisController reads zero as "no timeout" and hung.
   // stepTimeoutFor() is the one place that answers this, here and at start.
   step.options.timeout = stepTimeoutFor(step.timeout, m_budget);
-  step.command = step.factory(step.options);
 
   m_steps.push_back(std::move(step));
+  rebuildMotion(m_steps.size() - 1);
   return MotionStep(*this, m_steps.size() - 1);
 }
 
@@ -1123,7 +1192,12 @@ void Routine::rebuildMotion(std::size_t index) {
   if (index >= m_steps.size() || !m_steps[index].factory) {
     return;
   }
-  m_steps[index].command = m_steps[index].factory(m_steps[index].options);
+  Step& step = m_steps[index];
+  step.command = step.factory(step.options);
+  if (step.options.until) {
+    step.command =
+        std::make_unique<UntilCommand>(std::move(step.command), step.options.until);
+  }
 }
 
 void Routine::initializeCurrent() {

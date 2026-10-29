@@ -56,6 +56,24 @@ Motion options: `withMaxVoltage`, `withMinVoltage`, `withDirection`, `reversed`,
 `withoutStop` and `withoutOverturn`. `followTrajectory` uses only
 `withMaxVoltage` and `withoutExit`.
 
+`until(condition)` ends a motion step early. The routine checks the condition
+when the step starts and then every tick. When it returns true, the motion is
+cancelled, the drive brakes, and the next step starts. If it is already true
+when the step starts, the motion does not run at all:
+
+```cpp
+red_safe.moveToPoint(Point{24_in, 36_in}, 1, 2_s).until([] {
+  return chassis.getPose().distanceTo(mclib::Pose2D(24, 36, 0)) < 3;
+});
+```
+
+`until()` always stops the robot, even with `withoutExit()`. To carry speed
+into the next step, use `withoutExit()` and no `until()`.
+
+`until()` only works on a motion step. Written after `runOnce()`, `wait()` or
+another step that is not a motion, it does not compile. For a step that only
+waits, use `waitUntil()`.
+
 A `followTrajectory` step keeps its own copy of the trajectory, so it can be
 built from a local:
 

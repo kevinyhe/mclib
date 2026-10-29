@@ -13,6 +13,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   and keep them alive inside the result. The member forms borrow, so
   `drive.makeMoveToPointCommand(...)->until(c)` left the result pointing at
   a command destroyed at the end of the statement.
+- `Routine` motion steps take `.until(condition)`. The step ends as soon as
+  the condition returns true: the motion is cancelled, the drive brakes and
+  the next step starts. A condition already true when the step starts skips
+  the motion. Unlike `Command::until()`, the routine owns the motion, so it
+  can be built inline in the chain.
 
 ### Changed
 
@@ -24,6 +29,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - The same for an `Inertial` gain: instead of being replaced with 1.0, a bad
   gain makes every reading NaN, like an unplugged IMU, and
   `hasConfigurationError()` is true. Motions then refuse to run.
+- `.until()` on a `Routine` no longer compiles. It used to call
+  `Command::until()` on the whole routine and throw the result away, so the
+  condition was never checked. Use `until()` on a motion step, or
+  `waitUntil()`.
 
 ### Fixed
 
