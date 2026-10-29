@@ -163,6 +163,26 @@ int main() {
   CHECK_EQ(hw.right, 0);
   CHECK(std::isnan(normalizeTarget(INFINITY)));
 
+  // Facing backward, turnToPoint() takes the short way: at heading 0, the
+  // back faces a point at bearing 170 deg after turning to -10 deg, not 350.
+  now_ms = 0;
+  hw.heading = hw.encoder = 0;
+  resetOdometry({0, 0, 0});
+  double backward_target = NAN;
+  double backward_first_left = 0;
+  on_delay = [&] {
+    if (std::isnan(backward_target)) {
+      backward_target = robotState().motionTelemetry().target_heading_deg;
+      backward_first_left = hw.left;
+    }
+  };
+  const double bearing_170 = 170 * mclib::kPi / 180;
+  turnToPoint(24 * std::sin(bearing_170) * 1_in, 24 * std::cos(bearing_170) * 1_in,
+              -1, 100_ms);
+  on_delay = {};
+  CHECK_NEAR(backward_target, -10, 1e-9);
+  CHECK(backward_first_left < 0);
+
   // Settling 1.2 in short is inside the configured 1.5 in PID band. The
   // stopped point move must return on settlement, not wait forever at 0 V
   // for a separate 1 in crossing condition.

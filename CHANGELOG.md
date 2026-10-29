@@ -13,6 +13,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   5 in miss in the simulator, from 12 V with drive kP 0.76). The correction
   is now capped at the arc that runs from the current heading through the
   target.
+- `turnToPoint()` with direction -1 always turned clockwise, up to 360 deg.
+  It added the 180 deg after wrapping the target to the nearest turn instead
+  of before, so the back of a robot at heading 0 reached a point at bearing
+  170 deg by turning 350 deg instead of -10 deg. It now takes the short way.
 
 ## 0.3.0
 

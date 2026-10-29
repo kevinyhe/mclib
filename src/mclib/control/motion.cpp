@@ -1112,7 +1112,7 @@ MotionResult turnToPoint(QLength x, QLength y, int direction, QTime time_limit, 
   // One locked read: x and y always come from the same odometry tick.
   mclib::Pose2D pose = safety.pose();
   // Calculate target angle using atan2 and normalize
-  double turn_angle = safety.normalize(radToDeg(atan2(x_in - pose.x, y_in - pose.y))) + add;
+  double turn_angle = safety.normalize(radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add);
   PID pid = makePid(cfg().turn_pid);
 
   telemetry.target(pid, turn_angle); // Set PID target
@@ -1133,7 +1133,7 @@ MotionResult turnToPoint(QLength x, QLength y, int direction, QTime time_limit, 
   while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && safety.running())
   {
     pose = safety.pose();
-    telemetry.target(pid, safety.normalize(radToDeg(atan2(x_in - pose.x, y_in - pose.y))) + add);
+    telemetry.target(pid, safety.normalize(radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add));
     double output = telemetry.heading(pid, safety.heading());
     output = applyMinSpeedFloor(output, min_speed_output);
     telemetry.publish(MotionPhase::Turn, 0, output, false, fabs(output) > 12);
