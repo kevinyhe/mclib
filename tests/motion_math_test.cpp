@@ -27,6 +27,7 @@
 #include <cmath>
 
 using mclib::control::applyMinSpeedFloor;
+using mclib::control::arcCorrectionLimit;
 using mclib::control::applyOverturnAndMix;
 using mclib::control::applySlewClamp;
 using mclib::control::applySlewLimit;
@@ -422,6 +423,30 @@ int main() {
   CHECK_EQ(clampSymmetric(13.0, 12.0), 12.0);
   CHECK_EQ(clampSymmetric(-13.0, 12.0), -12.0);
   CHECK_EQ(clampSymmetric(11.9, 12.0), 11.9);
+
+  // arcCorrectionLimit(): after mixing, the pair turns no tighter than the arc
+  // through the target. The first row is moveToPoint() circling a target at
+  // 3.3 in, 20 deg off the nose, on a 11.5 in track: the heading PID asked for
+  // 6.6 V against 2.5 V of drive and the robot went round 455 deg.
+  {
+    const double kHalfTrack = 5.75;
+    struct ArcRow {
+      double drive, bearing_deg, remaining_in;
+    };
+    const ArcRow rows[] = {{2.5, 20.0, 3.3}, {6.0, 50.0, 7.0}, {-4.0, -35.0, 5.0}, {11.0, 60.0, 2.0}};
+    for (const ArcRow& row : rows) {
+      const double bearing = row.bearing_deg * M_PI / 180.0;
+      const double limit = arcCorrectionLimit(row.drive, 12.0, kHalfTrack, bearing, row.remaining_in);
+      double left = row.drive, right = 0.0;
+      applyOverturnAndMix(left, right, std::copysign(limit, bearing), 12.0, true);
+      const double curvature = (left - right) / (kHalfTrack * (left + right));
+      const double arc = 2.0 * std::sin(bearing) / row.remaining_in;
+      CHECK(std::fabs(std::fabs(curvature) - std::fabs(arc)) < 1e-9);
+      CHECK(std::fabs(left) <= 12.0 + 1e-9 && std::fabs(right) <= 12.0 + 1e-9);
+    }
+    CHECK_NEAR(arcCorrectionLimit(2.5, 12.0, kHalfTrack, 20.0 * M_PI / 180.0, 3.3), 2.98, 0.01);
+    CHECK_EQ(arcCorrectionLimit(6.0, 12.0, kHalfTrack, 0.0, 4.0), 0.0);
+  }
 
   // exitDecel(): from 12 V the tuned 1 V/tick wins over max_output/30, so the
   // post-motion ramp reaches 0 V in 120 ms. A much slower tuning loses to the

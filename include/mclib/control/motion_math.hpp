@@ -119,6 +119,24 @@ double applyMinSpeedFloor(double output, double min_speed_output);
 double clampSymmetric(double value, double max_output);
 
 /**
+ * @brief The most heading correction that still steers onto the arc through
+ *        the target, volts.
+ *
+ * The arc leaving along the heading and passing through a target
+ * @p remaining_in away, @p bearing_error_rad off the nose, has curvature
+ * 2 sin(e) / r. A drive @p drive with correction c mixed as (drive + c,
+ * drive - c) turns at curvature c / (half_track * drive), so any more
+ * correction than this turns tighter than the arc and circles the target.
+ * The bound also holds after applyOverturnAndMix() gives up drive to stay
+ * under @p max_output.
+ */
+double arcCorrectionLimit(double drive,
+                          double max_output,
+                          double half_track_in,
+                          double bearing_error_rad,
+                          double remaining_in);
+
+/**
  * @brief One tick of a first-order rate limit on a voltage demand.
  *
  * @param desired      Where the controller wants to be, volts.
