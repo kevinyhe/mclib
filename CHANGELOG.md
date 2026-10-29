@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Fixed
+
+- `moveToPoint()` could circle its target until the time limit. Inside 8 in
+  it let the heading correction reach the full voltage cap, so a target
+  passed a few inches to the side pulled the robot round it (455° and a
+  5 in miss in the simulator, from 12 V with drive kP 0.76). The correction
+  is now capped at the arc that runs from the current heading through the
+  target.
+
 ## 0.3.0
 
 Upgrading from 0.2.0:

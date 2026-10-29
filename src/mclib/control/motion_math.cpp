@@ -63,6 +63,17 @@ double applyMinSpeedFloor(double output, double min_speed_output) {
   return output;
 }
 
+double arcCorrectionLimit(double drive,
+                          double max_output,
+                          double half_track_in,
+                          double bearing_error_rad,
+                          double remaining_in) {
+  const double correction_per_drive =
+      2.0 * half_track_in * fabs(sin(bearing_error_rad)) / remaining_in;
+  return fmin(correction_per_drive * fabs(drive),
+              correction_per_drive * max_output / (1.0 + correction_per_drive));
+}
+
 double clampSymmetric(double value, double max_output) {
   if (value > max_output) {
     return max_output;

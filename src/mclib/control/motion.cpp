@@ -45,6 +45,7 @@
  */
 namespace {
 using mclib::control::applyMinSpeedFloor;
+using mclib::control::arcCorrectionLimit;
 using mclib::control::applyOverturnAndMix;
 using mclib::control::applySlewClamp;
 using mclib::control::applySlewLimit;
@@ -1277,8 +1278,14 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     {
       correction_output = telemetry.heading(pid_heading, current_angle);
       requested_yaw = correction_output;
-      // Cap correction so it can't overwhelm the forward drive and cause a pivot
-      double max_correction = remaining > 8 ? fabs(left_output) * 0.75 : max_output;
+      // Cap correction so it can't overwhelm the forward drive and cause a pivot.
+      // Inside 8 in, cap it at the arc through the target: more than that
+      // circled the target until the time limit.
+      double max_correction =
+          remaining > 8 ? fabs(left_output) * 0.75
+                        : fmin(max_output, arcCorrectionLimit(left_output, max_output,
+                                                              halfTrackWidthIn(),
+                                                              bearing_error, remaining));
       heading_voltage_limited = remaining <= 8 && fabs(correction_output) > max_output;
       if (fabs(correction_output) > max_correction)
       {
