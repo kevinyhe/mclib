@@ -158,8 +158,8 @@ With the motor at 280 RPM, the wheel is at 560 RPM:
 `atSpeed()` is checked in output RPM: a 6 motor RPM error is 12 wheel RPM, which
 is outside `tolerance_rpm = 10`.
 
-`ratio` must be finite and greater than zero. Other values fall back to `1.0`,
-which `getConfig().ratio` reports.
+`ratio` must be finite and greater than zero. With any other value the
+mechanism outputs 0 V and `hasConfigurationError()` is true.
 
 ```cpp
 std::unique_ptr<Command> spinner_stop;

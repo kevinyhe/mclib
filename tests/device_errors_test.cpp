@@ -78,12 +78,19 @@ void headingStaysInRangeWithGain() {
   // Rotation is not wrapped: it keeps counting.
   CHECK_NEAR(fast.getRotationDeg(), 359.0 * 1.01, 1e-9);
 
-  // A gain of 0 is replaced by 1 instead of zeroing every reading.
-  Inertial zero(7, 0.0);
-  host::imu_rotation_deg[7] = 45.0;
-  CHECK_NEAR(zero.getRotationDeg(), 45.0, 1e-9);
-  zero.setRotationDeg(90.0);
-  CHECK_NEAR(zero.getRotationDeg(), 90.0, 1e-9);
+  CHECK(!fast.hasConfigurationError());
+
+  // A gain that is not finite and > 0 reads NaN, like an unplugged IMU.
+  for (const double gain : {0.0, -1.0, double{NAN}, double{INFINITY}}) {
+    Inertial bad(7, gain);
+    host::imu_rotation_deg[7] = 45.0;
+    CHECK(bad.hasConfigurationError());
+    CHECK(std::isnan(bad.getRotationDeg()));
+    CHECK(std::isnan(bad.getHeadingDeg()));
+    CHECK(!bad.rotation().has_value());
+    bad.setRotationDeg(90.0);
+    CHECK_NEAR(host::imu_rotation_deg[7], 45.0, 1e-9);
+  }
 }
 
 void controllerRawStickErrorReadsZero() {

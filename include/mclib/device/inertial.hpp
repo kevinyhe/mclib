@@ -17,7 +17,16 @@ namespace device {
 
 class Inertial {
 public:
+  /**
+   * @param gain Scales every reading. Must be finite and > 0. Anything else
+   *        is a configuration error: every reading is NaN / nullopt, as if
+   *        the IMU were unplugged, so motions refuse to run instead of
+   *        steering on a wrong heading.
+   */
   explicit Inertial(std::uint8_t port, double gain = 1.0);
+
+  /// @brief True when the gain passed to the constructor is not finite and > 0.
+  bool hasConfigurationError() const;
 
   /**
    * @brief Calibrate. Keep the robot still: it takes about 2 s.
