@@ -178,15 +178,17 @@ int main() {
     CHECK_EQ(motion.initialized, 2);
   }
 
-  std::printf("-- an empty condition is a configuration error\n");
+  std::printf("-- an empty condition is a configuration error: nothing runs\n");
   {
     reset(4);
     Routine routine(chassis);
-    routine.moveToPoint(Point{0_in, 24_in}, 1, 2_s).until(std::function<bool()>{});
+    routine.runOnce([] { ++after_steps; })
+        .moveToPoint(Point{0_in, 24_in}, 1, 2_s)
+        .until(std::function<bool()>{});
     CHECK(routine.hasConfigurationError());
     runToEnd(routine);
-    CHECK_EQ(motion.executes, 4);
-    CHECK(!motion.interrupted);
+    CHECK_EQ(after_steps, 0);
+    CHECK_EQ(motion.initialized, 0);
   }
 
   std::printf("-- without until() the motion runs to the end\n");

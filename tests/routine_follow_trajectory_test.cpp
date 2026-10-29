@@ -118,11 +118,14 @@ int main() {
     CHECK_NEAR(recorded.timeout_ms, 2000.0, 1e-9);
   }
 
-  std::printf("-- no chassis is a configuration error\n");
+  std::printf("-- no chassis is a configuration error: nothing runs\n");
   {
+    int ran = 0;
     Routine routine;
-    routine.followTrajectory(straight(12), config, 2_s);
+    routine.runOnce([&ran] { ++ran; }).followTrajectory(straight(12), config, 2_s);
     CHECK(routine.hasConfigurationError());
+    runToEnd(routine);
+    CHECK_EQ(ran, 0);
   }
 
   return mclib::test::summary("routine_follow_trajectory");

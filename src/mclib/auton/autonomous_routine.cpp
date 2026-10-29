@@ -363,9 +363,7 @@ Routine::MotionStep& Routine::MotionStep::withVelocityThreshold(
 
 Routine::MotionStep& Routine::MotionStep::until(std::function<bool()> condition) {
   if (!condition) {
-    std::fprintf(stderr,
-                 "mclib: until() was given an empty condition; that step "
-                 "will not end early.\n");
+    std::fprintf(stderr, "mclib: until() was given an empty condition.\n");
     m_routine->m_configuration_error = true;
     return *this;
   }
@@ -1066,6 +1064,12 @@ void Routine::initialize() {
   m_deadline_applied = false;
   m_skipped_steps = 0;
   m_timed_out_waits = 0;
+  if (m_configuration_error) {
+    std::fprintf(stderr,
+                 "mclib: Routine not run: it has a configuration error.\n");
+    m_index = m_steps.size();
+    return;
+  }
   m_budget.start();
   initializeCurrent();
 }
@@ -1166,16 +1170,11 @@ Routine::MotionStep Routine::addMotion(MotionFactory factory,
 Routine::MotionStep Routine::addMissingChassisStep() {
   // A motion with no chassis used to be assert(m_chassis != nullptr), which
   // compiles out in release: on the robot it was a null dereference in the
-  // middle of an autonomous. Taking the program down is also not what a
-  // routine wants - the mechanism steps around the motion, an intake or a
-  // claw, work perfectly well without a drivetrain and are worth running. The
-  // motion becomes a step that does nothing, and says so on the terminal and
-  // through hasConfigurationError().
-  if (!m_configuration_error) {
-    std::fprintf(stderr,
-                 "mclib: Routine has no chassis; motion steps will do "
-                 "nothing. Call setChassis() before adding motions.\n");
-  }
+  // middle of an autonomous. Now it marks the routine as misconfigured, and
+  // initialize() refuses to run any of it.
+  std::fprintf(stderr,
+               "mclib: Routine has no chassis. Call setChassis() before "
+               "adding motions.\n");
   m_configuration_error = true;
 
   Step step{};
