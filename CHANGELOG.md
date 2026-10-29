@@ -22,6 +22,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   wide at 900 deg. With a non-zero `heading_pid` ki, the same error was
   integrated differently depending on where the robot pointed. It now uses
   the same 1 deg window as the heading correction inside the drive motions.
+- `PositionMechanism::makeStateCommand()` and `makeStateUntilCommand()`
+  restarted the PID every tick, so the mechanism never reported
+  `atTarget()` and the D term did nothing. A `makeStateUntilCommand()` that
+  waited for `atTarget()` never ended. They now restart the loop only when
+  the target changes or a manual voltage has taken over.
 
 ## 0.3.0
 
