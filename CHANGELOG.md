@@ -5,6 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Changed
+
+- A `VelocityMechanism` ratio that is not finite and > 0 is now a
+  configuration error instead of being replaced with 1.0. The mechanism
+  outputs 0 V, `getCurrentRpm()` is NaN and `hasConfigurationError()` is
+  true. A typo like `ratio = 0` used to run the flywheel ungeared, at the
+  wrong speed, with no error.
+- The same for an `Inertial` gain: instead of being replaced with 1.0, a bad
+  gain makes every reading NaN, like an unplugged IMU, and
+  `hasConfigurationError()` is true. Motions then refuse to run.
+
 ### Fixed
 
 - `moveToPoint()` could circle its target until the time limit. Inside 8 in

@@ -279,19 +279,24 @@ void badRatioFallsBackToOne() {
     VelocityMechanismConfig config = plainConfig();
     config.ratio = ratio;
     Rig rig(config);
-    CHECK_EQ(rig.mechanism.getConfig().ratio, 1.0);
+    CHECK(rig.mechanism.hasConfigurationError());
+    CHECK(rig.mechanism.getConfig().ratio == ratio ||
+          (std::isnan(ratio) && std::isnan(rig.mechanism.getConfig().ratio)));
 
-    // And it really runs ungeared: motor 500 is output 500.
+    // It refuses to drive instead of running at a speed nobody asked for.
     rig.mechanism.setTargetRpm(500.0);
-    rig.motor_rpm = 500.0;
-    CHECK_EQ(rig.mechanism.getCurrentRpm(), 500.0);
+    rig.motor_rpm = 100.0;
+    CHECK(std::isnan(rig.mechanism.getCurrentRpm()));
+    rig.volts = 7.0;
     rig.tick();
     CHECK_EQ(rig.volts, 0.0);
+    CHECK(!rig.mechanism.atSpeed());
   }
 
   VelocityMechanismConfig good = plainConfig();
   good.ratio = 0.5;
   Rig rig(good);
+  CHECK(!rig.mechanism.hasConfigurationError());
   CHECK_EQ(rig.mechanism.getConfig().ratio, 0.5);
   rig.motor_rpm = 400.0;
   CHECK_EQ(rig.mechanism.getCurrentRpm(), 200.0);

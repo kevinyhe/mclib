@@ -22,17 +22,6 @@ VelocityMechanism::VelocityMechanism(VelocitySource velocity_source,
       m_velocity_source(std::move(velocity_source)),
       m_voltage_sink(std::move(voltage_sink)),
       m_pid(config.kp, config.ki, config.kd) {
-  // A ratio of 0 would divide by zero converting an output target into a motor
-  // target, and a negative one would flip the sign of the loop so it drove away
-  // from the target. An infinite one divides every target down to 0, so the
-  // mechanism would sit still and the integral gate would quietly switch off.
-  // None of those is ever what the caller meant, so fall back to the ungeared
-  // 1.0 and store that, keeping getConfig().ratio honest about what is actually
-  // running. The > 0.0 test also rejects NaN.
-  if (!(std::isfinite(m_config.ratio) && m_config.ratio > 0.0)) {
-    m_config.ratio = 1.0;
-  }
-
   // PID zeroes its own output once it decides it has "arrived" at the target.
   // That is right for a position move and wrong for a velocity loop: dropping
   // the output to 0 V would immediately let the mechanism coast back down.
@@ -72,7 +61,14 @@ double VelocityMechanism::getCurrentMotorRpm() const {
 }
 
 double VelocityMechanism::getCurrentRpm() const {
+  if (hasConfigurationError()) {
+    return NAN;
+  }
   return getCurrentMotorRpm() * m_config.ratio;
+}
+
+bool VelocityMechanism::hasConfigurationError() const {
+  return !(std::isfinite(m_config.ratio) && m_config.ratio > 0.0);
 }
 
 bool VelocityMechanism::atSpeed() const {
@@ -134,7 +130,7 @@ void VelocityMechanism::applyState(const double& target_rpm) {
   const double current_motor_rpm = getCurrentMotorRpm();
   const double current_rpm = current_motor_rpm * m_config.ratio;
   m_sensor_fault = !std::isfinite(current_rpm) || !std::isfinite(target_rpm);
-  if (m_sensor_fault) {
+  if (m_sensor_fault || hasConfigurationError()) {
     m_at_speed = false;
     m_in_tolerance = false;
     m_pid.reset();
@@ -158,9 +154,9 @@ void VelocityMechanism::applyState(const double& target_rpm) {
   }
 
   // The loop itself runs in motor RPM: that is the space the velocity source
-  // reports in and the space kp/ki/kd/kv are tuned in. ratio > 0 is guaranteed
-  // by the constructor, so the sign of the motor target matches the sign of the
-  // output target and the clamp below still points the right way.
+  // reports in and the space kp/ki/kd/kv are tuned in. ratio > 0 is checked
+  // above, so the sign of the motor target matches the sign of the output
+  // target and the clamp below still points the right way.
   const double target_motor_rpm = target_rpm / m_config.ratio;
   m_pid.setTarget(target_motor_rpm);
   const double correction = m_pid.update(current_motor_rpm);

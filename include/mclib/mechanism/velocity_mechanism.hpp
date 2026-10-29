@@ -44,11 +44,10 @@ struct VelocityMechanismConfig {
   /// motor) is ratio = 2.0; geared 2:1 for torque it is 0.5. 1.0 means the
   /// output is the motor shaft, which is the default and reproduces the
   /// ungeared behaviour exactly.
-  /// Must be finite and > 0. A value <= 0 would divide by zero or invert the
-  /// loop, and an infinite one would silently zero the target and the integral
-  /// gate, so the constructor rejects anything else and falls back to 1.0;
-  /// getConfig().ratio then reports the 1.0 that is actually in use, not the
-  /// bad value passed in.
+  /// Must be finite and > 0. Anything else is a configuration error: the
+  /// mechanism outputs 0 V, getCurrentRpm() is NaN, and
+  /// hasConfigurationError() is true. getConfig().ratio reports the value
+  /// passed in.
   double ratio = 1.0;
   /// How close to the target counts as "at speed", in *output* RPM.
   double tolerance_rpm = 100.0;
@@ -99,6 +98,8 @@ class VelocityMechanism : public StateMechanism<double> {
 public:
   /// True after the last periodic tick rejected a nonfinite measurement/target.
   bool hasSensorFault() const { return m_sensor_fault; }
+  /// True when config.ratio is not finite and > 0. The mechanism then outputs 0 V.
+  bool hasConfigurationError() const;
   using VelocitySource = std::function<double()>;
   using VoltageSink = std::function<void(double)>;
 
