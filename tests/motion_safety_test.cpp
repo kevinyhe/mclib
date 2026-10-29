@@ -975,6 +975,41 @@ int main() {
     CHECK(floored_ms <= no_floor_ms);
   }
 
+  // correctHeading() integrates only within 1 deg of its target, like the
+  // other heading loops, wherever that target is. The window used to be sized
+  // from the target itself: none at 0 deg, 360 deg wide at 900 deg.
+  {
+    const MotionConfig saved = motionConfig();
+    MotionConfig integral_only = saved;
+    integral_only.heading_pid = {0, 1, 0};
+    integral_only.heading_correction = true;
+    setMotionConfig(integral_only);
+    mclib::test::setCompetitionStatus(0);
+    const auto held_output = [&](double target, double heading) {
+      now_ms = 0;
+      hw.heading = heading;
+      robotState().setCorrectAngleDeg(target);
+      robotState().setTurning(false);
+      clearCancel(CancelToken::HeadingCorrection);
+      int ticks = 0;
+      double last_left = 0;
+      on_delay = [&] {
+        last_left = hw.left;
+        if (++ticks == 10) requestCancel(CancelToken::HeadingCorrection);
+      };
+      correctHeading();
+      on_delay = {};
+      clearCancel(CancelToken::HeadingCorrection);
+      return last_left;
+    };
+    CHECK_EQ(held_output(0, 5), 0);
+    CHECK_EQ(held_output(900, 905), 0);
+    const double inside_window = held_output(0, 0.5);
+    CHECK(inside_window != 0);
+    CHECK_NEAR(held_output(900, 900.5), inside_window, 1e-12);
+    setMotionConfig(saved);
+  }
+
   bindDrive(nullptr);
 
   // With no drive bound there is nothing to move, and the caller has to be
