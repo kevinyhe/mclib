@@ -107,8 +107,6 @@ class Planner:
 
     def prepare(self, preset, tracking):
         """Compile mclib and measure @p preset in the background, once."""
-        if preset not in PRESETS or tracking not in TRACKING:
-            raise ValueError("Unknown robot or tracking setup")
         with self.lock:
             task = self.preparing.get((preset, tracking))
             if task and task["status"] == "running":
@@ -479,6 +477,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/prepare":
                 if not isinstance(body, dict) or set(body) != {"preset", "tracking"}:
                     raise ValueError("Send the preset and tracking to prepare.")
+                if body["preset"] not in PRESETS or body["tracking"] not in TRACKING:
+                    raise ValueError("Unknown robot or tracking setup.")
                 self.send(202, planner.prepare(body["preset"], body["tracking"]))
             elif re.fullmatch(r"/api/runs/[0-9a-f]{32}/cancel", path):
                 if body != {}:
