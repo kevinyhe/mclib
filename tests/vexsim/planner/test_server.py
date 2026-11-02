@@ -79,6 +79,16 @@ class HttpTests(unittest.TestCase):
         connection.close()
         return response.status, response.getheader("Content-Type"), payload
 
+    def status_for_declared_length(self, length):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        connection.putrequest("POST", "/api/runs")
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(length))
+        connection.endheaders()
+        status = connection.getresponse().status
+        connection.close()
+        return status
+
     def json(self, method, path, body=None, headers=None):
         status, _, payload = self.request(method, path, body, headers)
         return status, json.loads(payload)
@@ -112,8 +122,7 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/runs", ONE_POINT, {"Origin": "http://example.com"})[0], 403)
         self.assertEqual(self.request("POST", "/api/runs", b"{}", {"Content-Type": "text/plain"})[0], 400)
         self.assertEqual(self.request("POST", "/api/runs", b'{"name": "a", "name": "b"}')[0], 400)
-        large = b" " * (LIMITS["max_body_bytes"] + 1)
-        self.assertEqual(self.request("POST", "/api/runs", large)[0], 413)
+        self.assertEqual(self.status_for_declared_length(LIMITS["max_body_bytes"] + 1), 413)
         self.assertEqual(self.request("POST", "/api/prepare", dict(preset="huge", tracking="two"))[0], 400)
         self.assertEqual(self.request("POST", f"/api/runs/{'a' * 32}/cancel", dict(now=True))[0], 400)
 
