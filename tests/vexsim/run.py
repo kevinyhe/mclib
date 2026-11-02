@@ -40,7 +40,7 @@ ADVANCE = C.CFUNCTYPE(None, C.c_uint32, C.POINTER(Sample))
 OUTPUT = C.CFUNCTYPE(None, C.c_int, C.c_int, C.c_double)
 
 
-def build(destination):
+def build(destination, extra_sources=()):
     sources = ["control/motion", "control/chassis_io", "control/motion_config",
                "control/motion_math", "control/scaling", "control/robot_state",
                "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
@@ -53,6 +53,7 @@ def build(destination):
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
                "tests/vexsim/bridge.cpp"]
     command += [f"src/mclib/{source}.cpp" for source in sources]
+    command += [str(source) for source in extra_sources]
     command += ["-pthread", "-Wl,-z,defs", "-o", str(library)]
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     (destination / "build.log").write_text(result.stdout + result.stderr)
