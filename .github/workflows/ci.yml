@@ -78,31 +78,31 @@ jobs:
             --tracking-mode ${{ matrix.tracking }} --output sim-results || true
           python3 tests/vexsim/check_baseline.py ${{ matrix.tracking }} sim-results/results.json
 
-      # The motion builder's own tests: schema, server, 3D replay adapter,
-      # drawn geometry, C++ export (compiled) and the planner. Once, on the
-      # drive leg. Three.js comes from vexsim's package, pinned to the version
-      # the replay adapter expects.
+      # The path planner's own tests: routine checks, the server, the 3D
+      # replay adapter, the page's geometry against the engine's, the C++
+      # export (compiled) and whole runs in vexsim. Once, on the drive leg.
+      # Three.js comes from vexsim's package, pinned to the version the 3D
+      # view expects. The tests and the server share one compiled library.
       - uses: actions/setup-node@v4
         if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
         with:
           node-version: '20'
-      - name: Builder tests
+      - name: Path planner tests
         if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
           VEXSIM_PATH: ${{ github.workspace }}/vexsim
+          MCLIB_PLANNER_CACHE: ${{ runner.temp }}/planner/cache
         run: |
           npm install --prefix vexsim --no-save --no-audit --no-fund three@0.160.0
-          cd tests/vexsim/builder
-          node reference_geometry_test.mjs
-          python3 -m unittest -v test_builder test_native_viewer test_trajectory_builder
+          cd tests/vexsim/planner
+          python3 -m unittest -v test_planner test_geometry test_server test_native_viewer
           cd "$GITHUB_WORKSPACE"
           python3 -m unittest -v tools.test_tune_drive.SimulatorTests
 
-      # The real page in headless Chrome against a running builder server:
-      # runs, playback, editing, cancellation, the trajectory builder's plan
-      # and the C++ export.
-      - name: Builder browser smoke test
+      # The real page in headless Chrome against a running planner server:
+      # place points, plan, run, play back, compare, export, mirror, 3D view.
+      - name: Path planner browser smoke test
         if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -113,11 +113,11 @@ jobs:
           npx playwright install --with-deps chromium
           browser="$(node -e "import('playwright').then(p => console.log(p.chromium.executablePath()))")"
           cd "$GITHUB_WORKSPACE"
-          python3 tests/vexsim/builder/server.py --vexsim vexsim --output "$RUNNER_TEMP/builder" > "$RUNNER_TEMP/builder-server.log" 2>&1 &
+          python3 tests/vexsim/planner/server.py --vexsim vexsim --output "$RUNNER_TEMP/planner" > "$RUNNER_TEMP/planner-server.log" 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8765/api/config >/dev/null && break; sleep 1; done
-          node tests/vexsim/builder/browser_smoke.mjs \
+          node tests/vexsim/planner/browser_smoke.mjs \
             --playwright "$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
-            --browser "$browser" --output "$RUNNER_TEMP/builder-browser"
+            --browser "$browser" --output "$RUNNER_TEMP/planner-browser"
 
       - uses: actions/upload-artifact@v4
         if: always() && env.HAS_VEXSIM_KEY == 'true'
