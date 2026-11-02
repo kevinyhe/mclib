@@ -67,7 +67,6 @@
     graphCache: null,
   };
 
-  // ------------------------------------------------------------------ basics
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const fmt = (value, digits = 1) => (Number.isFinite(value) ? value.toFixed(digits) : "—");
   const trim = (value) => {
@@ -125,7 +124,6 @@
   };
   const projectKey = (project = state.project) => JSON.stringify(sortedKeys({ ...project, name: "", steps: project.steps.map((s) => ({ ...s, note: "" })) }));
 
-  // ----------------------------------------------------------------- editing
   function saveDraft() {
     try {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(state.project));
@@ -314,7 +312,6 @@
     log(`Point ${index + 1}: heading and curve handles are automatic again.`);
   }
 
-  // ---------------------------------------------------------------- planning
   function pathSteps() {
     return state.project.steps.filter((step) => step.type === "path" && step.points.length);
   }
@@ -374,7 +371,6 @@
     return plan ? plan.plans[index] : null;
   }
 
-  // ------------------------------------------------------------------ engine
   async function checkEngine() {
     clearTimeout(state.engineTimer);
     const robot = state.project.robot;
@@ -402,7 +398,6 @@
     renderActivity();
   }
 
-  // -------------------------------------------------------------------- runs
   async function runSimulation() {
     if (state.activeRun) return log("A run is already going. Wait for it, or cancel it.", "error");
     const answer = await api("/api/runs", { method: "POST", body: clone(state.project) }).catch((error) => ({ ok: false, data: { error: error.message } }));
@@ -516,7 +511,6 @@
     return job?.result?.steps ?? job?.live?.steps ?? [];
   }
 
-  // ---------------------------------------------------------------- playback
   function timeline() {
     const frames = trace();
     if (state.shown) return { kind: "run", end: frames.at(-1)?.t ?? 0 };
@@ -570,7 +564,6 @@
     return frame ? frame.step : null;
   }
 
-  // --------------------------------------------------------------- rendering
   function renderAll() {
     $("routine-name").value = state.project.name;
     $("undo").disabled = !state.history.length;
@@ -790,7 +783,6 @@
     $("field-hint").textContent = hint;
   }
 
-  // ------------------------------------------------------------------- forms
   function numberInput({ label, unit = "", value, min, max, step = 1, help, onCommit, disabled = false, placeholder }) {
     const input = element("input", { type: "number", min, max, step, value: Number.isFinite(value) ? String(value) : "", disabled, placeholder });
     const wrapper = element("label", { class: "field-label" },
@@ -838,7 +830,7 @@
 
   function autoNumber({ label, unit, value, automatic, min, max, step, help, autoLabel, onCommit }) {
     const isAuto = value === null || value === undefined;
-    const number = numberInput({ label, unit, value: isAuto ? automatic : value, min, max, step, help, disabled: isAuto, onCommit });
+    const number = numberInput({ label, unit, value: isAuto ? Number(automatic.toFixed(1)) : value, min, max, step, help, disabled: isAuto, onCommit });
     const toggle = checkInput(autoLabel, isAuto, null, (on) => onCommit(on ? null : round(automatic, step)));
     return element("div", { class: "auto-row" }, number, toggle);
   }
@@ -1047,7 +1039,6 @@
     pane.replaceChildren(heading, ...groups, element("p", { class: "muted small", text: "Simulated robot is the physics truth. Odometry is what mclib believed. A dash means the value was not recorded." }));
   }
 
-  // ------------------------------------------------------------------- field
   function resizeCanvas(canvas, cssHeight) {
     const rect = canvas.getBoundingClientRect();
     const ratio = window.devicePixelRatio || 1;
@@ -1216,6 +1207,25 @@
     ctx.restore();
   }
 
+  function reverseMarker(ctx, section) {
+    const a = toScreen(bezierPoint(section, 0.46)), b = toScreen(bezierPoint(section, 0.54));
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    ctx.save();
+    ctx.translate((a.x + b.x) / 2, (a.y + b.y) / 2);
+    ctx.rotate(angle);
+    ctx.fillStyle = "#a16207";
+    ctx.beginPath();
+    ctx.moveTo(6, 0);
+    ctx.lineTo(-4, -5);
+    ctx.lineTo(-4, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.rotate(-angle);
+    ctx.font = "600 10.5px system-ui, sans-serif";
+    ctx.fillText("reverse", 9, -7);
+    ctx.restore();
+  }
+
   function stepTag(ctx, point, number, selected, placed) {
     const p = toScreen(point);
     const text = `Step ${number}`;
@@ -1235,8 +1245,7 @@
     ctx.restore();
   }
 
-  function knobPositions() {
-    // Things on the field that can be dragged, in priority order.
+  function draggableKnobsInHitOrder() {
     const knobs = [];
     const all = poses();
     const index = state.selected;
@@ -1245,8 +1254,7 @@
     if (step.type === "path") {
       const layout = pathLayout(step, start);
       layout.sections.forEach((section, i) => {
-        if (i === 0) knobs.push({ kind: "handle-out", point: -1, at: section.startHandle, anchor: section.start });
-        else knobs.push({ kind: "handle-out", point: i - 1, at: section.startHandle, anchor: section.start });
+        knobs.push({ kind: "handle-out", point: i - 1, at: section.startHandle, anchor: section.start });
         knobs.push({ kind: "handle-in", point: i, at: section.endHandle, anchor: section.end });
       });
       step.points.forEach((point, i) => knobs.push({ kind: "anchor", point: i, at: point }));
@@ -1270,7 +1278,7 @@
   }
 
   function hitTest(sx, sy) {
-    const knobs = knobPositions();
+    const knobs = draggableKnobsInHitOrder();
     for (const knob of knobs) {
       const p = toScreen(knob.at);
       const reach = knob.radius ? knob.radius * state.view.scale : (knob.kind === "anchor" ? ANCHOR_RADIUS_PX + 3 : HANDLE_RADIUS_PX + 4);
@@ -1328,9 +1336,7 @@
       }
     }
     layout.sections.forEach((section) => {
-      if (!section.reverse) return;
-      const mid = bezierPoint(section, 0.5);
-      drawLabel(ctx, { x: mid.x, y: mid.y }, "", "#a16207");
+      if (section.reverse) reverseMarker(ctx, section);
     });
     if (!selected) {
       step.points.forEach((point) => drawKnob(ctx, point, "#6b7484", false, 4));
@@ -1374,7 +1380,7 @@
       ctx.restore();
     }
     if (selected) {
-      for (const knob of knobPositions()) {
+      for (const knob of draggableKnobsInHitOrder()) {
         if (["target-heading", "step-heading"].includes(knob.kind)) {
           polyline(ctx, [knob.pivot, knob.at], "#2563eb", 1.2);
           drawKnob(ctx, knob.at, "#2563eb", true, 5.5);
@@ -1458,7 +1464,6 @@
     if (plan) $("speed-legend-max").textContent = `${fmt(plan.settings.top_speed_ips, 0)} in/s`;
   }
 
-  // ------------------------------------------------------------------- graph
   function graphSeries() {
     const kind = $("graph-kind").value;
     const span = timeline();
@@ -1570,7 +1575,6 @@
     state.graphCache.geometry = { left, plotW, end };
   }
 
-  // -------------------------------------------------------------- 3D viewer
   function setMode(mode) {
     state.mode = mode;
     $("view-top").setAttribute("aria-selected", String(mode === "top"));
@@ -1617,7 +1621,6 @@
     $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-fit", bounds: { min_x: Math.min(...xs), max_x: Math.max(...xs), min_y: Math.min(...ys), max_y: Math.max(...ys) } }, location.origin);
   }
 
-  // ------------------------------------------------------------ interaction
   function snap(point, shift) {
     const grid = shift ? 6 : 0.5;
     return { x: round(point.x, grid), y: round(point.y, grid) };
@@ -1855,7 +1858,6 @@
     });
   }
 
-  // ------------------------------------------------------------------ files
   function download(name, text, type) {
     const link = element("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name });
     document.body.append(link);
@@ -1920,7 +1922,6 @@
     log("Exported the routine as C++.");
   }
 
-  // ------------------------------------------------------------------- setup
   function bindControls() {
     $("routine-name").addEventListener("change", () => {
       const name = $("routine-name").value.trim();

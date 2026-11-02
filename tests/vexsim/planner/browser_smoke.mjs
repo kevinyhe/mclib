@@ -2,7 +2,7 @@
 // server.py: place points, plan, run, play back, compare, export, mirror.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -193,6 +193,30 @@ try {
   await page.keyboard.press("Control+z");
   assert.deepEqual(await draft(), unmirrored);
   pass("Mirror left ↔ right negates x; Ctrl+Z puts it back");
+
+  const builderFile = `${output}/old-builder-routine.json`;
+  await writeFile(builderFile, JSON.stringify({
+    name: "Old builder S-curve", preset: "six_motor_450", tracking_mode: "two", start_pose: { x: 0, y: 0, heading: 0 },
+    environment: { soc: 1, friction: 1, seed: 1 }, stop_on_failure: true,
+    steps: [{ type: "follow", via_x: 12, via_y: 24, x: 0, y: 48, direction: 1, b: 50, timeout_ms: 8000, volts: 12 },
+      { type: "turn", heading: 90, timeout_ms: 4000, volts: 12 }],
+  }));
+  await page.locator("#open-file").setInputFiles(builderFile);
+  await page.waitForFunction(() => /came from the old motion builder/.test(document.querySelector("#log").textContent));
+  project = await draft();
+  assert.equal(project.steps[0].type, "path");
+  assert.deepEqual(project.steps[0].points.map((point) => [point.x, point.y]), [[12, 24], [0, 48]]);
+  pass("Opening an old motion builder file turns its follow step into a path");
+
+  await page.locator("#example-picker").selectOption("mixed_steps");
+  await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent));
+  await page.locator("#run").click();
+  await page.locator("#cancel-run").waitFor({ state: "visible" });
+  await page.waitForTimeout(500);
+  await page.locator("#cancel-run").click();
+  await page.waitForFunction(() => /was cancelled/.test(document.querySelector("#run-summary").textContent), null, { timeout: 30000 });
+  assert.equal(await page.locator("#run").isVisible(), true);
+  pass("Cancel stops a run that is going");
 
   await page.locator("#new-project").click();
   expectRefusal = true;
