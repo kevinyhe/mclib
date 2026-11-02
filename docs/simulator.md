@@ -3,15 +3,17 @@
 `tests/vexsim/` runs the C++ motion routines and odometry against the vexsim
 physics engine, checked out next to this repository at `../vexsim`.
 
-## Motion builder
+## Path planner
 
 ```sh
-python3 tests/vexsim/builder/server.py
+python3 tests/vexsim/planner/server.py --vexsim ../vexsim
 ```
 
-Open http://127.0.0.1:8765 to build a sequence, run it, and compare the
-simulated position with odometry. See the
-[builder guide](../tests/vexsim/builder/README.md).
+Open http://127.0.0.1:8765. Click the field to place points, see the speeds
+mclib plans along the path, press **Run simulation** to drive the routine in
+vexsim with mclib's C++, then play it back and export it as `autonomous()`.
+The first launch compiles mclib, which takes 1 to 2 minutes. See the
+[planner guide](../tests/vexsim/planner/README.md).
 
 ## Test matrix
 

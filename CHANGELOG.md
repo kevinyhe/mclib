@@ -7,6 +7,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- Path planner (`tests/vexsim/planner`), replacing the motion builder.
+  Click the field to place points; drag points and curve handles; set the
+  heading at a point, a speed limit and a reverse flag per section. The
+  path is coloured by the speed mclib's trajectory planner plans for it,
+  with the planned time and top speed. **Run simulation** drives the whole
+  routine in vexsim with mclib's C++ and checks each step, saying what was
+  measured and the limit. Playback with telemetry, run comparison, the 3D
+  view, undo and redo, JSON save and load, mirroring, and an
+  `autonomous()` export that uses the same path code the simulator ran.
+  Start it with `python3 tests/vexsim/planner/server.py --vexsim ../vexsim`.
 - Owning forms of the command decorators: `Command::andThen(a, b)`,
   `with(a, b)`, `race(a, b)`, `withTimeout(a, t)`, `until(a, condition)`,
   `repeatedly(a)` and `asProxy(a)` take the commands by `std::unique_ptr`

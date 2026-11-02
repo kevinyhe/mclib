@@ -111,13 +111,15 @@ Results are in [BUILDER_VALIDATION.md](BUILDER_VALIDATION.md).
 - Holonomic drives, mechanisms and path following are covered by the host tests
   instead.
 
-## Motion builder
+## Path planner
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 tests/vexsim/builder/server.py
+python3 tests/vexsim/planner/server.py --vexsim ../vexsim
 ```
 
-Open http://127.0.0.1:8765. See the [builder guide](builder/README.md).
+Open http://127.0.0.1:8765. Plan paths on the field, run whole routines here
+with mclib's C++, play them back and export `autonomous()`. See the
+[planner guide](planner/README.md).
 
 ## Visual replay
 
