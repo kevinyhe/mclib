@@ -1,0 +1,230 @@
+// Drives the real planner page in headless Chromium against a running
+// server.py: place points, plan, run, play back, compare, export, mirror.
+// Installs nothing; pass an existing Playwright and browser.
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const usage = "Usage: node browser_smoke.mjs --playwright /path/to/playwright/index.mjs --browser /path/to/chrome [--url http://127.0.0.1:8765] [--output folder-for-screenshots]";
+const options = {};
+for (let index = 2; index < process.argv.length; index += 2) {
+  const key = process.argv[index];
+  if (!["--playwright", "--browser", "--url", "--output"].includes(key) || !process.argv[index + 1]) throw new Error(usage);
+  options[key.slice(2)] = process.argv[index + 1];
+}
+if (!options.playwright || !options.browser) throw new Error(usage);
+const url = new URL(options.url ?? "http://127.0.0.1:8765");
+assert(["127.0.0.1", "localhost"].includes(url.hostname), "Only a local planner is tested");
+const output = resolve(options.output ?? "bin/path-planner-screenshots");
+await mkdir(output, { recursive: true });
+
+const { chromium } = await import(pathToFileURL(resolve(options.playwright)).href);
+const browser = await chromium.launch({ executablePath: resolve(options.browser), headless: true, args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+const pageErrors = [];
+const requests = [];
+let checks = 0;
+let expectRefusal = false;
+const pass = (label) => { checks += 1; console.log(`PASS ${label}`); };
+
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    const expectedRefusal = /status of 400/.test(message.text()) && expectRefusal;
+    if (message.type() === "error" && !expectedRefusal) pageErrors.push(message.text());
+  });
+  page.on("request", (request) => requests.push(request.url()));
+  const shot = (name) => page.screenshot({ path: `${output}/${name}.png` });
+  const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")));
+
+  async function fieldPoint(x, y) {
+    const box = await page.locator("#field").boundingBox();
+    const view = JSON.parse(await page.locator("#field").getAttribute("data-view"));
+    return { x: box.x + box.width / 2 + (x - view.x) * view.scale, y: box.y + box.height / 2 - (y - view.y) * view.scale };
+  }
+  async function clickField(x, y) {
+    const at = await fieldPoint(x, y);
+    await page.mouse.click(at.x, at.y);
+  }
+  async function dragField(from, to) {
+    const a = await fieldPoint(from.x, from.y);
+    const b = await fieldPoint(to.x, to.y);
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 4 });
+    await page.mouse.move(b.x, b.y, { steps: 4 });
+    await page.mouse.up();
+  }
+  const near = (a, b, tolerance = 1) => Math.abs(a - b) <= tolerance;
+
+  await page.goto(url.href);
+  await page.waitForFunction(() => document.querySelector("#step-list li"));
+  assert.match(await page.locator("#log").innerText(), /Click on the field/);
+  assert.match(await page.locator("#field-hint").innerText(), /Click on the field to add points/);
+  assert.match(await page.locator("#shortcut-strip").innerText(), /Ctrl\+Z/);
+  pass("A new routine opens with one empty path and tells the user to click the field");
+
+  await page.waitForFunction(() => /Ready/.test(document.querySelector("#engine-pill").textContent), null, { timeout: 600000 });
+  pass(`Planner ready: ${await page.locator("#engine-pill").innerText()}`);
+  await shot("01-empty");
+
+  await clickField(24, -12);
+  await clickField(0, 24);
+  await clickField(-24, 48);
+  let project = await draft();
+  const points = project.steps[0].points;
+  assert.equal(points.length, 3);
+  assert(near(points[0].x, 24) && near(points[0].y, -12) && near(points[2].x, -24) && near(points[2].y, 48), JSON.stringify(points));
+  pass("Three clicks place three points where they were clicked");
+
+  await page.waitForFunction(() => /top \d/.test(document.querySelector("#step-list li").textContent), null, { timeout: 30000 });
+  assert.equal(await page.locator("#speed-legend").isVisible(), true);
+  const summary = await page.locator("#step-list li .step-sub").first().innerText();
+  assert.match(summary, /3 points · \d+\.\d+ s · top \d+\.\d in\/s/);
+  assert.match(await page.locator("#pane-step").innerText(), /Plan from mclib[\s\S]*Planned time[\s\S]*Top speed/i);
+  pass(`mclib planned the path: ${summary}`);
+  await page.locator("#graph-kind").selectOption("speed");
+  assert.match(await page.locator("#graph-caption").innerText(), /Planned speed/);
+  pass("The graph shows the planned speed before any run");
+  await shot("02-planned");
+
+  await dragField({ x: 0, y: 24 }, { x: 6, y: 30 });
+  project = await draft();
+  assert(near(project.steps[0].points[1].x, 6) && near(project.steps[0].points[1].y, 30), JSON.stringify(project.steps[0].points[1]));
+  await page.keyboard.press("Control+z");
+  project = await draft();
+  assert(near(project.steps[0].points[1].x, 0) && near(project.steps[0].points[1].y, 24));
+  await page.keyboard.press("Control+Shift+z");
+  project = await draft();
+  assert(near(project.steps[0].points[1].x, 6));
+  await page.keyboard.press("Control+z");
+  pass("Dragging a point moves it; Ctrl+Z and Ctrl+Shift+Z undo and redo the drag");
+
+  await clickField(0, 24);
+  await page.locator("#pane-step .point.selected").waitFor();
+  const sectionSpeed = page.locator("#pane-step .point.selected .section-box");
+  await sectionSpeed.locator("label.check").first().click();
+  const speedInput = sectionSpeed.locator("input[type=number]");
+  await speedInput.fill("40");
+  await speedInput.press("Enter");
+  await page.waitForFunction(() => {
+    const value = JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1"));
+    return value.steps[0].sections[1].speed_percent === 40;
+  });
+  await page.waitForFunction(() => /Speed zones\s*3/.test(document.querySelector("#pane-step").innerText), null, { timeout: 30000 });
+  pass("A 40% speed limit on section 2 splits the plan into 3 speed zones");
+  await shot("03-speed-zone");
+
+  await page.keyboard.press("Escape");
+  await page.locator("#add-step summary").click();
+  await page.locator('#add-step-menu button[data-type="turn"]').click();
+  assert.equal(await page.locator("#step-list li").count(), 2);
+  assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Turn/);
+  pass("Add a step puts a turn after the path");
+
+  const finished = () => /Run \d+: \d+ of \d+ steps passed/.test(document.querySelector("#run-summary").textContent);
+  await page.locator("#run").click();
+  await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
+  await page.waitForFunction(finished, null, { timeout: 300000 });
+  const firstRun = await page.locator("#run-picker").inputValue();
+  const stages = await page.locator("#stage-list").innerText();
+  for (const label of ["Check the routine", "Compile mclib", "Measure the robot", "Plan path speeds", "Simulate in vexsim", "Score each step"]) assert.match(stages, new RegExp(label));
+  assert.match(await page.locator("#run-summary").innerText(), /2 of 2 steps passed/);
+  assert.equal(await page.locator("#step-list .badge.pass").count(), 2);
+  pass(`Run simulation ran both steps in vexsim: ${(await page.locator("#run-summary").innerText()).replace(/\n/g, " ")}`);
+  await shot("04-run-passed");
+
+  await page.locator("#step-list li").first().click();
+  const result = await page.locator("#pane-step .card.pass").innerText();
+  assert.match(result, /Ended \d+\.\d+ in from the target \(limit 2\.5 in\)/);
+  assert.match(result, /Largest gap from the planned path/);
+  pass("The step pane shows each check with the measured value and its limit");
+
+  await page.locator("#timeline").evaluate((input) => { input.value = String(Number(input.max) / 2); input.dispatchEvent(new Event("input")); });
+  const clock = await page.locator("#clock").innerText();
+  assert.match(clock, /^\d+\.\d\d \/ \d+\.\d\d s$/);
+  assert.notEqual(clock.split(" ")[0], "0.00");
+  await page.locator("#tab-telemetry").click();
+  const telemetry = await page.locator("#pane-telemetry").innerText();
+  assert.match(telemetry, /Position/i);
+  assert.match(telemetry, /Motors and battery/i);
+  pass(`Scrubbing to ${clock} shows telemetry at that time`);
+  await page.locator("#graph-kind").selectOption("voltage");
+  await shot("05-playback-telemetry");
+
+  await page.locator("#play").click();
+  await page.waitForTimeout(400);
+  const playing = await page.locator("#clock").innerText();
+  assert.notEqual(playing, clock);
+  await page.keyboard.press("Space");
+  pass("Play advances the playback clock; Space pauses");
+
+  await page.locator("#tab-step").click();
+  await page.locator("#step-list li").first().click();
+  await clickField(-12, 60);
+  await page.keyboard.press("Control+Enter");
+  await page.waitForFunction((previous) => document.querySelector("#run-picker").value !== previous, firstRun);
+  await page.waitForFunction(finished, null, { timeout: 300000 });
+  const secondSummary = (await page.locator("#run-summary").innerText()).replace(/\n/g, " ");
+  await page.locator("#graph-kind").selectOption("speed");
+  await page.locator("#compare-picker").selectOption(firstRun);
+  await page.waitForFunction(() => /Purple: compared run/.test(document.querySelector("#graph-caption").textContent));
+  pass(`A second run with an extra point (${secondSummary}) can be compared with the first`);
+  await shot("06-compare");
+
+  await page.locator("#export-cpp").click();
+  await page.locator("#cpp-dialog[open]").waitFor();
+  const code = await page.locator("#cpp-code").inputValue();
+  assert.match(code, /void autonomous\(\)/);
+  assert.match(code, /path_planner::planSections/);
+  assert.match(code, /path_planner::followSections/);
+  assert.match(code, /turnToAngle|turnTo/);
+  assert.match(await page.locator("#cpp-note").innerText(), /measured on the simulated robot/);
+  pass("Export C++ shows autonomous() with the same path helpers the simulator ran");
+  await shot("07-export");
+  await page.locator("#cpp-dialog .dialog-foot button.primary").click();
+
+  const unmirrored = await draft();
+  await page.locator("#mirror-picker").selectOption("x");
+  project = await draft();
+  assert.equal(project.steps[0].points[0].x, -unmirrored.steps[0].points[0].x);
+  assert.equal(project.steps[1].heading, -unmirrored.steps[1].heading);
+  await page.keyboard.press("Control+z");
+  assert.deepEqual(await draft(), unmirrored);
+  pass("Mirror left ↔ right negates x; Ctrl+Z puts it back");
+
+  await page.locator("#new-project").click();
+  expectRefusal = true;
+  await page.locator("#run").click();
+  await page.waitForFunction(() => /has no points yet/.test(document.querySelector("#log").textContent));
+  expectRefusal = false;
+  pass("Running an empty path names the step and the fix");
+
+  await page.keyboard.press("?");
+  await page.locator("#help-dialog[open]").waitFor();
+  assert((await page.locator("#shortcut-table tr").count()) >= 12);
+  await shot("08-help");
+  await page.locator("#help-dialog .dialog-foot button.primary").click();
+  pass("? opens the help with the full shortcut list");
+
+  await page.locator("#run-picker").selectOption({ index: 1 });
+  await page.locator("#view-3d").click();
+  await page.waitForFunction(() => {
+    const status = document.querySelector("#viewer3d-status");
+    return document.querySelector("#viewer3d").dataset.applied || (!status.hidden && /did not start|stopped/.test(status.textContent));
+  }, null, { timeout: 30000 });
+  const applied = await page.locator("#viewer3d").getAttribute("data-applied");
+  if (applied) pass("The 3D view loaded vexsim's renderer and shows the recorded run");
+  else console.log(`NOTE 3D view not available here: ${await page.locator("#viewer3d-status").innerText()}`);
+  await page.waitForTimeout(1500);
+  await shot("09-3d");
+
+  const offsite = requests.filter((value) => /^https?:/.test(value) && new URL(value).origin !== url.origin);
+  assert.deepEqual(offsite, [], "The page must not load anything from the internet");
+  assert.deepEqual(pageErrors, []);
+  pass("No page errors and no requests outside the local server");
+  console.log(`${checks} checks passed. Screenshots in ${output}`);
+} finally {
+  await browser.close();
+}

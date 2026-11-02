@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mclib Path Planner</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="planner.css">
+  <script src="geometry.js" defer></script>
+  <script src="planner.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19c4 0 5-14 9-14s5 14 9 14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="3" cy="19" r="2.2"/><circle cx="21" cy="19" r="2.2"/></svg>
+      <span>Path Planner</span>
+    </div>
+    <label class="routine-name"><span class="sr-only">Routine name</span><input id="routine-name" maxlength="80" autocomplete="off" title="Name of this routine. It goes into saved files and the exported C++."></label>
+    <nav class="toolbar" aria-label="Project">
+      <button id="new-project" title="Start a new routine with one empty path (keeps the robot settings)">New</button>
+      <button id="open-project" title="Open a routine saved as JSON">Open…</button>
+      <button id="save-project" title="Download this routine as a JSON file">Save</button>
+      <select id="example-picker" title="Load an example routine"><option value="">Examples…</option></select>
+      <span class="divider"></span>
+      <button id="undo" title="Undo the last change (Ctrl+Z)">Undo</button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+      <span class="divider"></span>
+      <select id="mirror-picker" title="Flip the whole routine for the other side of the field">
+        <option value="">Mirror…</option>
+        <option value="x">Mirror left ↔ right (x → −x)</option>
+        <option value="y">Mirror front ↔ back (y → −y)</option>
+      </select>
+      <button id="export-cpp" title="Show the routine as mclib C++ for autonomous()">Export C++</button>
+      <input id="open-file" type="file" accept="application/json,.json" hidden>
+    </nav>
+    <div class="run-area">
+      <div id="engine-pill" class="pill" role="status" title="Planning needs mclib compiled and the robot measured">Starting…</div>
+      <button id="cancel-run" class="danger" hidden title="Stop the simulation that is running">Cancel</button>
+      <button id="run" class="primary" title="Simulate the whole routine in vexsim with mclib's C++ (Ctrl+Enter)">▶ Run simulation</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="left">
+      <section class="panel routine-panel" aria-labelledby="routine-title">
+        <div class="panel-head"><h2 id="routine-title">Routine</h2><span id="step-count" class="muted small"></span></div>
+        <button id="start-card" class="start-card" title="Where the robot starts. Drag the outlined robot on the field, or edit it in the Robot tab."></button>
+        <ol id="step-list" class="step-list" aria-label="Steps, in the order they run"></ol>
+        <details id="add-step" class="add-step">
+          <summary title="Add a step after the selected one">+ Add a step</summary>
+          <div id="add-step-menu" class="add-step-menu"></div>
+        </details>
+      </section>
+      <section class="panel activity-panel" aria-labelledby="activity-title">
+        <div class="panel-head"><h2 id="activity-title">Activity</h2><span id="activity-clock" class="muted small"></span></div>
+        <div id="run-summary" class="run-summary" hidden></div>
+        <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
+        <ol id="log" class="log" aria-label="Messages" aria-live="polite"></ol>
+      </section>
+    </aside>
+
+    <section class="centre">
+      <div class="field-head">
+        <div class="segmented" role="tablist" aria-label="Field view">
+          <button id="view-top" role="tab" aria-selected="true" title="Top-down field: edit paths and watch the run">Top view</button>
+          <button id="view-3d" role="tab" aria-selected="false" title="vexsim's 3D view of the simulated robot">3D view</button>
+        </div>
+        <div id="layer-toggles" class="layers" aria-label="Show on the field">
+          <label title="The planned path, coloured by planned speed"><input type="checkbox" data-layer="plan" checked><i class="swatch speed"></i>Plan</label>
+          <label title="Where the simulated robot really went"><input type="checkbox" data-layer="truth" checked><i class="swatch truth"></i>Simulated</label>
+          <label title="Where the robot's odometry thought it was"><input type="checkbox" data-layer="odometry" checked><i class="swatch odometry"></i>Odometry</label>
+          <label title="The path of the run chosen under Compare with"><input type="checkbox" data-layer="compare" checked><i class="swatch compare"></i>Compare</label>
+        </div>
+        <button id="fit" class="small" title="Fit the routine in view (F)">Fit</button>
+      </div>
+      <div id="field-wrap" class="field-wrap">
+        <canvas id="field" tabindex="0" aria-label="Field. Click to add a point to the selected path. Drag points and handles to change the path. Drag empty space to pan; scroll to zoom."></canvas>
+        <iframe id="viewer3d" title="vexsim 3D view of the simulated robot" data-src="/native/viewer.html" hidden></iframe>
+        <div id="viewer3d-status" class="overlay-status" hidden></div>
+        <div id="field-hint" class="field-hint"></div>
+        <div id="cursor-readout" class="cursor-readout mono"></div>
+        <div id="speed-legend" class="speed-legend" hidden><span>0</span><i></i><span id="speed-legend-max"></span></div>
+        <div id="stale-badge" class="stale-badge" hidden>The routine changed after this run</div>
+      </div>
+      <div class="playback">
+        <button id="play" class="icon" title="Play or pause (Space)" aria-label="Play">▶</button>
+        <div class="scrub">
+          <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Playback time">
+          <div id="timeline-marks" class="timeline-marks"></div>
+        </div>
+        <output id="clock" class="mono">0.00 / 0.00 s</output>
+        <select id="speed" title="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        <div class="run-pickers">
+          <label class="inline" title="Which run is shown on the field">Showing <select id="run-picker"><option value="">the plan (no run yet)</option></select></label>
+          <label class="inline" title="Draw another run in purple to compare">Compare with <select id="compare-picker"><option value="">nothing</option></select></label>
+        </div>
+      </div>
+      <div class="graph-panel">
+        <div class="graph-head">
+          <select id="graph-kind" title="What the graph shows">
+            <option value="speed">Speed: planned and simulated</option>
+            <option value="voltage">Motor voltage, left and right</option>
+            <option value="heading">Heading: simulated, odometry, target</option>
+            <option value="gap">Odometry error over time</option>
+          </select>
+          <span id="graph-caption" class="muted small"></span>
+        </div>
+        <canvas id="graph" aria-label="Graph over time. Click to jump playback there."></canvas>
+      </div>
+      <p class="shortcuts" id="shortcut-strip"></p>
+    </section>
+
+    <aside class="right">
+      <div class="tabs" role="tablist">
+        <button id="tab-step" role="tab" aria-selected="true" data-tab="step">Step</button>
+        <button id="tab-robot" role="tab" aria-selected="false" data-tab="robot">Robot & settings</button>
+        <button id="tab-telemetry" role="tab" aria-selected="false" data-tab="telemetry">Telemetry</button>
+      </div>
+      <div id="pane-step" class="pane"></div>
+      <div id="pane-robot" class="pane" hidden></div>
+      <div id="pane-telemetry" class="pane" hidden></div>
+    </aside>
+  </main>
+
+  <dialog id="cpp-dialog" class="dialog wide">
+    <div class="dialog-head"><h2>Routine as C++</h2><button class="close" data-close aria-label="Close">×</button></div>
+    <p id="cpp-note" class="note"></p>
+    <textarea id="cpp-code" readonly spellcheck="false" aria-label="Generated C++"></textarea>
+    <div class="dialog-foot"><button id="cpp-copy">Copy to clipboard</button><button id="cpp-download">Download autonomous.cpp</button><button class="primary" data-close>Close</button></div>
+  </dialog>
+
+  <dialog id="help-dialog" class="dialog">
+    <div class="dialog-head"><h2>How to use the planner</h2><button class="close" data-close aria-label="Close">×</button></div>
+    <ol class="howto">
+      <li><b>Place points.</b> With a Path step selected, click on the field. The path starts where the robot is and curves through each point.</li>
+      <li><b>Shape it.</b> Drag points to move them. Select a point to show its curve handles; drag a handle to set the heading there and how wide the curve is.</li>
+      <li><b>Set speeds.</b> Select a point to set the speed limit and direction of the section that ends at it. The path colour shows the planned speed: blue is slow, red is fast.</li>
+      <li><b>Run.</b> Press Run simulation. vexsim drives the robot with mclib's C++. Each step is checked against its target.</li>
+      <li><b>Export.</b> Save keeps the routine as JSON. Export C++ gives the autonomous() code for the robot.</li>
+    </ol>
+    <h3>Keyboard and mouse</h3>
+    <table id="shortcut-table" class="shortcut-table"></table>
+    <div class="dialog-foot"><button class="primary" data-close>Close</button></div>
+  </dialog>
+</body>
+</html>

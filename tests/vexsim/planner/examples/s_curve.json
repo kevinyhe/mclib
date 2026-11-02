@@ -1,0 +1,12 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "S-curve across the field",
+  "description": "One path through three points. Every heading and curve handle is automatic.",
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 24, "y": -12}, {"x": 0, "y": 24}, {"x": -24, "y": 56}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": null, "reverse": false},
+                  {"speed_percent": null, "reverse": false}]}
+  ]
+}

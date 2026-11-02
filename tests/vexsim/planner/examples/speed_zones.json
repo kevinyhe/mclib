@@ -1,0 +1,12 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Slow through the corner",
+  "description": "Fast on the straights, 35% through the corner. Each speed change starts a new planned part.",
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 0, "y": -12}, {"x": 24, "y": 12}, {"x": 24, "y": 48}],
+     "sections": [{"speed_percent": 90, "reverse": false}, {"speed_percent": 35, "reverse": false},
+                  {"speed_percent": 90, "reverse": false}]}
+  ]
+}
