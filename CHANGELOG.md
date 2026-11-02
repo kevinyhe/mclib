@@ -18,6 +18,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   the next step starts. A condition already true when the step starts skips
   the motion. Unlike `Command::until()`, the routine owns the motion, so it
   can be built inline in the chain.
+- `TrajectoryConstraints::speed_zones` caps the speed on stretches of a
+  trajectory: `SpeedZone{20_in, 36_in, 15_in / 1_s}` keeps the robot at or
+  under 15 in/s from 20 in to 36 in along the path. The plan brakes before
+  the zone and speeds up after it. Before this, a slow section meant
+  splitting the path into two trajectories, and the two splines met at
+  different headings.
 
 ### Changed
 

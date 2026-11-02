@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 namespace mclib {
 namespace path {
@@ -32,6 +33,25 @@ double speedCap(double curvature, const TrajectoryConstraints& c) {
   return cap;
 }
 
+bool validZone(const SpeedZone& zone) {
+  return std::isfinite(zone.start.raw()) && zone.start.raw() >= 0.0 &&
+         std::isfinite(zone.end.raw()) && zone.end.raw() > zone.start.raw() &&
+         positiveFinite(zone.max_velocity.raw());
+}
+
+// Speed between two samples lies between theirs, so a sample is capped when
+// the step to either neighbour overlaps the zone. That keeps the cap at every
+// point of the zone, not just at the samples inside it.
+double zoneCap(double distance, double step, const std::vector<SpeedZone>& zones) {
+  double cap = std::numeric_limits<double>::infinity();
+  for (const SpeedZone& zone : zones) {
+    if (distance - step < zone.end.raw() && distance + step > zone.start.raw()) {
+      cap = std::min(cap, zone.max_velocity.raw());
+    }
+  }
+  return cap;
+}
+
 }  // namespace
 
 Trajectory Trajectory::generate(const Path& path,
@@ -46,7 +66,9 @@ Trajectory Trajectory::generate(const Path& path,
       !std::isfinite(constraints.max_lateral_acceleration.raw()) ||
       !std::isfinite(constraints.track_width.raw()) ||
       !std::isfinite(constraints.start_velocity.raw()) ||
-      !std::isfinite(constraints.end_velocity.raw())) {
+      !std::isfinite(constraints.end_velocity.raw()) ||
+      !std::all_of(constraints.speed_zones.begin(), constraints.speed_zones.end(),
+                   validZone)) {
     return out;
   }
 
@@ -70,7 +92,8 @@ Trajectory Trajectory::generate(const Path& path,
         path.maxAbsCurvature(QLength::fromBase(std::max(0.0, s[i] - half)),
                              QLength::fromBase(std::min(length, s[i] + half)))
             .raw();
-    v[i] = speedCap(worst, constraints);
+    v[i] = std::min(speedCap(worst, constraints),
+                    zoneCap(s[i], step, constraints.speed_zones));
   }
 
   v.front() = std::min(v.front(), std::fabs(constraints.start_velocity.raw()));

@@ -283,12 +283,30 @@ the smallest of:
 | `max_velocity` | fixed |
 | Cornering | `sqrt(max_lateral_acceleration / k)`, using the tightest curvature within half a sample |
 | Outer wheel | `max_velocity / (1 + k * track_width / 2)` |
+| Speed zone | the zone's `max_velocity`, inside a `SpeedZone` |
 | Speeding up | `max_acceleration` from the previous sample |
 | Slowing down | `max_deceleration` (0 = same as `max_acceleration`) to the next sample |
 
 `start_velocity` and `end_velocity` set the speed at each end, for chaining.
 `reversed = true` drives the path with the back of the robot leading: speeds
 are negative and the body heading is the path heading + 180°.
+
+`speed_zones` slows one stretch of the path. Each zone has a start and end,
+measured along the path from its first point, and a top speed. The plan brakes
+before the zone, within `max_deceleration`, and speeds back up after it, so
+there is no need to split the path:
+
+```cpp
+limits.speed_zones = {
+    SpeedZone{20_in, 36_in, 15_in / 1_s},  // 15 in/s from 20 in to 36 in
+};
+```
+
+Zones may overlap; the lowest speed wins. A zone may run past the end of the
+path. The slow stretch can begin and end up to one `spacing` (0.5 in) outside
+the zone. On the 48 in line below, a 12 in/s zone from 18 in to 30 in raises
+the time from 1.5 s to 2.55 s. A zone that starts below 0, ends at or before
+its start, or has a speed of 0 or less gives an empty trajectory.
 
 A 48 in straight line at 48 in/s and 96 in/s² takes 1.5 s: 0.5 s speeding up,
 0.5 s at full speed and 0.5 s slowing down.
