@@ -103,11 +103,12 @@ struct DiscreteActuatorMechanismConfig {
  * The table is searched front to back and the first match wins, so a state
  * listed twice makes the later row unreachable. List each state once.
  *
- * All command factories terminate after one tick, which releases the subsystem
- * requirement and lets the scheduler immediately reschedule the default
- * command. The default command MUST therefore be idleCommand(): a default that
- * commands a state would drag the mechanism back one tick after every button
- * press. periodic() keeps re-applying the cached state, so the actuators stay
+ * All command factories finish on their own: the one-shot ones after one tick,
+ * makeDiscreteStateForCommand() after its duration. Finishing releases the
+ * subsystem requirement and lets the scheduler immediately reschedule the
+ * default command. The default command MUST therefore be idleCommand(): a
+ * default that commands a state would drag the mechanism back one tick after
+ * every button press. periodic() keeps re-applying the cached state, so the actuators stay
  * where the last command put them.
  */
 template <typename StateT>

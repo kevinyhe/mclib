@@ -1659,8 +1659,8 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
     // Raw doubles on purpose, and inexpressible in units: chase_power is a
     // unitless fudge factor, the radius is inches, 9.8 is g in m/s^2, and the
     // result is compared against volts. Four unit systems in one expression,
-    // deliberately preserved - see slipSpeedLimit() in motion_math.hpp and the
-    // note on chase_power in config.hpp.
+    // deliberately preserved - see slipSpeedLimit() in motion_math.hpp and
+    // MotionConfig::chase_power.
     //
     // current_angle, not pose.theta: motion.cpp steers on raw IMU degrees and
     // this has to be the same frame as the heading PID above it.

@@ -22,6 +22,7 @@
  *
  * @code
  * using mclib::control::AsyncMotion;
+ * using mclib::control::MotionResult;
  *
  * AsyncMotion drive = AsyncMotion::start([] { return driveTo(30_in, 2_s); });
  * drive.waitUntilTravelled(12_in);

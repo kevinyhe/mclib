@@ -105,7 +105,7 @@ public:
 
   /// True once shift_settle_time has elapsed since the last shift.
   bool isShiftSettled() const;
-  /// Milliseconds still to wait before drive writes are accepted, 0 when settled.
+  /// Time still to wait before drive writes are accepted, 0 when settled.
   QTime remainingSettleTime() const;
 
   /**

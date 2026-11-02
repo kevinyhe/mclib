@@ -44,8 +44,9 @@ namespace control {
  * @brief What a differential drive has to provide for the motion routines and
  *        the odometry task to run on it.
  *
- * Voltages are volts, positions are degrees of motor shaft, heading is the
- * IMU's unwrapped rotation in degrees (compass frame, clockwise positive),
+ * Voltages are volts, positions are degrees of motor shaft, heading is
+ * unwrapped degrees (compass frame, clockwise positive) from the IMU, or from
+ * left and right wheel travel on a `Chassis` without one,
  * currents are milliamps and speeds are RPM - the V5 motor's native units,
  * which is what the stall detector in `wallReset()` compares against.
  */

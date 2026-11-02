@@ -27,8 +27,9 @@ void autonomous() {
 
   while (!controller.settled()) {
     // ... control tick ...
-    tlm.set(x, pose.x);
-    tlm.set(heading, pose.theta);
+    const mclib::Pose2D pose = chassis.getPose();
+    tlm.set(x, pose.x * mclib::units::inch);
+    tlm.set(heading, pose.theta * mclib::units::radian);
     tlm.set(cmd, left_command);
     tlm.set(err, controller.error());
     tlm.sample();  // no-op until the 20 ms period elapses
@@ -51,11 +52,12 @@ t_ms,x_in,heading_deg,left_cmd_V,error
 20,1.4,0.2,12,22.6
 40,3.1,0.4,11.8,20.9
 ...
-# rows=412 dropped=0
+# rows=412 dropped=0 discarded=0
 ```
 
 A value set on an `addLength` channel is written in inches; `24_in` is written
-as `24.0` in the `x_in` column.
+as `24` in the `x_in` column. An `addAngle` channel is written in degrees, so
+pass `Pose2D::theta`, which is radians, as `pose.theta * mclib::units::radian`.
 
 ### Performance
 
@@ -72,7 +74,7 @@ does not slow the control loop.
 | Buffer full | `RowBuffer` size | new rows are dropped; the count is written to the last line |
 | Row cap | `LoggerConfig::max_rows` = 30000 (10 min at 20 ms) | logging stops |
 | File size | `SdSinkConfig::max_bytes` = 4 MiB | the file is closed |
-| Channels | 24, names up to 32 characters | extra channels are ignored |
+| Channels | 24, names up to 31 characters including the unit suffix | extra channels are ignored; longer names are cut |
 
 ### No SD card
 
@@ -103,8 +105,9 @@ void opcontrol() {
   mclib::telemetry::FlushTask flusher(tlm);
 
   while (true) {
-    tlm.set(x, pose.x);
-    tlm.set(heading, pose.theta);
+    const mclib::Pose2D pose = chassis.getPose();
+    tlm.set(x, pose.x * mclib::units::inch);
+    tlm.set(heading, pose.theta * mclib::units::radian);
     tlm.sample();
     pros::delay(10);
   }
@@ -135,9 +138,10 @@ const QTime now = mclib::time::now();           // same value as a QTime
 
 Code that reads time through `mclib::time` can be tested with a fake clock.
 `pid.cpp`, `chassis_controller.cpp`, the mechanisms and `waitCommand.h` do.
-`control/motion.cpp`, `control/odometry.cpp` and
-`auton/autonomous_routine.cpp` call `pros::millis()` and `pros::delay()`
-directly, so a fake clock does not affect them.
+`control/motion.cpp` and `control/odometry_task.cpp` call `pros::millis()` and
+`pros::delay()` directly, so a fake clock does not affect them.
+`auton/autonomous_routine.cpp` reads `mclib::time` but sleeps with
+`pros::delay()`.
 
 ### Fake clocks in tests
 

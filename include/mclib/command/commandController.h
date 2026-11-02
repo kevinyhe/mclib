@@ -11,7 +11,6 @@
 
 /**
  * @brief Command Controller wraps a controller and exposes Trigger helpers for command-based code.
- * based code
  *
  * ```c
  * // Initialize CommandController

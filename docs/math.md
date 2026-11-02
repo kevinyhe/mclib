@@ -75,4 +75,5 @@ returns 5 for a target 10 in straight ahead. Use `mclib::arcRadius()`.
 field walls. `raycast.cpp` predicts what each sensor should read from the field
 map in `collision_map.hpp`, `snapshot_pose.cpp` finds the `(x, y)` that best
 matches the real readings and rejects bad fits, and `snapshot.hpp` reads the
-sensors. Only `sensor.hpp` depends on PROS.
+sensors. Only `sensor.hpp` and `snapshot.hpp`, and the headers that include
+them, depend on PROS.

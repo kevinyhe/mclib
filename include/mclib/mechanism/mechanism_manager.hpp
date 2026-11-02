@@ -48,13 +48,13 @@ namespace mechanism {
  * @code
  * // Same TU, mechanisms first: they outlive the manager that ends their
  * // commands.
- * Arm   arm{...};
- * Wings wings{...};
+ * mclib::mechanism::MotorSubsystem flywheel{{1, -2}};
+ * mclib::mechanism::PneumaticSubsystem wings{{'A'}};
  *
  * mclib::mechanism::MechanismManager mechanisms;
  *
  * void initialize() {
- *   mechanisms.add(&arm, arm.makeStopCommand(), "arm");
+ *   mechanisms.add(&flywheel, flywheel.makeStopCommand(), "flywheel");
  *   mechanisms.add(&wings, wings.makeRetractCommand(), "wings");
  *   mechanisms.registerAll();
  * }
@@ -117,8 +117,7 @@ public:
    * CommandScheduler.
    *
    * Safe to call more than once: entries already registered are skipped, so
-   * the scheduler never sees a duplicate. (Its own duplicate check is an
-   * `assert`, which does nothing in a release build.)
+   * the scheduler never sees a duplicate.
    *
    * An entry whose subsystem somebody else had already registered does NOT
    * count and is not marked registered. The scheduler keeps the first

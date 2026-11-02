@@ -140,8 +140,9 @@ public:
      * @brief Chain into the next step once the robot is @p range from the
      *        end of this one, still moving.
      *
-     * Makes the step chained, as withoutExit() does; a later withExit() or
-     * withStop() turns it off again. For driveTo(), curveCircle(),
+     * Makes the step chained, as withoutExit() does. A later withExit()
+     * turns off the early exit and the chaining; a later withStop() turns off
+     * only the early exit. For driveTo(), curveCircle(),
      * curveCircleReverse(), moveToPoint(), boomerang() and
      * followTrajectory(). On any other step, or with a negative @p range, it
      * is a configuration error.
@@ -180,8 +181,9 @@ public:
      * The distance left is the one the motion steers by: straight-line to
      * the target for moveToPoint() and boomerang(), along the path for
      * followTrajectory() and driveTo(), and along the outer wheel's path for
-     * curveCircle(). The same steps as withEarlyExit(QLength); on any other
-     * it is a configuration error. Otherwise as atTime().
+     * curveCircle() (the robot centre's path when useRamseteForArcs() is on
+     * and the step is not chained). The same steps as withEarlyExit(QLength);
+     * on any other it is a configuration error. Otherwise as atTime().
      *
      * @code
      * routine.followTrajectory(curve, follow, 3_s)
@@ -277,12 +279,13 @@ public:
    *
    * @code
    * routine.driveTo(24_in, 1_s)
-   *        .trigger(chassis.makeCorrectHeadingCommand())
+   *        .trigger(drive.makeCorrectHeadingCommand())
    *        .turnToAngle(90_deg, 800_ms);
    * @endcode
    *
    * Subsystems the routine does not hold are claimed the usual way, so
-   * `.trigger(intake.spin())` still displaces the intake's default command.
+   * `.trigger(intake.makeForwardCommand())` still displaces the intake's
+   * default command.
    */
   Routine& trigger(std::unique_ptr<Command> command);
   Routine& runOnce(std::function<void()> action);
@@ -508,7 +511,8 @@ public:
    *        control/motion.hpp.
    *
    * The step keeps its own copy of @p trajectory and @p config. It honours
-   * `withMaxVoltage()` and `withoutExit()`; the other options do not apply.
+   * `withMaxVoltage()`, `withoutExit()` and `withEarlyExit()`; the other
+   * options do not apply.
    */
   MotionStep followTrajectory(ChassisController& chassis,
                               const path::Trajectory& trajectory,

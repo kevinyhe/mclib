@@ -147,8 +147,9 @@ class Trajectory {
 
   /**
    * @brief Plan speeds and times along @p path.
-   * @return An empty trajectory when the path is not `valid()` or a required
-   *         limit is zero, negative or not finite.
+   * @return An empty trajectory when the path is not `valid()`, a required
+   *         limit is zero, negative or not finite, or a `SpeedZone` is
+   *         invalid.
    */
   static Trajectory generate(const Path& path,
                              const TrajectoryConstraints& constraints);

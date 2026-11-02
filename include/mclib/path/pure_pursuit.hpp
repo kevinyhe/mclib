@@ -22,16 +22,17 @@
  * to the robot's right.** A robot sitting on a straight path aimed along it
  * gets curvature exactly zero.
  *
- * ## The four cases that break naive implementations
+ * ## The five cases that break naive implementations
  *
  * - **Multiple intersections.** The lookahead circle can cut the path in
  *   several places. The follower takes the **first intersection at or after
- *   the monotone lookahead cursor**, walking segments forward from where it
- *   left off last tick. "First ahead" and not "furthest along" is the whole
- *   point: on a hairpin the far branch is also inside the circle, and chasing
- *   it would cut the corner and skip the rest of the path. The cursor never
- *   moves backwards, so a path that passes near itself cannot drag the goal
- *   back to an earlier lap.
+ *   the lookahead cursor**, walking segments forward from where it left off
+ *   last tick. If that finds none, it searches again from the closest point.
+ *   "First ahead" and not "furthest along" is the whole point: on a hairpin
+ *   the far branch is also inside the circle, and chasing it would cut the
+ *   corner and skip the rest of the path. Neither search starts behind the
+ *   closest point, which never moves backwards, so a path that passes near
+ *   itself cannot drag the goal back to an earlier lap.
  * - **Off the path.** When the closest point on the path is further away than
  *   the lookahead, no intersection exists at all. The follower then aims at
  *   the path point one lookahead **beyond the closest point**, which is a
@@ -296,10 +297,11 @@ class PurePursuit {
   QLength progress() const { return m_progress; }
 
   /**
-   * @brief Register the four channels worth plotting on @p logger.
+   * @brief Register the five channels worth plotting on @p logger.
    *
    * @details Optional. After this, every `update()` writes the goal point,
-   * cross-track error and curvature into the logger; the caller still owns
+   * cross-track error, curvature (1/in) and commanded velocity into the
+   * logger; the caller still owns
    * calling `sample()`. Registration must happen before the logger's first
    * sample, as with any channel.
    */
@@ -342,9 +344,10 @@ class PurePursuit {
   Path m_path;
   PurePursuitConfig m_config;
 
-  // Search cursors. Both only ever move forward; `reset()` is the only way
-  // back. This is what stops a path that doubles back from dragging the goal
-  // point onto an earlier part of the route.
+  // Search cursors. The closest-point cursor only moves forward, and the
+  // lookahead cursor never falls behind it; `reset()` is the only way back.
+  // This is what stops a path that doubles back from dragging the goal point
+  // onto an earlier part of the route.
   std::size_t m_closest_index = 0;
   double m_closest_t = 0.0;
   std::size_t m_lookahead_index = 0;

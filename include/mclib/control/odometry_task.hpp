@@ -25,14 +25,16 @@
  * robot can describe its own layout:
  *
  * @code
- * mclib::Chassis chassis({-11, 13, 14}, {-16, 17, -18}, Gearset::Blue, geometry, imu);
+ * mclib::Chassis chassis({-11, 13, 14}, {-16, 17, -18}, mclib::device::Gearset::Blue,
+ *                       geometry, imu);
  * mclib::device::Rotation vertical_tracker(-6);
  *
  * void initialize() {
  *   imu->reset(true);
  *   auto setup = mclib::control::odometrySetupFrom(chassis);
  *   setup.vertical = {mclib::control::encoderReader(vertical_tracker),
- *                     mclib::units::TrackingWheel{Wheel::fromDiameter(2_in), 0_in, 1.0}};
+ *                     mclib::units::TrackingWheel{mclib::units::Wheel::fromDiameter(2_in),
+ *                                                 0_in, 1.0}};
  *   mclib::control::startOdometry(setup);
  * }
  * @endcode
@@ -179,7 +181,8 @@ bool odometrySetupIsUsable(const OdometrySetup& setup);
  *        `odometryTick()`.
  *
  * Exposed so a caller can integrate on its own schedule instead of starting
- * the task. Readers that are not set contribute 0.
+ * the task. Readers that are not set contribute 0, except `heading_deg`,
+ * which gives NaN.
  */
 OdometrySample sampleOdometrySensors(const OdometrySetup& setup);
 

@@ -88,7 +88,7 @@ public:
    * @brief Forward and turn as fractions of full power, -1..1.
    *
    * Positive @p turn_percent turns **clockwise**, matching `tank(+x, -x)` and
-   * a positive `ChassisController::turnToHeading()` delta.
+   * the compass frame, where headings grow clockwise.
    */
   void arcade(double forward_percent, double turn_percent);
   void stop(device::BrakeMode mode = device::BrakeMode::Brake);
@@ -129,8 +129,8 @@ public:
    * odometry's heading frame and the frame `motion.cpp` steers in stay
    * identical. That holds when the odometry task reads its heading from this
    * Chassis - `odometrySetupFrom(chassis)` - which is the normal setup. A
-   * Chassis built with `imu == nullptr` reports the odometry's own heading
-   * and has nothing to write, so the frames cannot drift.
+   * Chassis built with `imu == nullptr` computes heading from the drive
+   * encoders, and this shifts that heading to `pose.theta` instead.
    */
   void setPose(const Pose2D& pose);
 

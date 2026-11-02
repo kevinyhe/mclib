@@ -62,12 +62,8 @@ void skillsAuton() {
 }
 
 void initialize() {
-  // Calibrate before anything reads the IMU. The odometry tracks heading as
-  // deltas from the pose it was reset to, while the motion routines steer on
-  // the raw IMU rotation; starting the two in different frames leaves every
-  // moveToPoint aiming off by a constant.
+  // Calibrate before anything reads the IMU.
   imu->reset(true);
-  imu->setRotationDeg(0.0);
 
   // One odometry, on its own task, from here until the program ends. Nothing
   // else in mclib writes the pose.
@@ -75,11 +71,16 @@ void initialize() {
   odometry.vertical = mclib::control::TrackingWheelSensor{
       mclib::control::encoderReader(vertical_tracker), vertical_wheel};
   // False means the setup was rejected or odometry is already running: every
-  // motion would then steer on a pose that never moves. Say so.
+  // motion would then steer on a pose that never moves. Say so, on line 1: the
+  // selector below writes line 0.
   if (!mclib::control::startOdometry(odometry)) {
-    master.setText(0, 0, "ODOM NOT RUNNING");
+    master.setText(1, 0, "ODOM NOT RUNNING");
   }
-  mclib::control::resetOdometry(mclib::Pose2D{});
+  // Set the IMU and the odometry pose together. The odometry tracks heading as
+  // deltas from the pose it was reset to, while the motion routines steer on
+  // the raw IMU rotation; starting the two in different frames leaves every
+  // moveToPoint aiming off by a constant.
+  chassis.setPose(0_in, 0_in, 0_deg);
 
   // Pick the autonomous on the brain screen or with the controller's left and
   // right buttons. Polling stops by itself when the match starts.

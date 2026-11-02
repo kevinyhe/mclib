@@ -23,8 +23,9 @@
  *        out = (e^(-g/10) + e^((|x| - 1) * g / 10) * (1 - e^(-g/10))) * x
  *
  *    `g` is `gain`. At `g = 0` this is `out = x`. For larger `g` the slope
- *    near the centre is `e^(-g/10)` - at `g = 10` a quarter-stick gives 0.17
- *    instead of 0.25 - while `out(1)` stays exactly 1. The curve is odd in
+ *    near the centre is `e^(-g/10) * (2 - e^(-g/10))`, 0.60 at `g = 10` - at
+ *    `g = 10` a quarter-stick gives 0.17 instead of 0.25 - while `out(1)`
+ *    stays exactly 1. The curve is odd in
  *    `x` and strictly increasing, so it never reverses the driver.
  * 3. **Minimum output.** If `min_output` is non-zero, the curved value is
  *    rescaled from `[0, 1]` onto `[min_output, 1]`, so any stick outside the
