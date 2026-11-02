@@ -28,6 +28,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from engine import ROOT, readiness, write_json  # noqa: E402
 from export_cpp import export  # noqa: E402
+from fields import drawings  # noqa: E402
 from geometry import designed_poses  # noqa: E402
 from native_viewer import NativeViewerError, asset as native_asset  # noqa: E402
 from project import LIMITS, PRESETS, TRACKING, ProjectError, config, step_name, strict_json, validate_project  # noqa: E402
@@ -65,6 +66,7 @@ class Planner:
     def __init__(self, output, vexsim, wall_timeout=900):
         self.output, self.vexsim = Path(output).resolve(), Path(vexsim).resolve()
         self.cache = self.output / "cache"
+        self._field_drawings = None
         self.output.mkdir(parents=True, exist_ok=True)
         self.wall_timeout = wall_timeout
         self.jobs = OrderedDict()
@@ -78,6 +80,12 @@ class Planner:
         self._restore()
         self.worker = threading.Thread(target=self._worker, name="run-worker", daemon=True)
         self.worker.start()
+
+    @property
+    def field_drawings(self):
+        if self._field_drawings is None:
+            self._field_drawings = drawings(self.vexsim)
+        return self._field_drawings
 
     def _restore(self):
         paths = sorted(self.output.glob("[0-9a-f]" * 32 + "/job.json"),
@@ -407,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
         planner = self.server.planner
         if path == "/api/config":
             self.send(200, dict(config(), examples=examples(), vexsim=str(planner.vexsim),
-                                output=str(planner.output)))
+                                output=str(planner.output), field_drawings=planner.field_drawings))
         elif path == "/api/engine":
             preset, tracking = query.get("preset", [""])[0], query.get("tracking", [""])[0]
             if preset not in PRESETS or tracking not in TRACKING:

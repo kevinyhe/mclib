@@ -22,6 +22,7 @@ ONE_POINT = dict(steps=[dict(type="path", points=[dict(x=0, y=0)], sections=[dic
 class StubPlanner:
     def __init__(self):
         self.vexsim, self.output = Path("/vexsim"), Path("/output")
+        self.field_drawings = dict(override=dict(half_in=70.2), push_back=dict(half_in=70.2), open=None)
         self.submitted = []
 
     def engine_state(self, preset, tracking):

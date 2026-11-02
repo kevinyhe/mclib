@@ -179,6 +179,7 @@ class PhysicsBridge:
         # Observer only: publishing a snapshot must never advance simulation time
         # or substitute simulator truth for the sampled controller inputs.
         self.on_capture = None
+        self.step_world = self.sim.step
         self.commands = [(1, 0), (1, 0)]
         self.peak_command = 0
         self.last_heading = self.unwrapped_heading = 0.0
@@ -312,7 +313,7 @@ class PhysicsBridge:
                 if self.on_capture is not None:
                     self.on_capture(self.control_trace[-1])
             for _ in range(millis):
-                self.sim.step(0.001)
+                self.step_world(0.001)
             heading = self.sim.imu.heading
             self.unwrapped_heading += math.remainder(heading - self.last_heading, 2 * math.pi)
             self.last_heading = heading

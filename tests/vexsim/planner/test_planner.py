@@ -19,8 +19,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 from export_cpp import export, exported_helpers  # noqa: E402
-from project import (DEFAULT_PROJECT, ProjectError, carries_speed, config, step_time_limit,  # noqa: E402
-                     strict_json, validate_project)
+from project import (DEFAULT_PROJECT, ProjectError, carries_speed, config, default_project,  # noqa: E402
+                     step_time_limit, strict_json, validate_project)
 
 VEXSIM = Path(os.environ.get("VEXSIM_PATH", ROOT.parent / "vexsim")).resolve()
 
@@ -44,6 +44,12 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(project["steps"][0]["type"], "path")
         self.assertEqual(DEFAULT_PROJECT, before)
         json.dumps(config(), allow_nan=False)
+
+    def test_new_routines_use_override_and_old_files_the_open_floor(self):
+        self.assertEqual(validate_project(default_project())["field"], "override")
+        self.assertEqual(validate_project({})["field"], "open")
+        with self.assertRaisesRegex(ValueError, "Field must be one of"):
+            validate_project(dict(field="moon"))
 
     def test_every_example_is_valid(self):
         for path in sorted((HERE / "examples").glob("*.json")):
@@ -289,6 +295,19 @@ class EngineTests(unittest.TestCase):
             if chain:
                 self.assertIn("no final turn or settle", " ".join(result["steps"][0]["info"]))
         self.assertLess(totals[True], totals[False] - 0.5)
+
+
+    def test_7_override_reports_where_and_how_hard_the_robot_hit(self):
+        project = dict(field="override", start=dict(x=24, y=-50, heading=180),
+                       steps=[dict(type="drive", distance=20, timeout_ms=1500)])
+        done, output = self.run_routine(project)
+        result = strict_json((output / "result.json").read_text())
+        step = result["steps"][0]
+        hit = next(line for line in step["info"] if line.startswith("Hit the wall at"))
+        self.assertRegex(hit, r"peak \d+ N")
+        self.assertEqual(step["contacts"][0]["element"], "the wall")
+        self.assertGreater(step["contacts"][0]["peak_force_n"], 20)
+        self.assertTrue(any(frame.get("contact") == "the wall" for frame in result["trace"]))
 
 
 if __name__ == "__main__":

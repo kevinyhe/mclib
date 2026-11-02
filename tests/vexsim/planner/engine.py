@@ -26,6 +26,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
+from fields import contact_dict, contacts_between, describe_contact, make_world  # noqa: E402
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
 from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, carries_speed, step_name, step_time_limit,
                      strict_json, validate_project)  # noqa: E402
@@ -408,7 +409,7 @@ def invoke(lib, bridge, project, step, start, feedforward, timeout_ms, plan):
     if kind == "reverse_arc" and math.remainder(step["heading"] - bridge.pose()[2], 360) * step["radius"] > 1e-8:
         raise ValueError("A reverse arc needs the radius and the heading change to have opposite signs "
                          "from where the robot is now. Flip the radius sign or change the heading")
-    if kind == "wall_reset":
+    if kind == "wall_reset" and project["field"] == "open":
         bridge.sim.dynamics.locked = True
     first = step.get("distance", step.get("x", step.get("heading", 0)))
     second = step.get("y", step.get("radius", 0))
@@ -603,7 +604,12 @@ def _execute(raw, destination, vexsim, cache, progress):
                                    tuning=project["gains"], start_pose=(start["x"], start["y"], start["heading"]),
                                    sim_time_limit=LIMITS["max_simulated_s"])
     recorder = Recorder(destination)
-    bridge.on_capture = recorder.record
+    world = make_world(project["field"], bridge.sim)
+    if world is None:
+        bridge.on_capture = recorder.record
+    else:
+        bridge.step_world = world.step
+        bridge.on_capture = lambda frame: recorder.record(dict(frame, **world.telemetry()))
     progress.begin("simulate", "Running each step with the real mclib motion calls against vexsim physics.")
     rows = []
     halted = False
@@ -683,8 +689,11 @@ def _execute(raw, destination, vexsim, cache, progress):
                     notes.append(settle_hint)
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
+        contacts = contacts_between(world, started, bridge.sim.t)
+        info.extend(describe_contact(contact, started) for contact in contacts)
         failed = [item["message"] for item in checks if not item["passed"]]
         rows.append(dict(index=index, type=step["type"], executed=True, passed=passed,
+                         contacts=[contact_dict(contact, started) for contact in contacts],
                          reason="All checks passed." if passed else " ".join(failed),
                          checks=checks, notes=notes, info=info, target=target, timeout_ms=timeout_ms,
                          position_error_in=position_error, heading_error_deg=heading_error,

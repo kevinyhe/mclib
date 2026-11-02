@@ -261,6 +261,10 @@ function telemetryRows(frame, target) {
       ["Forward / sideways speed", pair(f.forward_speed_ips, f.lateral_speed_ips, " in/s")],
       ["Turn rate", num(f.yaw_rate_dps, " °/s")],
     ]],
+    ...("contact" in f ? [["Field contact", [
+      ["Touching", f.contact ?? "nothing"],
+      ["Contact force", num(f.contact_force_n, " N", 0)],
+    ]]] : []),
     ["Controller", [
       ["Phase", typeof f.controller_phase === "string" ? f.controller_phase : "—"],
       ["Target heading / error", pair(f.controller_target_heading_deg, f.controller_heading_error_deg, "°")],

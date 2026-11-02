@@ -4,6 +4,8 @@ import copy
 import json
 import math
 
+from fields import GAME_FIELDS, NEW_ROUTINE_FIELD, OLD_FILE_FIELD
+
 FORMAT = "mclib-path-planner"
 VERSION = 1
 
@@ -87,7 +89,8 @@ STEP_TYPES = {
                   fields=["heading", "direction"], defaults=dict(heading=90, direction=1)),
     "wall_reset": dict(label="Wall reset", call="wallReset()",
                        description="Push into a wall until the motors stall, then set odometry to this pose. "
-                                   "The simulator has no walls: the drive is held still as if it were touching one. "
+                                   "On a game field the robot pushes against the real wall. On the open floor "
+                                   "there are no walls, so the drive is held still as if it were touching one. "
                                    "Must be the last step, because it moves the odometry frame.",
                        fields=["x", "y", "heading", "current_ma"],
                        defaults=dict(x=0, y=0, heading=0, current_ma=2500)),
@@ -131,7 +134,7 @@ LIMITS = dict(max_steps=40, max_points=30, max_simulated_s=120, max_body_bytes=2
               max_handle_in=300, settle_allowance_ms=4000, chain_allowance_ms=500)
 
 DEFAULT_PROJECT = dict(
-    format=FORMAT, version=VERSION, name="New routine",
+    format=FORMAT, version=VERSION, name="New routine", field=OLD_FILE_FIELD,
     robot=dict(preset="six_motor_450", tracking="two", heading_source="imu"),
     conditions={key: item["default"] for key, item in CONDITIONS.items()},
     gains={key: item["default"] for key, item in GAINS.items()},
@@ -265,6 +268,9 @@ def validate_project(raw):
         raise ValueError("The routine name must be 1 to 80 characters on one line")
     if not isinstance(project["stop_on_failure"], bool):
         raise ValueError("Stop at the first failed step must be true or false")
+    project["field"] = raw.get("field", OLD_FILE_FIELD)
+    if project["field"] not in GAME_FIELDS:
+        raise ValueError(f"Field must be one of: {', '.join(GAME_FIELDS)}")
     project["robot"].update(_object(raw.get("robot", {}), project["robot"], "Robot"))
     for key, choices in (("preset", PRESETS), ("tracking", TRACKING), ("heading_source", HEADING_SOURCES)):
         if project["robot"][key] not in choices:
@@ -345,13 +351,17 @@ def step_time_limit(step, plan):
     return int(math.ceil(planned_ms / 100) * 100)
 
 
+#: Back against the red Alliance Station wall, facing the red Goal in front of it
+OVERRIDE_START = dict(x=24, y=-62.7, heading=0)
+
+
 def default_project():
-    return copy.deepcopy(DEFAULT_PROJECT)
+    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START))
 
 
 def config():
     """Everything the page needs to draw its forms."""
-    return dict(format=FORMAT, version=VERSION, presets=PRESETS, tracking=TRACKING,
+    return dict(format=FORMAT, version=VERSION, game_fields=GAME_FIELDS, presets=PRESETS, tracking=TRACKING,
                 heading_sources=HEADING_SOURCES, gains=GAINS, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
                 path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, limits=LIMITS,
                 default_project=default_project())

@@ -1021,6 +1021,11 @@
         onCommit: (value) => edit(() => { project[group][key] = key === "noise_seed" ? Math.round(value) : value; }) })));
     const robotChanged = () => { checkEngine(); };
     $("pane-robot").replaceChildren(
+      element("h3", { text: "Field" }),
+      element("div", { class: "form" },
+        selectInput("Field", project.field, Object.entries(config.game_fields),
+          "What the robot drives on. On a game field it hits the walls, Goals and Loaders, and the results say where and how hard.",
+          (value) => edit(() => { project.field = value; }, { replan: false }))),
       element("h3", { text: "Robot" }),
       element("div", { class: "form" },
         selectInput("Drivetrain", robot.preset, Object.entries(config.presets).map(([key, value]) => [key, value.label]),
@@ -1119,9 +1124,73 @@
     return "rgb(216,67,47)";
   }
 
+  function fieldDrawing() {
+    return state.config.field_drawings?.[state.project.field] ?? null;
+  }
+
+  function fillPolygon(ctx, points, fill, stroke = null, width = 1) {
+    ctx.beginPath();
+    points.forEach(([x, y], i) => {
+      const p = toScreen({ x, y });
+      if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+    });
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width; ctx.stroke(); }
+  }
+
+  const ALLIANCE_FILL = { red: "#d9483b", blue: "#2f6bd8", yellow: "#e8b400", neutral: "#68707c", center: "#4b525c" };
+
+  function drawOverrideField(ctx, drawing, frame) {
+    const scale = state.view.scale;
+    ctx.save();
+    for (const quadrant of drawing.quadrants) {
+      fillPolygon(ctx, quadrant.outline, quadrant.color === "red" ? "rgba(217,72,59,.07)" : "rgba(47,107,216,.07)");
+    }
+    const line = (points, width) => polyline(ctx, points.map(([x, y]) => ({ x, y })), "rgba(255,255,255,.95)", width);
+    line(drawing.tape.auton_line, drawing.tape.auton_line_width_in * scale);
+    line(drawing.tape.diagonal, Math.max(1, 0.5 * scale));
+    line([...drawing.tape.midfield, drawing.tape.midfield[0]], Math.max(1.5, scale));
+    for (const loader of drawing.loaders) {
+      ctx.setLineDash([4, 3]);
+      fillPolygon(ctx, loader.zone, null, ALLIANCE_FILL[loader.alliance], 1.2);
+      ctx.setLineDash([]);
+      fillPolygon(ctx, loader.outline, "#f4f5f7", ALLIANCE_FILL[loader.alliance], 2);
+    }
+    const toggleColors = frame?.toggles ?? {};
+    for (const toggle of drawing.toggles) {
+      const color = toggleColors[toggle.quadrant]?.inner ?? toggle.faces[0];
+      fillPolygon(ctx, toggle.outline, ALLIANCE_FILL[color], "#c2408f", 2);
+    }
+    for (const goal of drawing.goals) {
+      fillPolygon(ctx, goal.outline, ALLIANCE_FILL[goal.kind], "#20252c", 1.2);
+      const centre = toScreen({ x: goal.center[0], y: goal.center[1] });
+      ctx.beginPath();
+      ctx.arc(centre.x, centre.y, 1.18 * scale, 0, 2 * Math.PI);
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawPushBackField(ctx, drawing) {
+    ctx.save();
+    for (const zone of drawing.park_zones) fillPolygon(ctx, zone.outline, zone.alliance === "red" ? "rgba(217,72,59,.18)" : "rgba(47,107,216,.18)", ALLIANCE_FILL[zone.alliance], 1.5);
+    for (const solid of drawing.solids) {
+      const p = toScreen({ x: solid.center[0], y: solid.center[1] });
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, solid.radius_in * state.view.scale, 0, 2 * Math.PI);
+      ctx.fillStyle = "#68707c";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function drawFieldBackground(ctx) {
-    const a = toScreen({ x: -FIELD_HALF_IN, y: FIELD_HALF_IN });
-    const b = toScreen({ x: FIELD_HALF_IN, y: -FIELD_HALF_IN });
+    const drawing = fieldDrawing();
+    const half = drawing?.half_in ?? FIELD_HALF_IN;
+    const a = toScreen({ x: -half, y: half });
+    const b = toScreen({ x: half, y: -half });
     ctx.fillStyle = "#e9ecf0";
     ctx.fillRect(0, 0, state.size.width, state.size.height);
     ctx.fillStyle = "#d9dde3";
@@ -1144,8 +1213,10 @@
       ctx.moveTo(r.x, r.y); ctx.lineTo(s.x, s.y);
     }
     ctx.stroke();
-    ctx.strokeStyle = "#5b6370";
-    ctx.lineWidth = Math.max(2, 1.5 * state.view.scale);
+    if (drawing && state.project.field === "override") drawOverrideField(ctx, drawing, frameNow());
+    if (drawing && state.project.field === "push_back") drawPushBackField(ctx, drawing);
+    ctx.strokeStyle = drawing ? "#2b3038" : "#5b6370";
+    ctx.lineWidth = Math.max(2, (drawing ? 2 : 1.5) * state.view.scale);
     ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.fillStyle = "#7d8694";
     ctx.font = "11px system-ui, sans-serif";
