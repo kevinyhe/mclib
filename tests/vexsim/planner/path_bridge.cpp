@@ -11,7 +11,7 @@
 // pairs in inches, the speed limit in in/s, and 1 when reversed. Limits are
 // acceleration and cornering acceleration in in/s^2 and the track width in
 // inches. RAMSETE settings are kS in V, kV in V per in/s, b, zeta and the
-// effective track width in inches.
+// effective track width in inches. Start and end speeds are in in/s.
 #include "path_helpers.hpp"
 
 #include <vector>
@@ -51,8 +51,9 @@ extern "C" int planner_folded_section(const double* sections, int section_count)
 // counted from the start of the path. Returns the number of states, -1 when
 // the sections can't be planned, -2 when @p max_states is too small.
 extern "C" int planner_plan(const double* sections, int section_count, const double* limits,
-                            double* out, int max_states) {
-  const auto plans = path_planner::planSections(readSections(sections, section_count), readLimits(limits));
+                            double start_ips, double end_ips, double* out, int max_states) {
+  const auto plans = path_planner::planSections(readSections(sections, section_count), readLimits(limits),
+                                                start_ips, end_ips);
   if (plans.empty()) return -1;
   int written = 0;
   double time_offset_s = 0, distance_offset_in = 0;
@@ -78,14 +79,17 @@ extern "C" int planner_plan(const double* sections, int section_count, const dou
 // Plans the sections and follows them. Returns the MotionResult as an int, or
 // -1 when the sections can't be planned.
 extern "C" int planner_follow(const double* sections, int section_count, const double* limits,
-                              const double* ramsete, double timeout_ms, double volts) {
+                              const double* ramsete, double start_ips, double end_ips, double timeout_ms,
+                              double volts, int exit) {
   using namespace mclib::units;
-  const auto plans = path_planner::planSections(readSections(sections, section_count), readLimits(limits));
+  const auto plans = path_planner::planSections(readSections(sections, section_count), readLimits(limits),
+                                                start_ips, end_ips);
   if (plans.empty()) return -1;
   mclib::control::RamseteConfig config;
   config.feedforward.kS = ramsete[0] * volt;
   config.feedforward.kV = ramsete[1] * volt / inps;
   config.gains = {ramsete[2], ramsete[3]};
   config.track_width = ramsete[4] * inch;
-  return static_cast<int>(path_planner::followSections(plans, config, timeout_ms * millisecond, volts * volt));
+  return static_cast<int>(
+      path_planner::followSections(plans, config, timeout_ms * millisecond, volts * volt, exit != 0));
 }

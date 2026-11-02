@@ -16,6 +16,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   measured and the limit. Playback with telemetry, run comparison, the 3D
   view, undo and redo, JSON save and load, mirroring, and an
   `autonomous()` export that uses the same path code the simulator ran.
+- Path planner: **Keep moving into the next step** runs a step with
+  `exit = false`, so the next step starts at once without stopping or
+  settling. A path chained into another path carries its speed across the
+  join. A path that settles reports how far off it was when its plan ran
+  out, and says when `followTrajectory()` had to back off and drive back in.
   Start it with `python3 tests/vexsim/planner/server.py --vexsim ../vexsim`.
 - Owning forms of the command decorators: `Command::andThen(a, b)`,
   `with(a, b)`, `race(a, b)`, `withTimeout(a, t)`, `until(a, condition)`,

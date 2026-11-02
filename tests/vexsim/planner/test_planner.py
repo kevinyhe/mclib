@@ -19,8 +19,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 from export_cpp import export, exported_helpers  # noqa: E402
-from project import (DEFAULT_PROJECT, ProjectError, config, step_time_limit, strict_json,  # noqa: E402
-                     validate_project)
+from project import (DEFAULT_PROJECT, ProjectError, carries_speed, config, step_time_limit,  # noqa: E402
+                     strict_json, validate_project)
 
 VEXSIM = Path(os.environ.get("VEXSIM_PATH", ROOT.parent / "vexsim")).resolve()
 
@@ -72,6 +72,34 @@ class ProjectTests(unittest.TestCase):
             validate_project(dict(steps=[dict(type="wall_reset", x=0, y=63, heading=0), dict(type="turn", heading=0)]))
         self.assertIn("a wall reset must be the last step", str(caught.exception))
 
+    def test_keep_moving_is_refused_where_mclib_cannot_chain(self):
+        cases = [
+            ([dict(type="turn", heading=90, chain=True)],
+             "Step 1 (Turn to heading): cannot keep moving into the next step. The last step has to stop: "
+             "there is no next step to keep moving into."),
+            ([dict(type="turn_to_point", x=0, y=24, chain=True), dict(type="turn", heading=0)],
+             "Step 1 (Turn to face a point): cannot keep moving into the next step. turnToPoint() has no exit "
+             "option in mclib, so it always stops."),
+            ([dict(type="drive", distance=12, chain="yes"), dict(type="turn", heading=0)],
+             "Step 1 (Drive straight): Keep moving into the next step must be true or false"),
+        ]
+        for steps, message in cases:
+            with self.subTest(message):
+                with self.assertRaises(ProjectError) as caught:
+                    validate_project(dict(steps=steps))
+                self.assertEqual(str(caught.exception), message)
+        project = validate_project(dict(steps=[dict(type="drive", distance=12, chain=True), dict(type="turn", heading=0)]))
+        self.assertEqual([step["chain"] for step in project["steps"]], [True, False])
+
+    def test_speed_carries_only_between_chained_paths_in_the_same_direction(self):
+        def project(*steps):
+            return validate_project(dict(steps=list(steps)))
+        chained = dict(path_step([(0, 0)]), chain=True)
+        self.assertTrue(carries_speed(project(chained, path_step([(0, 24)])), 0))
+        self.assertFalse(carries_speed(project(chained, path_step([(0, -24)], reverse=[0])), 0))
+        self.assertFalse(carries_speed(project(chained, dict(type="turn", heading=0)), 0))
+        self.assertFalse(carries_speed(project(path_step([(0, 0)]), path_step([(0, 24)])), 0))
+
     def test_files_with_repeated_keys_or_nan_are_refused(self):
         with self.assertRaisesRegex(ValueError, "repeats the key \"name\""):
             strict_json('{"name": "a", "name": "b"}')
@@ -86,6 +114,11 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(step_time_limit(step, dict(duration_s=2.345)), 6400)
         step["timeout_ms"] = 3000
         self.assertEqual(step_time_limit(step, dict(duration_s=2.345)), 3000)
+
+    def test_automatic_time_limit_of_a_path_that_keeps_moving_has_no_settle(self):
+        steps = [dict(path_step([(0, 0)]), chain=True), dict(type="turn", heading=0)]
+        step = validate_project(dict(steps=steps))["steps"][0]
+        self.assertEqual(step_time_limit(step, dict(duration_s=2.345)), 2900)
 
 
 class ExportTests(unittest.TestCase):
@@ -114,7 +147,8 @@ class ExportTests(unittest.TestCase):
 
     def test_export_compiles_and_carries_the_simulated_helpers(self):
         project = self.every_step()
-        plans = [dict(duration_s=2.44, length_in=80.0, top_speed_ips=60.0) if step["type"] == "path" else None
+        plans = [dict(duration_s=2.44, length_in=80.0, top_speed_ips=60.0, requested_start_ips=0.0,
+                      requested_end_ips=0.0) if step["type"] == "path" else None
                  for step in project["steps"]]
         code = export(project, self.SETTINGS, plans)
         self.assertIn(exported_helpers(), code)
@@ -124,6 +158,27 @@ class ExportTests(unittest.TestCase):
                      "boomerang(24_in, 24_in, 1, 90_deg, 0.5", "wallReset(24_in, 63_in, 0_deg",
                      "follow.gains.b = 50;", "6500_ms"):
             self.assertIn(call, code)
+        self.compile(code)
+
+    def test_export_of_chained_steps_passes_exit_false_and_the_join_speeds(self):
+        project = validate_project(dict(steps=[
+            dict(type="drive", distance=12, chain=True),
+            dict(path_step([(0, 36)]), chain=True),
+            path_step([(24, 60)]),
+            dict(type="turn", heading=0)]))
+        plans = [None,
+                 dict(duration_s=1.5, length_in=24.0, top_speed_ips=50.0, requested_start_ips=0.0,
+                      requested_end_ips=41.25),
+                 dict(duration_s=1.2, length_in=34.0, top_speed_ips=50.0, requested_start_ips=38.5,
+                      requested_end_ips=0.0),
+                 None]
+        code = export(project, self.SETTINGS, plans)
+        self.assertIn("driveTo(12_in, 4000_ms, false, 12_V)", code)
+        self.assertIn("}, limits, 0, 41.25);", code)
+        self.assertIn("}, limits, 38.5, 0);", code)
+        self.assertEqual(code.count(", 12_V, false)"), 1)
+        self.assertEqual(code.count(", 12_V, true)"), 1)
+        self.assertEqual(code.count("Keeps moving into the next step"), 2)
         self.compile(code)
 
     def test_export_without_a_plan_marks_the_placeholders(self):
@@ -201,6 +256,39 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(row["passed"])
         self.assertIn("Used the whole 0.30 s time limit without finishing.", row["reason"])
         self.assertRegex(row["reason"], r"Ended \d+\.\d\d in from the target\. The limit is 2\.5 in\.")
+
+    def test_5_a_chained_drive_hands_off_without_stopping(self):
+        project = dict(steps=[dict(type="drive", distance=24, chain=True), dict(type="turn", heading=90)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        drive, turn = strict_json((output / "result.json").read_text())["steps"]
+        self.assertNotIn("stopped", [check["id"] for check in drive["checks"]])
+        self.assertIn("stopped", [check["id"] for check in turn["checks"]])
+        self.assertRegex(drive["reason"], "All checks passed")
+        self.assertTrue(any(check["message"].startswith("Handed off") for check in drive["checks"]))
+        self.assertEqual(drive["end_time_s"], turn["start_time_s"])
+        handoff = next(line for line in drive["info"] if line.startswith("Kept moving into step 2 at"))
+        self.assertGreater(float(handoff.split(" at ")[1].split(" in/s")[0]), 5)
+
+    def test_6_chained_paths_carry_their_speed_across_the_join(self):
+        def routine(chain):
+            return dict(steps=[dict(path_step([(0, -12)]), chain=chain), path_step([(0, 24)]),
+                               dict(type="turn", heading=90)])
+        answer = json.loads(self.engine("plan", routine(True)).stdout)
+        self.assertNotIn("error", answer, answer)
+        first, second = answer["plans"][:2]
+        self.assertGreater(first["end_speed_ips"], 10)
+        self.assertAlmostEqual(second["start_speed_ips"], first["end_speed_ips"], places=6)
+        self.assertLessEqual(first["end_speed_ips"], first["requested_end_ips"] + 1e-9)
+        totals = {}
+        for chain in (True, False):
+            done, output = self.run_routine(routine(chain))
+            self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+            result = strict_json((output / "result.json").read_text())
+            totals[chain] = result["steps"][1]["return_time_s"]
+            if chain:
+                self.assertIn("no final turn or settle", " ".join(result["steps"][0]["info"]))
+        self.assertLess(totals[True], totals[False] - 0.5)
 
 
 if __name__ == "__main__":

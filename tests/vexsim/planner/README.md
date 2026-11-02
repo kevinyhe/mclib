@@ -79,9 +79,32 @@ or its round heading knob on the field, or type the values. A wall reset
 must be the last step: the simulator has no walls, so it locks the motors
 to make them stall.
 
+## Keep moving into the next step
+
+By default every step stops and settles, then the planner waits 0.3 s
+before the next one. Tick **Keep moving into the next step** (under **When
+it ends**) to chain a step into the next:
+
+- The step runs with `exit = false`. It ends as soon as the robot reaches or
+  passes its target, with the drive still powered, and the next step starts
+  at once. There is no 0.3 s pause.
+- A path that keeps moving into another path carries its speed across the
+  join. The first path ends at the fastest speed the second can start at,
+  and the second starts at the speed the first reached. The plan card shows
+  both. Where the direction flips at the join, the robot stops there.
+- A path that keeps moving has no final turn or settle, so its automatic
+  time limit is the planned time plus 0.5 s.
+- Any other step after it starts from whatever speed the robot has.
+
+Not allowed on turn to face a point (`turnToPoint()` has no `exit` option),
+on a wall reset, or on the last step. A chained step is checked where it
+hands off: position against the usual limit, heading only for turns, swings
+and arcs, and no Stopped check. Export C++ writes `false` for `exit`, and
+the join speeds for chained paths.
+
 ## Checks
 
-Each step is checked after a 0.3 s pause:
+Each step that stops is checked after a 0.3 s pause:
 
 | Check | Limit |
 | --- | --- |
@@ -95,7 +118,11 @@ A failed check says what was measured and the limit, for example
 first failed step** on, later steps are skipped, as in the exported C++.
 
 A path step also reports the largest gap between the robot and the plan, and
-how long it took against the planned time.
+how long it took against the planned time. When it ends, it reports how far
+off odometry was where the plan ran out and how long the settle took. If the
+robot was more than 3 in to the side, `followTrajectory()` backs off and
+drives back in with `boomerang()`, which costs 2 to 5 s; the hint says so
+and what to change.
 
 ## Saving and exporting
 

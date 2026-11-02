@@ -123,6 +123,20 @@ try {
   assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Turn/);
   pass("Add a step puts a turn after the path");
 
+  const keepMoving = (scope) => page.locator(`${scope} label.check`, { hasText: "Keep moving into the next step" });
+  assert(await keepMoving("#pane-step").locator("input").isDisabled());
+  assert.match(await keepMoving("#pane-step").innerText(), /The last step has to stop/);
+  await page.locator("#step-list li").first().click();
+  await keepMoving("#pane-step").locator("input").check();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[0].chain === true);
+  assert.match(await page.locator("#step-list li").first().innerText(), /Keeps moving into step 2/);
+  assert.match(await page.locator("#pane-step").innerText(), /planned time plus 0\.5 s/);
+  await shot("03b-keep-moving");
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[0].chain === false);
+  pass("Keep moving is refused on the last step with the reason, ticks on the path, and Ctrl+Z unticks it");
+  await page.locator("#step-list li").nth(1).click();
+
   const finished = () => /Run \d+: \d+ of \d+ steps passed/.test(document.querySelector("#run-summary").textContent);
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));

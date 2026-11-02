@@ -212,7 +212,7 @@
 
   function newStep(type, after) {
     const info = state.config.step_types[type];
-    const step = { type, note: "", timeout_ms: 4000, volts: type === "wall_reset" ? 6 : 12, ...clone(info.defaults) };
+    const step = { type, note: "", timeout_ms: 4000, volts: type === "wall_reset" ? 6 : 12, chain: false, ...clone(info.defaults) };
     const pose = poses()[after]?.end ?? state.project.start;
     const ahead = along(pose.heading, 24);
     if ("x" in step && type !== "wall_reset") {
@@ -636,6 +636,7 @@
         element("span", { class: "step-title", text: step.note ? `${stepInfo(step).label}: ${step.note}` : stepInfo(step).label }),
         resultBadge(row)),
       element("div", { class: "step-sub", text: stepSummary(step, index) }),
+      step.chain ? element("div", { class: "step-chain", text: `Keeps moving into step ${index + 2}` }) : null,
       problem ? element("div", { class: "step-problem", text: problem }) : null,
       actions);
     });
@@ -828,6 +829,22 @@
     return element("label", { class: "check" }, input, element("span", {}, label, help ? element("span", { class: "help", text: help }) : null));
   }
 
+  function chainReason(step, index) {
+    const rules = state.config.chain;
+    if (rules.not_allowed[step.type]) return rules.not_allowed[step.type];
+    if (index === state.project.steps.length - 1) return rules.last_step;
+    return null;
+  }
+
+  function chainInput(step, index) {
+    const rules = state.config.chain;
+    const reason = chainReason(step, index);
+    const input = checkInput(rules.label, Boolean(step.chain), reason && !step.chain ? reason : rules.help,
+      (on) => edit(() => { step.chain = on; }));
+    input.querySelector("input").disabled = Boolean(reason) && !step.chain;
+    return input;
+  }
+
   function autoNumber({ label, unit, value, automatic, min, max, step, help, autoLabel, onCommit }) {
     const isAuto = value === null || value === undefined;
     const number = numberInput({ label, unit, value: isAuto ? Number(automatic.toFixed(1)) : value, min, max, step, help, disabled: isAuto, onCommit });
@@ -880,6 +897,8 @@
       ["Speed zones", `${plan.parts}`],
       ["Stops to reverse", `${plan.stops}`],
     ];
+    if (plan.start_speed_ips > 0.05) stats.push(["Starts at", `${fmt(plan.start_speed_ips)} in/s, from step ${index}`]);
+    if (plan.end_speed_ips > 0.05) stats.push(["Ends at", `${fmt(plan.end_speed_ips)} in/s, into step ${index + 2}`]);
     return element("div", { class: "card" },
       element("h3", { text: "Plan from mclib" }),
       element("dl", { class: "stats" }, ...stats.map(([label, value]) => element("div", {}, element("dt", { text: label }), element("dd", { text: value })))),
@@ -908,6 +927,7 @@
       const limits = [fieldInput(step, "timeout_ms")];
       if (step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
       children.push(element("div", { class: "form two" }, ...limits));
+      children.push(element("h3", { text: "When it ends" }), chainInput(step, index));
     }
     pane.replaceChildren(...children);
   }
@@ -936,13 +956,19 @@
     out.push(element("h3", { text: "Whole path" }));
     out.push(element("p", { class: "muted small", text: `Sections without their own limit use the default speed limit, ${defaults.speed_percent}% of top speed${top ? ` (${fmt(defaults.speed_percent / 100 * top)} in/s)` : ""}. Change it under Robot & settings.` }));
     const plan = planFor(index);
-    const automaticTimeout = plan ? Math.ceil((plan.duration_s * 1000 + state.config.limits.settle_allowance_ms) / 100) * 100 : 8000;
+    const limits = state.config.limits;
+    const allowanceMs = step.chain ? limits.chain_allowance_ms : limits.settle_allowance_ms;
+    const automaticTimeout = plan ? Math.ceil((plan.duration_s * 1000 + allowanceMs) / 100) * 100 : 8000;
+    const timeoutHelp = step.chain
+      ? `Automatic is the planned time plus ${trim(allowanceMs / 1000)} s. This path keeps moving, so it has no final turn or settle.`
+      : `Automatic is the planned time plus ${trim(allowanceMs / 1000)} s for the final turn and settle.`;
     out.push(element("div", { class: "form" },
       step.points.length ? autoNumber({ label: "Curve handle at the start", unit: "in", value: step.start_handle, automatic: layout.sections[0].handleLengths[0], min: 0.5, max: 300, step: 0.5,
         help: "How far the path runs straight out of the robot's heading before it bends.", autoLabel: "Automatic", onCommit: (value) => edit(() => { step.start_handle = value; }) }) : null,
       autoNumber({ label: "Time limit", unit: "ms", value: step.timeout_ms, automatic: automaticTimeout, min: 50, max: 60000, step: 100,
-        help: "Automatic is the planned time plus 4 s for the final turn and settle.", autoLabel: "Automatic", onCommit: (value) => edit(() => { step.timeout_ms = value === null ? null : Math.round(value); }) }),
+        help: timeoutHelp, autoLabel: "Automatic", onCommit: (value) => edit(() => { step.timeout_ms = value === null ? null : Math.round(value); }) }),
       fieldInput(step, "volts")));
+    out.push(element("h3", { text: "When it ends" }), chainInput(step, index));
     return out;
   }
 
@@ -1823,7 +1849,7 @@
   function bindKeys() {
     document.addEventListener("keydown", (event) => {
       const focused = document.activeElement;
-      const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(focused?.tagName) && focused.type !== "range";
+      const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(focused?.tagName) && !["range", "checkbox"].includes(focused.type);
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key === "Enter") { event.preventDefault(); runSimulation(); return; }
       if (typing) return;

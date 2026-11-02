@@ -21,6 +21,10 @@
  * Where the speed limit changes, the speed carries across: each plan ends at
  * the speed the next one can start at. Where the direction flips, the robot
  * stops.
+ *
+ * A path that keeps moving into the next path starts and ends at the speeds
+ * the planner worked out for the join, and its last plan leaves the drive
+ * powered (`exit` false) instead of stopping and settling.
  */
 
 // BEGIN EXPORTED HELPERS
@@ -168,11 +172,16 @@ inline mclib::path::TrajectoryConstraints constraintsFor(const Part& part, const
 /**
  * @brief Plan @p sections as one trajectory per run of sections with the
  *        same speed limit and direction.
+ * @param start_ips Speed at the first point, 0 from a stop. Lowered to what
+ *                  the path allows there.
+ * @param end_ips   Speed at the last point, 0 to stop. Lowered to what the
+ *                  path can reach.
  * @return The plans in driving order, or nothing when a section stops or
  *         doubles back on itself or a limit is not positive.
  */
 inline std::vector<mclib::path::Trajectory> planSections(const std::vector<Section>& sections,
-                                                         const Limits& limits) {
+                                                         const Limits& limits, double start_ips = 0.0,
+                                                         double end_ips = 0.0) {
   const std::vector<detail::Part> parts = detail::bakeParts(sections);
   if (parts.empty()) return {};
   const std::size_t count = parts.size();
@@ -181,32 +190,35 @@ inline std::vector<mclib::path::Trajectory> planSections(const std::vector<Secti
   };
   // Last to first: the fastest speed each part can start at and still slow
   // down for everything after it. The part before ends at that speed.
-  std::vector<double> end_ips(count, 0.0);
+  std::vector<double> part_end_ips(count, 0.0);
+  part_end_ips.back() = end_ips;
   for (std::size_t i = count; i-- > 1;) {
     const mclib::path::Trajectory fastest = mclib::path::Trajectory::generate(
-        parts[i].path, detail::constraintsFor(parts[i], limits, parts[i].max_speed_ips, end_ips[i]));
+        parts[i].path, detail::constraintsFor(parts[i], limits, parts[i].max_speed_ips, part_end_ips[i]));
     if (fastest.empty()) return {};
-    if (keepsDirection(i - 1)) end_ips[i - 1] = std::fabs(fastest.states().front().velocity.inps());
+    if (keepsDirection(i - 1)) part_end_ips[i - 1] = std::fabs(fastest.states().front().velocity.inps());
   }
   std::vector<mclib::path::Trajectory> plans;
-  double start_ips = 0.0;
+  double part_start_ips = start_ips;
   for (std::size_t i = 0; i < count; ++i) {
     plans.push_back(mclib::path::Trajectory::generate(
-        parts[i].path, detail::constraintsFor(parts[i], limits, start_ips, end_ips[i])));
+        parts[i].path, detail::constraintsFor(parts[i], limits, part_start_ips, part_end_ips[i])));
     if (plans.back().empty()) return {};
-    start_ips = keepsDirection(i) ? std::fabs(plans.back().states().back().velocity.inps()) : 0.0;
+    part_start_ips = keepsDirection(i) ? std::fabs(plans.back().states().back().velocity.inps()) : 0.0;
   }
   return plans;
 }
 
 /**
  * @brief Follow @p plans from planSections() with followTrajectory(), all
- *        within @p time_limit. Only the last plan stops and settles.
+ *        within @p time_limit.
+ * @param exit True stops and settles at the end of the last plan. False
+ *             leaves the drive powered for the next motion.
  */
 inline mclib::control::MotionResult followSections(const std::vector<mclib::path::Trajectory>& plans,
                                                    const mclib::control::RamseteConfig& config,
                                                    mclib::units::QTime time_limit,
-                                                   mclib::units::QVoltage max_output) {
+                                                   mclib::units::QVoltage max_output, bool exit = true) {
   using mclib::control::MotionResult;
   if (plans.empty()) return MotionResult::InvalidValue;
   const std::uint32_t start_ms = mclib::time::millis();
@@ -214,8 +226,8 @@ inline mclib::control::MotionResult followSections(const std::vector<mclib::path
     const mclib::units::QTime remaining =
         time_limit - static_cast<double>(mclib::time::msSince(start_ms)) * mclib::units::millisecond;
     if (!(remaining.raw() > 0)) return MotionResult::TimedOut;
-    const bool last = i + 1 == plans.size();
-    const MotionResult result = ::followTrajectory(plans[i], config, remaining, last, max_output);
+    const bool settle = exit && i + 1 == plans.size();
+    const MotionResult result = ::followTrajectory(plans[i], config, remaining, settle, max_output);
     if (result != MotionResult::Reached) return result;
   }
   return MotionResult::Reached;

@@ -162,6 +162,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .step.selected .step-number { background: var(--accent); border-color: var(--accent); color: #fff; }
 .step-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step-sub { color: var(--muted); font-size: 12px; margin-top: 2px; padding-left: 27px; }
+.step-chain { color: var(--accent-text); font-size: 12px; margin-top: 2px; padding-left: 27px; }
+.step-chain::before { content: "↳ "; }
 .step-problem { color: var(--bad); font-size: 12px; margin-top: 3px; padding-left: 27px; }
 .step-actions { display: flex; gap: 4px; margin-top: 6px; padding-left: 27px; }
 .badge {

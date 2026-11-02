@@ -5,7 +5,7 @@ bakes, plans and follows each path exactly as the simulator did."""
 from pathlib import Path
 
 from geometry import designed_poses, path_layout
-from project import PRESETS, STEP_TYPES, TRACKING, step_time_limit
+from project import PRESETS, STEP_TYPES, TRACKING, carries_speed, step_time_limit
 
 HERE = Path(__file__).resolve().parent
 PLACEHOLDER_FEEDFORWARD = dict(ks=0.7, kv=0.13, top_ips=60.0, track_in=13.5)
@@ -44,27 +44,32 @@ def describe(step, index):
     return f"// {index + 1}. {label}{note}"
 
 
+def exit_flag(step):
+    return "false" if step["chain"] else "true"
+
+
 def motion_call(step):
     kind, t, v = step["type"], step["timeout_ms"], step["volts"]
     direction = step.get("direction", 1)
+    stop = exit_flag(step)
     if kind == "drive":
-        return f"driveTo({inches(step['distance'])}, {millis(t)}, true, {volts(v)})"
+        return f"driveTo({inches(step['distance'])}, {millis(t)}, {stop}, {volts(v)})"
     if kind == "turn":
-        return f"turnToAngle({degrees(step['heading'])}, {millis(t)}, true, {volts(v)})"
+        return f"turnToAngle({degrees(step['heading'])}, {millis(t)}, {stop}, {volts(v)})"
     if kind == "point":
-        return f"moveToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)}, true, {volts(v)})"
+        return f"moveToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)}, {stop}, {volts(v)})"
     if kind == "turn_to_point":
         return f"turnToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)})"
     if kind == "boomerang":
         return (f"boomerang({inches(step['x'])}, {inches(step['y'])}, {direction}, {degrees(step['heading'])}, "
-                f"{number(step['lead'])}, {millis(t)}, true, {volts(v)})")
+                f"{number(step['lead'])}, {millis(t)}, {stop}, {volts(v)})")
     if kind == "arc":
-        return f"curveCircle({degrees(step['heading'])}, {inches(step['radius'])}, {millis(t)}, true, {volts(v)})"
+        return f"curveCircle({degrees(step['heading'])}, {inches(step['radius'])}, {millis(t)}, {stop}, {volts(v)})"
     if kind == "reverse_arc":
         return (f"curveCircleReverse({degrees(step['heading'])}, {inches(step['radius'])}, {millis(t)}, "
-                f"true, {volts(v)})")
+                f"{stop}, {volts(v)})")
     if kind == "swing":
-        return f"swing({degrees(step['heading'])}, {direction}, {millis(t)}, true, {volts(v)})"
+        return f"swing({degrees(step['heading'])}, {direction}, {millis(t)}, {stop}, {volts(v)})"
     raise ValueError(f"no motion call for {kind}")
 
 
@@ -115,6 +120,8 @@ def export(project, settings=None, plans=None):
 
     for index, step in enumerate(project["steps"]):
         lines += ["", "  " + describe(step, index)]
+        if step["chain"]:
+            lines.append("  // Keeps moving into the next step: exit = false, so it does not stop or settle.")
         if step["type"] == "path":
             if not step["points"]:
                 lines.append("  // This path has no points yet.")
@@ -132,9 +139,14 @@ def export(project, settings=None, plans=None):
                 points = ", ".join(f"{{{number(p[0])}, {number(p[1])}}}" for p in
                                    (section["start"], section["start_handle"], section["end_handle"], section["end"]))
                 lines.append(f"        {{{points}, {number(speed)}, {'true' if section['reverse'] else 'false'}}},")
-            lines += ["    }, limits);",
+            if carries_speed(project, index) and not plan:
+                lines.append("  // The speed at the join into the next path is 0 until the planner has measured "
+                             "the robot. Export again once it has.")
+            join = (f", {number(plan['requested_start_ips'])}, {number(plan['requested_end_ips'])}"
+                    if plan and (plan["requested_start_ips"] or plan["requested_end_ips"]) else "")
+            lines += [f"    }}, limits{join});",
                       "  " + guarded(f"path_planner::followSections(plan, follow, {millis(timeout)}, "
-                                     f"{volts(step['volts'])})"),
+                                     f"{volts(step['volts'])}, {exit_flag(step)})"),
                       "  }"]
         elif step["type"] == "wall_reset":
             call = (f"wallReset({inches(step['x'])}, {inches(step['y'])}, {degrees(step['heading'])}, "

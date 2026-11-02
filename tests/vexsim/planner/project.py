@@ -93,6 +93,18 @@ STEP_TYPES = {
                        defaults=dict(x=0, y=0, heading=0, current_ma=2500)),
 }
 
+CHAIN = dict(
+    label="Keep moving into the next step",
+    help="Runs this step with exit = false. It ends as soon as the robot reaches or passes the target, without "
+         "stopping or settling, and the next step starts at once with the drive still powered. A path that keeps "
+         "moving into another path carries its speed across the join. Faster than stopping, but less exact.",
+    not_allowed={
+        "turn_to_point": "turnToPoint() has no exit option in mclib, so it always stops.",
+        "wall_reset": "A wall reset has to stop against the wall.",
+    },
+    last_step="The last step has to stop: there is no next step to keep moving into.",
+)
+
 PATH_DEFAULTS = {
     "speed_percent": dict(default=70, label="Speed limit", unit="% of top speed", low=5, high=100, step=1,
                           help="Default speed limit for each section of a path. Top speed is measured in the simulator."),
@@ -116,7 +128,7 @@ CONDITIONS = {
 
 LIMITS = dict(max_steps=40, max_points=30, max_simulated_s=120, max_body_bytes=262144,
               queue_size=4, history_size=40, hold_ms=300, min_point_gap_in=.5, min_handle_in=.5,
-              max_handle_in=300, settle_allowance_ms=4000)
+              max_handle_in=300, settle_allowance_ms=4000, chain_allowance_ms=500)
 
 DEFAULT_PROJECT = dict(
     format=FORMAT, version=VERSION, name="New routine",
@@ -126,7 +138,7 @@ DEFAULT_PROJECT = dict(
     path_defaults={key: item["default"] for key, item in PATH_DEFAULTS.items()},
     start=dict(x=0, y=-48, heading=0),
     stop_on_failure=True,
-    steps=[dict(type="path", **copy.deepcopy(STEP_TYPES["path"]["defaults"]))],
+    steps=[dict(type="path", chain=False, **copy.deepcopy(STEP_TYPES["path"]["defaults"]))],
 )
 
 
@@ -286,8 +298,8 @@ def _validate_step(index, value, count):
         raise ValueError(f"Step {index + 1}: unknown step type {value.get('type') if isinstance(value, dict) else value!r}")
     kind = value["type"]
     info = STEP_TYPES[kind]
-    _object(value, set(info["defaults"]) | {"type", "note", "timeout_ms", "volts"}, where)
-    step = dict(type=kind, note="", timeout_ms=4000, volts=6 if kind == "wall_reset" else 12)
+    _object(value, set(info["defaults"]) | {"type", "note", "timeout_ms", "volts", "chain"}, where)
+    step = dict(type=kind, note="", timeout_ms=4000, volts=6 if kind == "wall_reset" else 12, chain=False)
     step.update(copy.deepcopy(info["defaults"]))
     step.update(value)
     if not isinstance(step["note"], str) or len(step["note"]) > 80:
@@ -302,15 +314,34 @@ def _validate_step(index, value, count):
         raise ValueError(f"{where}: turnToPoint() always uses up to 12 V")
     if kind == "wall_reset" and index != count - 1:
         raise ValueError(f"{where}: a wall reset must be the last step, because it moves the odometry frame")
+    if not isinstance(step["chain"], bool):
+        raise ValueError(f"{where}: {CHAIN['label']} must be true or false")
+    if step["chain"] and kind in CHAIN["not_allowed"]:
+        raise ValueError(f"{where}: cannot keep moving into the next step. {CHAIN['not_allowed'][kind]}")
+    if step["chain"] and index == count - 1:
+        raise ValueError(f"{where}: cannot keep moving into the next step. {CHAIN['last_step']}")
     return step
+
+
+def carries_speed(project, index):
+    """True when path step @p index keeps moving into a path that sets off in
+    the same direction, so the speed can carry across the join."""
+    steps = project["steps"]
+    if not steps[index]["chain"] or index + 1 == len(steps):
+        return False
+    step, following = steps[index], steps[index + 1]
+    return (step["type"] == following["type"] == "path" and bool(step["points"]) and bool(following["points"])
+            and step["sections"][-1]["reverse"] == following["sections"][0]["reverse"])
 
 
 def step_time_limit(step, plan):
     """The step's own limit, or for a path left on automatic, the planned
-    time plus room for the final turn and settle."""
+    time plus room for the final turn and settle. A path that keeps moving
+    does not settle, so it only gets a small margin."""
     if step["timeout_ms"] is not None:
         return step["timeout_ms"]
-    planned_ms = plan["duration_s"] * 1000 + LIMITS["settle_allowance_ms"]
+    allowance = LIMITS["chain_allowance_ms"] if step["chain"] else LIMITS["settle_allowance_ms"]
+    planned_ms = plan["duration_s"] * 1000 + allowance
     return int(math.ceil(planned_ms / 100) * 100)
 
 
@@ -321,6 +352,6 @@ def default_project():
 def config():
     """Everything the page needs to draw its forms."""
     return dict(format=FORMAT, version=VERSION, presets=PRESETS, tracking=TRACKING,
-                heading_sources=HEADING_SOURCES, gains=GAINS, fields=FIELDS, step_types=STEP_TYPES,
+                heading_sources=HEADING_SOURCES, gains=GAINS, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
                 path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, limits=LIMITS,
                 default_project=default_project())

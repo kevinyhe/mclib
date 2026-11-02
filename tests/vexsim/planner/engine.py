@@ -27,8 +27,8 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
-from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, step_name, step_time_limit, strict_json,
-                     validate_project)  # noqa: E402
+from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, carries_speed, step_name, step_time_limit,
+                     strict_json, validate_project)  # noqa: E402
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
 STATE_VALUES = 8
@@ -40,6 +40,10 @@ POSITION_LIMIT_IN = dict(boomerang=1.5, arc=5.5, reverse_arc=5.5)
 DEFAULT_POSITION_LIMIT_IN = 2.5
 HEADING_LIMIT_DEG = 5.0
 ODOMETRY_DRIFT_IN = 2.5
+HEADING_GOALS = {"turn", "swing", "arc", "reverse_arc"}
+RAMSETE_SIDE_TOLERANCE_IN = 3.0
+PLANNER_RAMSETE_B = 50
+RAMSETE_BACK_OFF_IN = (6.0, 18.0)
 
 
 def write_json(path, value):
@@ -132,9 +136,10 @@ def readiness(vexsim, cache, preset, tracking):
 
 def declare_planner(lib):
     doubles = C.POINTER(C.c_double)
-    lib.planner_plan.argtypes = [doubles, C.c_int, doubles, doubles, C.c_int]
+    lib.planner_plan.argtypes = [doubles, C.c_int, doubles, C.c_double, C.c_double, doubles, C.c_int]
     lib.planner_plan.restype = C.c_int
-    lib.planner_follow.argtypes = [doubles, C.c_int, doubles, doubles, C.c_double, C.c_double]
+    lib.planner_follow.argtypes = [doubles, C.c_int, doubles, doubles, C.c_double, C.c_double, C.c_double,
+                                   C.c_double, C.c_int]
     lib.planner_follow.restype = C.c_int
     lib.planner_folded_section.argtypes = [doubles, C.c_int]
     lib.planner_folded_section.restype = C.c_int
@@ -210,12 +215,14 @@ def path_inputs(project, step, start, feedforward):
     return layout, values, limits
 
 
-def plan_path(lib, project, index, start, feedforward):
-    """mclib's plan for path step @p index starting at @p start."""
+def planned_states(lib, project, index, start, feedforward, start_ips, end_ips):
+    """mclib's planned states for path step @p index starting at pose
+    @p start, entering at up to @p start_ips and leaving at up to @p end_ips."""
     step = project["steps"][index]
     layout, values, limits = path_inputs(project, step, start, feedforward)
     out = (C.c_double * (STATE_VALUES * MAX_STATES))()
-    count = lib.planner_plan(doubles(values), len(layout["sections"]), doubles(limits), out, MAX_STATES)
+    count = lib.planner_plan(doubles(values), len(layout["sections"]), doubles(limits), start_ips, end_ips, out,
+                             MAX_STATES)
     where = step_name(index, step)
     if count == -1:
         folded = lib.planner_folded_section(doubles(values), len(layout["sections"]))
@@ -226,7 +233,12 @@ def plan_path(lib, project, index, start, feedforward):
                          f"to plan along. {fold_hint(layout, folded)}", index)
     if count == -2:
         raise StageError(f"{where}: the plan has more than {MAX_STATES} samples. Split it into shorter paths.", index)
-    states = [out[STATE_VALUES * i:STATE_VALUES * (i + 1)] for i in range(count)]
+    return layout, [out[STATE_VALUES * i:STATE_VALUES * (i + 1)] for i in range(count)]
+
+
+def plan_path(lib, project, index, start, feedforward, start_ips=0.0, end_ips=0.0):
+    """mclib's plan for path step @p index starting at @p start."""
+    layout, states = planned_states(lib, project, index, start, feedforward, start_ips, end_ips)
     curved = [abs(state[7]) for state in states if abs(state[7]) > 1e-6]
     tightest = 1 / max(curved) if curved else None
     top_speed = feedforward["top_ips"]
@@ -242,6 +254,8 @@ def plan_path(lib, project, index, start, feedforward):
     return dict(index=index, duration_s=states[-1][1], length_in=states[-1][2],
                 top_speed_ips=max(abs(state[6]) for state in states),
                 tightest_radius_in=tightest, parts=int(states[-1][0]) + 1, stops=stops,
+                requested_start_ips=start_ips, requested_end_ips=end_ips,
+                start_speed_ips=abs(states[0][6]), end_speed_ips=abs(states[-1][6]),
                 headings=layout["headings"], sections=sections,
                 states=[[int(s[0]), round(s[1], 4), round(s[2], 3), round(s[3], 3), round(s[4], 3),
                          round(s[5], 2), round(s[6], 3), round(s[7], 5)] for s in states])
@@ -262,10 +276,26 @@ def fold_hint(layout, number):
 
 
 def plan_paths(lib, project, feedforward, poses):
-    """One plan per step: None for steps that are not paths or have no points."""
-    return [plan_path(lib, project, index, poses[index][0], feedforward)
+    """One plan per step: None for steps that are not paths or have no points.
+
+    Where a path keeps moving into another path, the first ends at the
+    fastest speed the second can start at (last to first), and the second
+    starts at the speed the first reached (first to last)."""
+    steps = project["steps"]
+    end_ips = [0.0] * len(steps)
+    for index in reversed(range(len(steps))):
+        if carries_speed(project, index):
+            following = index + 1
+            _, fastest = planned_states(lib, project, following, poses[following][0], feedforward,
+                                        feedforward["top_ips"], end_ips[following])
+            end_ips[index] = abs(fastest[0][6])
+    plans, start_ips = [], 0.0
+    for index, step in enumerate(steps):
+        plan = plan_path(lib, project, index, poses[index][0], feedforward, start_ips, end_ips[index]) \
             if step["type"] == "path" and step["points"] else None
-            for index, step in enumerate(project["steps"])]
+        plans.append(plan)
+        start_ips = plan["end_speed_ips"] if carries_speed(project, index) else 0.0
+    return plans
 
 
 def path_settings(project, feedforward):
@@ -354,13 +384,14 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
     return dict(x=None, y=None, heading=step["heading"])
 
 
-def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms):
+def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan):
     layout, values, limits = path_inputs(project, step, start, feedforward)
     settings = project["path_defaults"]
     ramsete = [feedforward["ks"], feedforward["kv"], settings["ramsete_b"], settings["ramsete_zeta"],
                feedforward["track_in"]]
     result = lib.planner_follow(doubles(values), len(layout["sections"]), doubles(limits), doubles(ramsete),
-                                timeout_ms, step["volts"])
+                                plan["requested_start_ips"], plan["requested_end_ips"], timeout_ms, step["volts"],
+                                0 if step["chain"] else 1)
     if bridge.exceptions:
         raise RuntimeError("; ".join(bridge.exceptions))
     if result < 0:
@@ -368,12 +399,12 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms):
     return result
 
 
-def invoke(lib, bridge, project, step, start, feedforward, timeout_ms):
+def invoke(lib, bridge, project, step, start, feedforward, timeout_ms, plan):
     """Runs one step with the real mclib call. Returns followTrajectory()'s
     MotionResult for paths, wallReset()'s result for wall resets."""
     kind = step["type"]
     if kind == "path":
-        return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms)
+        return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan)
     if kind == "reverse_arc" and math.remainder(step["heading"] - bridge.pose()[2], 360) * step["radius"] > 1e-8:
         raise ValueError("A reverse arc needs the radius and the heading change to have opposite signs "
                          "from where the robot is now. Flip the radius sign or change the heading")
@@ -382,7 +413,8 @@ def invoke(lib, bridge, project, step, start, feedforward, timeout_ms):
     first = step.get("distance", step.get("x", step.get("heading", 0)))
     second = step.get("y", step.get("radius", 0))
     return bridge.run(ACTIONS[kind], a=first, b=second, heading=step.get("heading", 0),
-                      timeout=timeout_ms, direction=step.get("direction", 1), stop=True, volts=step["volts"],
+                      timeout=timeout_ms, direction=step.get("direction", 1), stop=not step["chain"],
+                      volts=step["volts"],
                       current=step.get("current_ma", 2500), lead=step.get("lead", .5))
 
 
@@ -409,11 +441,14 @@ def score_step(step, target, timeout_ms, duration_ms, actual, estimate_at_exit, 
     """The pass/fail checks for one step, each with the measured number and
     its limit in words."""
     kind = step["type"]
+    chained = step["chain"]
+    ended = "Handed off" if chained else "Ended"
     checks = []
     if configuration_error:
         checks.append(check("setup", "Setup", False, f"Not run: {configuration_error}."))
-    checks.append(check("stopped", "Stopped", stopped, "The drive was stopped at the end." if stopped else
-                        "The drive was still powered when the step ended."))
+    if not chained:
+        checks.append(check("stopped", "Stopped", stopped, "The drive was stopped at the end." if stopped else
+                            "The drive was still powered when the step ended."))
     if kind == "wall_reset":
         touched = bool(motion_result)
         checks.append(check("wall", "Wall contact", touched, "Detected the wall (motor stall)." if touched else
@@ -437,21 +472,57 @@ def score_step(step, target, timeout_ms, duration_ms, actual, estimate_at_exit, 
         limit = POSITION_LIMIT_IN.get(kind, DEFAULT_POSITION_LIMIT_IN)
         passed = position_error <= limit
         checks.append(check("position", "Position", passed,
-                            f"Ended {position_error:.2f} in from the target (limit {limit:g} in)." if passed else
-                            f"Ended {position_error:.2f} in from the target. The limit is {limit:g} in.",
+                            f"{ended} {position_error:.2f} in from the target (limit {limit:g} in)." if passed else
+                            f"{ended} {position_error:.2f} in from the target. The limit is {limit:g} in.",
                             measured=round(position_error, 3), limit=limit, unit="in"))
     if target["heading"] is not None:
         heading_error = abs(math.remainder(actual[2] - target["heading"], 360))
+    if heading_error is not None and (not chained or kind in HEADING_GOALS):
         passed = heading_error <= HEADING_LIMIT_DEG
         checks.append(check("heading", "Heading", passed,
-                            f"Ended {heading_error:.1f}° off the target heading (limit {HEADING_LIMIT_DEG:g}°)."
-                            if passed else f"Ended {heading_error:.1f}° off the target heading. "
+                            f"{ended} {heading_error:.1f}° off the target heading (limit {HEADING_LIMIT_DEG:g}°)."
+                            if passed else f"{ended} {heading_error:.1f}° off the target heading. "
                                            f"The limit is {HEADING_LIMIT_DEG:g}°.",
                             measured=round(heading_error, 3), limit=HEADING_LIMIT_DEG, unit="°"))
     return checks, position_error, heading_error
 
 
-def advice(step, checks, position_error, odometry_error, finished):
+def settle_report(plan, frames, started, returned, ramsete_b):
+    """What followTrajectory() did after its plan ran out: an info line, and
+    a hint when it had to back off and drive back in."""
+    plan_end = started + plan["duration_s"]
+    after = [frame for frame in frames if frame["t"] >= plan_end]
+    if not after:
+        return None, None
+    frame, end = after[0], plan["states"][-1]
+    heading = math.radians(end[5])
+    dx, dy = end[3] - frame["estimated_x"], end[4] - frame["estimated_y"]
+    side = abs(dx * math.cos(heading) - dy * math.sin(heading))
+    miss = math.hypot(dx, dy)
+    settle_s = returned - plan_end
+    info = (f"When the plan ran out, odometry put the robot {miss:.1f} in from the end point "
+            f"({side:.1f} in to the side). The final turn and settle took {settle_s:.2f} s.")
+    if side <= RAMSETE_SIDE_TOLERANCE_IN:
+        return info, None
+    back_off = min(max(4 * side, RAMSETE_BACK_OFF_IN[0]), RAMSETE_BACK_OFF_IN[1])
+    hint = (f"The robot finished the plan {side:.1f} in to the side of the end point. followTrajectory() fixes a "
+            f"sideways miss over {RAMSETE_SIDE_TOLERANCE_IN:g} in by backing off {back_off:.0f} in and driving back "
+            f"in with boomerang(), which took {settle_s:.2f} s here. {staying_on_the_plan(ramsete_b)}")
+    return info, hint
+
+
+def staying_on_the_plan(ramsete_b):
+    weak = ramsete_b < PLANNER_RAMSETE_B
+    gain = f"raise RAMSETE b (now {ramsete_b:g}; the planner's default is {PLANNER_RAMSETE_B}), " if weak else ""
+    return f"To stay on the plan: {gain}lower the speed limit through tight turns, or make the turns wider."
+
+
+def chained_path_hint(position_error, ramsete_b):
+    return (f"A path that keeps moving ends when its plan runs out, with no settle, so the next step starts "
+            f"{position_error:.1f} in from where it was planned to. {staying_on_the_plan(ramsete_b)}")
+
+
+def advice(checks, position_error, odometry_error, finished, chained_path, ramsete_b):
     notes = []
     if odometry_error is not None and odometry_error > ODOMETRY_DRIFT_IN:
         notes.append(f"Odometry and the simulated robot were {odometry_error:.1f} in apart when the step ended. "
@@ -460,7 +531,9 @@ def advice(step, checks, position_error, odometry_error, finished):
         notes.append("The step ran out of time. Look at the voltage and heading graphs for oscillation or "
                      "too little output, or raise the time limit.")
     position = next((c for c in checks if c["id"] == "position"), None)
-    if position and not position["passed"] and odometry_error is not None and odometry_error <= ODOMETRY_DRIFT_IN:
+    if position and not position["passed"] and chained_path:
+        notes.append(chained_path_hint(position_error, ramsete_b))
+    elif position and not position["passed"] and odometry_error is not None and odometry_error <= ODOMETRY_DRIFT_IN:
         notes.append("Odometry agreed with the real position, so the controller itself stopped short. "
                      "Check its exit conditions and gains.")
     return notes
@@ -514,9 +587,11 @@ def _execute(raw, destination, vexsim, cache, progress):
         progress.skip("plan", "No path steps to plan.")
     time_limits = [step_time_limit(step, plans[index] if plans else None)
                    for index, step in enumerate(project["steps"])]
-    budget_s = (sum(time_limits) + LIMITS["hold_ms"] * len(time_limits)) / 1000
+    stopping = sum(not step["chain"] for step in project["steps"])
+    budget_s = (sum(time_limits) + LIMITS["hold_ms"] * stopping) / 1000
     if budget_s > LIMITS["max_simulated_s"]:
-        raise StageError(f"The time limits add up to {budget_s:.1f} s with the 0.3 s pause after each step. "
+        raise StageError(f"The time limits add up to {budget_s:.1f} s with the 0.3 s pause after each step that "
+                         "stops. "
                          f"The simulator runs at most {LIMITS['max_simulated_s']} s. Lower some time limits "
                          "or split the routine.")
     conditions = project["conditions"]
@@ -552,7 +627,8 @@ def _execute(raw, destination, vexsim, cache, progress):
         recorder.record(bridge.capture())
         configuration_error = None
         try:
-            motion_result = invoke(lib, bridge, project, step, designed_start, feedforward, timeout_ms)
+            motion_result = invoke(lib, bridge, project, step, designed_start, feedforward, timeout_ms,
+                                   plans[index] if plans else None)
         except ValueError as error:
             configuration_error = str(error)
             motion_result = None
@@ -561,9 +637,11 @@ def _execute(raw, destination, vexsim, cache, progress):
         coordinate_reset = step["type"] == "wall_reset" and bool(motion_result)
         recorder.reset_frame = coordinate_reset
         recorder.record(bridge.capture())
-        recorder.phase = "hold"
-        bridge.advance_idle(LIMITS["hold_ms"])
-        recorder.record(bridge.capture())
+        handoff_speed_ips = recorder.trace[-1]["speed_ips"]
+        if not step["chain"]:
+            recorder.phase = "hold"
+            bridge.advance_idle(LIMITS["hold_ms"])
+            recorder.record(bridge.capture())
         actual = bridge.truth()
         duration_ms = (returned - started) * 1000
         checks, position_error, heading_error = score_step(
@@ -572,21 +650,37 @@ def _execute(raw, destination, vexsim, cache, progress):
         passed = all(item["passed"] for item in checks)
         odometry_error = None if coordinate_reset else math.dist(estimate_at_exit[:2], truth_at_exit[:2])
         finished = duration_ms < timeout_ms - .5
-        notes = advice(step, checks, position_error, odometry_error, finished)
+        chained_path = step["chain"] and step["type"] == "path"
+        notes = advice(checks, position_error, odometry_error, finished, chained_path,
+                       project["path_defaults"]["ramsete_b"])
         info = []
         if odometry_error is not None:
             info.append(f"Odometry was {odometry_error:.2f} in from the simulated position when the step ended.")
         if coordinate_reset:
             info.append("The wall reset moved the odometry frame, so odometry is no longer compared with the "
                         "simulated position.")
+        if step["chain"]:
+            facing = f", {heading_error:.1f}° off this step's target heading" if heading_error is not None else ""
+            info.append(f"Kept moving into step {index + 2} at {handoff_speed_ips:.1f} in/s{facing}. "
+                        "The next step started at once, with no pause.")
         if step["type"] == "path":
             moving = [f for f in recorder.trace if f["step"] == index and f["phase"] == "motion"
                       and f["t"] <= returned]
             gap, when = path_gap(moving, plans[index]["states"])
             info.append(f"Largest gap from the planned path: {gap:.2f} in" +
                         (f", {when - started:.2f} s into the step." if when is not None else "."))
-            info.append(f"Planned to take {plans[index]['duration_s']:.2f} s; the step took "
-                        f"{duration_ms / 1000:.2f} s including the final turn and settle.")
+            if step["chain"]:
+                info.append(f"Planned to take {plans[index]['duration_s']:.2f} s; the step took "
+                            f"{duration_ms / 1000:.2f} s. It kept moving, so there was no final turn or settle.")
+            else:
+                info.append(f"Planned to take {plans[index]['duration_s']:.2f} s; the step took "
+                            f"{duration_ms / 1000:.2f} s including the final turn and settle.")
+                settle_info, settle_hint = settle_report(plans[index], moving, started,
+                                                         returned, project["path_defaults"]["ramsete_b"])
+                if settle_info:
+                    info.append(settle_info)
+                if settle_hint:
+                    notes.append(settle_hint)
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
         failed = [item["message"] for item in checks if not item["passed"]]
