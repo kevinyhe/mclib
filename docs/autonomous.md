@@ -53,8 +53,8 @@ void autonomous() {
 | `followTrajectory(trajectory, config, timeout)` | follows a trajectory with RAMSETE; see [Motion](motion.md#following-a-trajectory-ramsete) |
 
 Motion options: `withMaxVoltage`, `withMinVoltage`, `withDirection`, `reversed`,
-`withoutStop` and `withoutOverturn`. `followTrajectory` uses only
-`withMaxVoltage` and `withoutExit`.
+`withoutStop`, `withoutOverturn` and `withEarlyExit`. `followTrajectory` uses
+only `withMaxVoltage`, `withoutExit` and `withEarlyExit`.
 
 `until(condition)` ends a motion step early. The routine checks the condition
 when the step starts and then every tick. When it returns true, the motion is
@@ -73,6 +73,73 @@ into the next step, use `withoutExit()` and no `until()`.
 `until()` only works on a motion step. Written after `runOnce()`, `wait()` or
 another step that is not a motion, it does not compile. For a step that only
 waits, use `waitUntil()`.
+
+### Commands during a motion
+
+A `trigger()` written after a motion step starts when that motion ends. To
+start a command while the robot is still moving, attach it to the motion step:
+
+```cpp
+red_safe.followTrajectory(curve, follow, 3_s)
+    .atTime(200_ms, conveyor.makeForwardCommand())
+    .atDistance(24_in, conveyor.makeStopCommand())
+    .atDistanceFromEnd(6_in, clamp.makeExtendCommand());
+```
+
+| Method | Starts the command once |
+| --- | --- |
+| `atTime(time, command)` | the step has run for `time` |
+| `atDistance(distance, command)` | the robot has travelled `distance` since the step started |
+| `atDistanceFromEnd(distance, command)` | the robot is `distance` from the end of the step |
+
+The command runs alongside the routine, as with `trigger()`, and keeps running
+after the step ends. A step can have any number of them. If the step ends
+before one comes due, that command never starts: the terminal prints a line,
+and `missedEvents()` counts it.
+
+`atDistance` measures the path the odometry pose has covered, so it counts
+along a curve. `atDistanceFromEnd` uses the distance the motion steers by:
+
+- `moveToPoint`, `boomerang`: straight-line distance to the target
+- `followTrajectory`, `driveTo`: distance left along the path
+- `curveCircle`, `curveCircleReverse`: distance left along the outer wheel's
+  path
+
+On any other step it is a configuration error.
+
+### Chaining motions
+
+`withoutExit()` chains a motion into the next one. It ends without braking and
+leaves the drive on. A chained motion ends when:
+
+- `driveTo`, `turnToAngle`, `swing`, `curveCircle`: the robot passes the
+  target.
+- `moveToPoint`, `boomerang`: the robot is inside
+  `MotionConfig::distance_exit.big_error` of the target (1.5 in by default), or
+  it passes the target within 8 in.
+- `followTrajectory`: the plan's time runs out.
+
+A chained motion that times out still brakes.
+
+`withEarlyExit(range)` chains the step and ends it sooner: once the robot is
+`range` from the end, still moving. The next motion takes over before this one
+slows down for its target. Turns take an angle; the rest take a length.
+
+```cpp
+red_safe
+    .moveToPoint(Point{24_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
+    .moveToPoint(Point{48_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
+    .turnToAngle(90_deg, 1_s).withEarlyExit(10_deg)
+    .moveToPoint(Point{48_in, 48_in}, 1, 2_s);
+```
+
+Range is measured the same way as `atDistanceFromEnd`. `withExit()` or
+`withStop()` after it turns it off. These are configuration errors:
+
+- the wrong unit
+- a negative range
+- `withEarlyExit` on `turnToPoint`, `turnToHeading`, `driveDistance` or
+  `wallReset`
 
 A `followTrajectory` step keeps its own copy of the trajectory, so it can be
 built from a local:

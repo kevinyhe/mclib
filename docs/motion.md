@@ -347,6 +347,10 @@ if (followTrajectory(traj, follow, traj.duration() + 500_ms) !=
 - `Ramsete`, `tankWheelSpeeds()` and `ramseteVoltages()` in
   `control/ramsete.hpp` are the same steps without the loop, for use in a
   command.
+- With `exit` false, `early_exit_range` ends it once that much of the path is
+  left, so the next motion takes over at speed. The distance left is the
+  planned distance plus how far the robot is ahead of the planned point.
+  `robotState().motionTelemetry().remaining_in` shows it while it runs.
 
 - Set `follow.track_width` to the drive's effective track width. A skid-steer
   drive's wheels scrub sideways in a turn, so it turns slower than its real

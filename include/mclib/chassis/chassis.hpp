@@ -135,6 +135,15 @@ public:
   void setPose(const Pose2D& pose);
 
   /**
+   * @brief setPose() with units: `chassis.setPose(0_in, -58_in, 180_deg)`.
+   *
+   * `Pose2D::theta` is radians, so `setPose(Pose2D(0, 0, 180))` sets a
+   * heading of 180 rad, which is 233 deg. This form takes the heading as a
+   * unit.
+   */
+  void setPose(QLength x, QLength y, QAngle heading);
+
+  /**
    * @brief The pose, from the one odometry, read consistently.
    *
    * @warning Nothing here updates it. The pose comes from the odometry task,

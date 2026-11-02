@@ -11,9 +11,11 @@
 #include "mclib/command/waitCommand.h"
 #include "mclib/control/ramsete.hpp"
 #include "mclib/path/trajectory.hpp"
+#include "mclib/time.hpp"
 #include "pros/rtos.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <optional>
 #include <utility>
@@ -285,6 +287,17 @@ private:
 };
 }  // namespace
 
+struct Routine::MotionEvent {
+  MotionEvent(EventMeasure measure_in, double threshold_in, std::unique_ptr<Command> command_in)
+      : measure(measure_in), threshold(threshold_in), command(std::move(command_in)) {}
+
+  EventMeasure measure;
+  /// @brief Milliseconds for Time, inches otherwise.
+  double threshold;
+  TriggerCommand command;
+  bool fired = false;
+};
+
 Routine::MotionStep::MotionStep(Routine& routine, std::size_t index)
     : m_routine(&routine), m_index(index) {}
 
@@ -299,9 +312,13 @@ Routine::MotionStep& Routine::MotionStep::withMinVoltage(QVoltage min_voltage) {
 }
 
 Routine::MotionStep& Routine::MotionStep::withExit(bool exit) {
-  m_routine->m_steps[m_index].options.exit = exit;
-  if (!exit) {
-    m_routine->m_steps[m_index].options.stop_at_end = false;
+  MotionOptions& options = m_routine->m_steps[m_index].options;
+  options.exit = exit;
+  if (exit) {
+    options.early_exit_distance = QLength{};
+    options.early_exit_heading = QAngle{};
+  } else {
+    options.stop_at_end = false;
   }
   return rebuild();
 }
@@ -311,9 +328,13 @@ Routine::MotionStep& Routine::MotionStep::withoutExit() {
 }
 
 Routine::MotionStep& Routine::MotionStep::withStop(bool stop) {
-  m_routine->m_steps[m_index].options.stop_at_end = stop;
-  if (!stop) {
-    m_routine->m_steps[m_index].options.exit = false;
+  MotionOptions& options = m_routine->m_steps[m_index].options;
+  options.stop_at_end = stop;
+  if (stop) {
+    options.early_exit_distance = QLength{};
+    options.early_exit_heading = QAngle{};
+  } else {
+    options.exit = false;
   }
   return rebuild();
 }
@@ -363,12 +384,70 @@ Routine::MotionStep& Routine::MotionStep::withVelocityThreshold(
 
 Routine::MotionStep& Routine::MotionStep::until(std::function<bool()> condition) {
   if (!condition) {
-    std::fprintf(stderr, "mclib: until() was given an empty condition.\n");
-    m_routine->m_configuration_error = true;
+    m_routine->configurationError("until() was given an empty condition.");
     return *this;
   }
   m_routine->m_steps[m_index].options.until = std::move(condition);
   return rebuild();
+}
+
+Routine::MotionStep& Routine::MotionStep::withEarlyExit(QLength range) {
+  if (m_routine->m_steps[m_index].remaining_unit != RemainingUnit::Length) {
+    m_routine->configurationError(
+        "withEarlyExit() with a distance only works on driveTo, curveCircle, "
+        "moveToPoint, boomerang and followTrajectory.");
+    return *this;
+  }
+  if (!(range.raw() >= 0) || !std::isfinite(range.raw())) {
+    m_routine->configurationError("withEarlyExit() was given a negative range.");
+    return *this;
+  }
+  MotionOptions& options = m_routine->m_steps[m_index].options;
+  options.exit = false;
+  options.stop_at_end = false;
+  options.early_exit_distance = range;
+  return rebuild();
+}
+
+Routine::MotionStep& Routine::MotionStep::withEarlyExit(QAngle range) {
+  if (m_routine->m_steps[m_index].remaining_unit != RemainingUnit::Angle) {
+    m_routine->configurationError(
+        "withEarlyExit() with an angle only works on turnToAngle and swing.");
+    return *this;
+  }
+  if (!(range.raw() >= 0) || !std::isfinite(range.raw())) {
+    m_routine->configurationError("withEarlyExit() was given a negative range.");
+    return *this;
+  }
+  MotionOptions& options = m_routine->m_steps[m_index].options;
+  options.exit = false;
+  options.stop_at_end = false;
+  options.early_exit_heading = range;
+  return rebuild();
+}
+
+Routine::MotionStep& Routine::MotionStep::atTime(QTime time,
+                                                 std::unique_ptr<Command> command) {
+  m_routine->addEvent(m_index, EventMeasure::Time, time.ms(), std::move(command));
+  return *this;
+}
+
+Routine::MotionStep& Routine::MotionStep::atDistance(QLength distance,
+                                                     std::unique_ptr<Command> command) {
+  m_routine->addEvent(m_index, EventMeasure::Travelled, distance.in(), std::move(command));
+  return *this;
+}
+
+Routine::MotionStep& Routine::MotionStep::atDistanceFromEnd(QLength distance,
+                                                            std::unique_ptr<Command> command) {
+  if (m_routine->m_steps[m_index].remaining_unit != RemainingUnit::Length) {
+    m_routine->configurationError(
+        "atDistanceFromEnd() only works on driveTo, curveCircle, moveToPoint, "
+        "boomerang and followTrajectory.");
+    return *this;
+  }
+  m_routine->addEvent(m_index, EventMeasure::Remaining, distance.in(), std::move(command));
+  return *this;
 }
 
 Routine::MotionStep& Routine::MotionStep::mustRun(bool must_run) {
@@ -636,6 +715,10 @@ QTime Routine::stepTimeout(std::size_t index) const {
   return m_steps[index].options.timeout;
 }
 
+std::size_t Routine::missedEvents() const {
+  return m_missed_events;
+}
+
 bool Routine::hasConfigurationError() const {
   return m_configuration_error;
 }
@@ -644,6 +727,7 @@ Routine::MotionStep Routine::driveDistance(ChassisController& chassis,
                                            QLength distance,
                                            QTime timeout) {
   return addMotion(
+      RemainingUnit::None,
       [&chassis, distance](const MotionOptions& options) {
         return chassis.makeDriveDistanceCommand(distance,
                                                 options.timeout,
@@ -664,6 +748,7 @@ Routine::MotionStep Routine::turnToHeading(ChassisController& chassis,
                                            QAngle heading,
                                            QTime timeout) {
   return addMotion(
+      RemainingUnit::None,
       [&chassis, heading](const MotionOptions& options) {
         return chassis.makeTurnToHeadingCommand(heading,
                                                 options.timeout,
@@ -684,12 +769,14 @@ Routine::MotionStep Routine::turnToAngle(ChassisController& chassis,
                                          QAngle turn_angle,
                                          QTime timeout) {
   return addMotion(
+      RemainingUnit::Angle,
       [&chassis, turn_angle](const MotionOptions& options) {
         return chassis.makeTurnToAngleCommand(turn_angle,
                                               options.timeout,
                                               options.exit,
                                               options.max_voltage,
-                                              options.min_voltage);
+                                              options.min_voltage,
+                                              options.early_exit_heading);
       },
       timeout);
 }
@@ -705,12 +792,14 @@ Routine::MotionStep Routine::driveTo(ChassisController& chassis,
                                      QLength distance,
                                      QTime timeout) {
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, distance](const MotionOptions& options) {
         return chassis.makeDriveToCommand(distance,
                                           options.timeout,
                                           options.exit,
                                           options.max_voltage,
-                                          options.min_voltage);
+                                          options.min_voltage,
+                                          options.early_exit_distance);
       },
       timeout);
 }
@@ -727,6 +816,7 @@ Routine::MotionStep Routine::curveCircle(ChassisController& chassis,
                                          QLength center_radius,
                                          QTime timeout) {
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, result_angle, center_radius](
           const MotionOptions& options) {
         return chassis.makeCurveCircleCommand(result_angle,
@@ -735,7 +825,8 @@ Routine::MotionStep Routine::curveCircle(ChassisController& chassis,
                                               options.exit,
                                               options.max_voltage,
                                               options.min_voltage,
-                                              options.reverse);
+                                              options.reverse,
+                                              options.early_exit_distance);
       },
       timeout);
 }
@@ -756,6 +847,7 @@ Routine::MotionStep Routine::curveCircleReverse(ChassisController& chassis,
   MotionOptions options{};
   options.reverse = true;
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, result_angle, center_radius](
           const MotionOptions& step_options) {
         return chassis.makeCurveCircleReverseCommand(result_angle,
@@ -763,7 +855,8 @@ Routine::MotionStep Routine::curveCircleReverse(ChassisController& chassis,
                                                      step_options.timeout,
                                                      step_options.exit,
                                                      step_options.max_voltage,
-                                                     step_options.min_voltage);
+                                                     step_options.min_voltage,
+                                                     step_options.early_exit_distance);
       },
       options,
       timeout);
@@ -786,6 +879,7 @@ Routine::MotionStep Routine::swing(ChassisController& chassis,
                                    double drive_direction,
                                    QTime timeout) {
   return addMotion(
+      RemainingUnit::Angle,
       [&chassis, swing_angle, drive_direction](
           const MotionOptions& options) {
         return chassis.makeSwingCommand(swing_angle,
@@ -793,7 +887,8 @@ Routine::MotionStep Routine::swing(ChassisController& chassis,
                                         options.timeout,
                                         options.exit,
                                         options.max_voltage,
-                                        options.min_voltage);
+                                        options.min_voltage,
+                                        options.early_exit_heading);
       },
       timeout);
 }
@@ -813,6 +908,7 @@ Routine::MotionStep Routine::wallReset(ChassisController& chassis,
                                        QAngle reset_heading,
                                        QTime timeout) {
   return addMotion(
+      RemainingUnit::None,
       [&chassis, reset_x, reset_y, reset_heading](
           const MotionOptions& options) {
         return chassis.makeWallResetCommand(reset_x,
@@ -840,6 +936,7 @@ Routine::MotionStep Routine::turnToPoint(ChassisController& chassis,
                                          Point point,
                                          QTime timeout) {
   return addMotion(
+      RemainingUnit::None,
       [&chassis, point](const MotionOptions& options) {
         return chassis.makeTurnToPointCommand(point.x,
                                               point.y,
@@ -875,6 +972,7 @@ Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
                                          Point point,
                                          QTime timeout) {
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, point](const MotionOptions& options) {
         return chassis.makeMoveToPointCommand(point.x,
                                               point.y,
@@ -883,7 +981,8 @@ Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
                                               options.exit,
                                               options.max_voltage,
                                               options.overturn,
-                                              options.min_voltage);
+                                              options.min_voltage,
+                                              options.early_exit_distance);
       },
       timeout);
 }
@@ -902,6 +1001,7 @@ Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
   MotionOptions options{};
   options.direction = dir >= 0 ? 1 : -1;
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, point](const MotionOptions& step_options) {
         return chassis.makeMoveToPointCommand(point.x,
                                               point.y,
@@ -910,7 +1010,8 @@ Routine::MotionStep Routine::moveToPoint(ChassisController& chassis,
                                               step_options.exit,
                                               step_options.max_voltage,
                                               step_options.overturn,
-                                              step_options.min_voltage);
+                                              step_options.min_voltage,
+                                              step_options.early_exit_distance);
       },
       options,
       timeout);
@@ -950,6 +1051,7 @@ Routine::MotionStep Routine::boomerang(ChassisController& chassis,
   MotionOptions options{};
   options.direction = dir >= 0 ? 1 : -1;
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, point, final_heading, lead](
           const MotionOptions& step_options) {
         return chassis.makeBoomerangCommand(point.x,
@@ -961,7 +1063,8 @@ Routine::MotionStep Routine::boomerang(ChassisController& chassis,
                                             step_options.exit,
                                             step_options.max_voltage,
                                             step_options.overturn,
-                                            step_options.min_voltage);
+                                            step_options.min_voltage,
+                                            step_options.early_exit_distance);
       },
       options,
       timeout);
@@ -1012,12 +1115,14 @@ Routine::MotionStep Routine::followTrajectory(ChassisController& chassis,
   // Shared so that rebuild() on every .withXxx() does not copy the samples.
   auto owned = std::make_shared<const path::Trajectory>(trajectory);
   return addMotion(
+      RemainingUnit::Length,
       [&chassis, owned, config](const MotionOptions& options) {
         return chassis.makeFollowTrajectoryCommand(*owned,
                                                    config,
                                                    options.timeout,
                                                    options.exit,
-                                                   options.max_voltage);
+                                                   options.max_voltage,
+                                                   options.early_exit_distance);
       },
       timeout);
 }
@@ -1064,6 +1169,7 @@ void Routine::initialize() {
   m_deadline_applied = false;
   m_skipped_steps = 0;
   m_timed_out_waits = 0;
+  m_missed_events = 0;
   if (m_configuration_error) {
     std::fprintf(stderr,
                  "mclib: Routine not run: it has a configuration error.\n");
@@ -1101,9 +1207,11 @@ void Routine::execute() {
 
   Command* command = m_steps[m_index].command.get();
   command->execute();
+  fireDueEvents();
 
   if (command->isFinished()) {
     noteWaitTimeout(*command);
+    noteMissedEvents();
     command->end(false);
     m_current_initialized = false;
     advanceStep();
@@ -1116,6 +1224,7 @@ bool Routine::isFinished() {
 
 void Routine::end(bool interrupted) {
   if (interrupted && m_index < m_steps.size() && m_current_initialized) {
+    noteMissedEvents();
     m_steps[m_index].command->end(true);
   }
 
@@ -1142,15 +1251,19 @@ std::vector<Subsystem*> Routine::getRequirements() {
   return requirements;
 }
 
-Routine::MotionStep Routine::addMotion(MotionFactory factory, QTime timeout) {
-  return addMotion(std::move(factory), MotionOptions{}, timeout);
+Routine::MotionStep Routine::addMotion(RemainingUnit remaining_unit,
+                                       MotionFactory factory,
+                                       QTime timeout) {
+  return addMotion(remaining_unit, std::move(factory), MotionOptions{}, timeout);
 }
 
-Routine::MotionStep Routine::addMotion(MotionFactory factory,
+Routine::MotionStep Routine::addMotion(RemainingUnit remaining_unit,
+                                       MotionFactory factory,
                                        MotionOptions options,
                                        QTime timeout) {
   Step step{};
   step.reserve_requirements = true;
+  step.remaining_unit = remaining_unit;
   step.factory = std::move(factory);
   step.timeout = timeout;
   step.options = std::move(options);
@@ -1172,10 +1285,7 @@ Routine::MotionStep Routine::addMissingChassisStep() {
   // compiles out in release: on the robot it was a null dereference in the
   // middle of an autonomous. Now it marks the routine as misconfigured, and
   // initialize() refuses to run any of it.
-  std::fprintf(stderr,
-               "mclib: Routine has no chassis. Call setChassis() before "
-               "adding motions.\n");
-  m_configuration_error = true;
+  configurationError("Routine has no chassis. Call setChassis() before adding motions.");
 
   Step step{};
   step.reserve_requirements = false;
@@ -1226,11 +1336,89 @@ void Routine::initializeCurrent() {
 
   step.command->initialize();
   m_current_initialized = true;
+
+  for (const auto& event : step.events) {
+    event->fired = false;
+  }
+  m_step_start_ms = time::millis();
+  m_step_travelled_in = 0;
+  m_step_last_pose = control::robotState().pose();
+}
+
+void Routine::configurationError(const char* message) {
+  std::fprintf(stderr, "mclib: %s\n", message);
+  m_configuration_error = true;
+}
+
+void Routine::addEvent(std::size_t index,
+                       EventMeasure measure,
+                       double threshold,
+                       std::unique_ptr<Command> command) {
+  if (command == nullptr) {
+    configurationError("A motion step event was given no command.");
+    return;
+  }
+  if (!(threshold >= 0) || !std::isfinite(threshold)) {
+    configurationError("A motion step event was given a negative time or distance.");
+    return;
+  }
+  m_steps[index].events.push_back(
+      std::make_shared<MotionEvent>(measure, threshold, std::move(command)));
+}
+
+void Routine::fireDueEvents() {
+  Step& step = m_steps[m_index];
+  if (step.events.empty()) {
+    return;
+  }
+
+  const Pose2D pose = control::robotState().pose();
+  m_step_travelled_in += std::hypot(pose.x - m_step_last_pose.x, pose.y - m_step_last_pose.y);
+  m_step_last_pose = pose;
+  const double elapsed_ms = time::msSince(m_step_start_ms);
+  const double remaining_in = control::robotState().motionTelemetry().remaining_in;
+
+  for (const auto& event : step.events) {
+    if (event->fired) {
+      continue;
+    }
+    switch (event->measure) {
+      case EventMeasure::Time:
+        event->fired = elapsed_ms >= event->threshold;
+        break;
+      case EventMeasure::Travelled:
+        event->fired = m_step_travelled_in >= event->threshold;
+        break;
+      case EventMeasure::Remaining:
+        event->fired = remaining_in <= event->threshold;
+        break;
+    }
+    if (event->fired) {
+      event->command.setParent(this);
+      event->command.initialize();
+    }
+  }
+}
+
+void Routine::noteMissedEvents() {
+  for (const auto& event : m_steps[m_index].events) {
+    if (event->fired) {
+      continue;
+    }
+    ++m_missed_events;
+    const char* what = event->measure == EventMeasure::Time       ? "ms into"
+                       : event->measure == EventMeasure::Travelled ? "in into"
+                                                                   : "in from the end of";
+    std::fprintf(stderr,
+                 "mclib: Routine step %u ended before its command at %.1f %s it started\n",
+                 static_cast<unsigned>(m_index), event->threshold, what);
+  }
 }
 
 void Routine::stopCurrentStep() {
   if (m_current_initialized && m_index < m_steps.size() &&
       m_steps[m_index].command != nullptr) {
+    noteMissedEvents();
     // end(true) is the cancellation path Phase 2 built: a blocking motion's
     // command sets the CancelToken from end(true), waits for the routine to
     // unwind at its next 10 ms boundary, then brakes the drive and clears the
@@ -1295,26 +1483,27 @@ void Routine::noteWaitTimeout(Command& command) {
 
 void Routine::cancelTriggersSharing(const Command* requester,
                                     const std::vector<Subsystem*>& subsystems) {
+  auto cancelIfSharing = [&](TriggerCommand& other) {
+    if (&other == requester || !other.innerScheduled()) {
+      return;
+    }
+    for (Subsystem* subsystem : subsystems) {
+      if (other.innerRequires(subsystem)) {
+        other.cancelInner();
+        return;
+      }
+    }
+  };
+
   for (std::size_t index = 0; index < m_steps.size() && index <= m_index;
        ++index) {
     Step& step = m_steps[index];
 
-    if (!step.is_trigger || step.command == nullptr ||
-        step.command.get() == requester) {
-      continue;
+    if (step.is_trigger && step.command != nullptr) {
+      cancelIfSharing(*static_cast<TriggerCommand*>(step.command.get()));
     }
-
-    auto* other = static_cast<TriggerCommand*>(step.command.get());
-
-    if (!other->innerScheduled()) {
-      continue;
-    }
-
-    for (Subsystem* subsystem : subsystems) {
-      if (other->innerRequires(subsystem)) {
-        other->cancelInner();
-        break;
-      }
+    for (const auto& event : step.events) {
+      cancelIfSharing(event->command);
     }
   }
 }
@@ -1324,17 +1513,20 @@ void Routine::cancelTriggeredCommands(bool keep_must_run) {
        ++index) {
     const Step& step = m_steps[index];
 
-    if (!step.is_trigger || step.command == nullptr) {
-      continue;
-    }
     // A trigger is what runs alongside the steps - the intake that the scoring
     // step needs still spinning. `.trigger(intake.spin()).mustRun()` says keep
     // it through the deadline; without that it stops with everything else.
+    // A step's events follow the step's own mustRun().
     if (keep_must_run && step.must_run) {
       continue;
     }
 
-    static_cast<TriggerCommand*>(step.command.get())->cancelInner();
+    if (step.is_trigger && step.command != nullptr) {
+      static_cast<TriggerCommand*>(step.command.get())->cancelInner();
+    }
+    for (const auto& event : step.events) {
+      event->command.cancelInner();
+    }
   }
 }
 

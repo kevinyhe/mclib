@@ -142,6 +142,10 @@ void Chassis::setPose(const Pose2D& pose) {
   control::resetOdometry(pose);
 }
 
+void Chassis::setPose(QLength x, QLength y, QAngle heading) {
+  setPose(Pose2D{x.in(), y.in(), heading.rad()});
+}
+
 Pose2D Chassis::getPose() const {
   return control::robotState().pose();
 }

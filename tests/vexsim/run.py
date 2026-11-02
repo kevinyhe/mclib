@@ -84,6 +84,9 @@ def load_library(library):
     lib.sim_set_gains.restype = None
     lib.sim_set_lead.argtypes = [C.c_double]
     lib.sim_set_lead.restype = None
+    lib.sim_set_min_volts.argtypes = [C.c_double]
+    lib.sim_set_min_volts.restype = None
+    lib.sim_last_motion_result.restype = C.c_int
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None

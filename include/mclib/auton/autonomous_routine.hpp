@@ -137,6 +137,61 @@ public:
     MotionStep& until(std::function<bool()> condition);
 
     /**
+     * @brief Chain into the next step once the robot is @p range from the
+     *        end of this one, still moving.
+     *
+     * Makes the step chained, as withoutExit() does; a later withExit() or
+     * withStop() turns it off again. For driveTo(), curveCircle(),
+     * curveCircleReverse(), moveToPoint(), boomerang() and
+     * followTrajectory(). On any other step, or with a negative @p range, it
+     * is a configuration error.
+     *
+     * @code
+     * routine.moveToPoint(Point{24_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
+     *        .moveToPoint(Point{48_in, 24_in}, 1, 2_s);
+     * @endcode
+     */
+    MotionStep& withEarlyExit(QLength range);
+    /// @brief The same for turnToAngle() and swing(): chain once the heading
+    ///        is @p range from the target.
+    MotionStep& withEarlyExit(QAngle range);
+
+    /**
+     * @brief Start @p command once this step has run for @p time.
+     *
+     * The command runs alongside the routine, the same as trigger(), and
+     * keeps running after this step ends. If the step ends first, the command
+     * never starts; the terminal says so and missedEvents() counts it. A null
+     * @p command or a negative @p time is a configuration error.
+     */
+    MotionStep& atTime(QTime time, std::unique_ptr<Command> command);
+    /**
+     * @brief Start @p command once the robot has travelled @p distance since
+     *        this step started.
+     *
+     * The distance is the length of the path the odometry pose has covered,
+     * so it counts along a curve. Otherwise as atTime().
+     */
+    MotionStep& atDistance(QLength distance, std::unique_ptr<Command> command);
+    /**
+     * @brief Start @p command once the robot is @p distance from the end of
+     *        this step.
+     *
+     * The distance left is the one the motion steers by: straight-line to
+     * the target for moveToPoint() and boomerang(), along the path for
+     * followTrajectory() and driveTo(), and along the outer wheel's path for
+     * curveCircle(). The same steps as withEarlyExit(QLength); on any other
+     * it is a configuration error. Otherwise as atTime().
+     *
+     * @code
+     * routine.followTrajectory(curve, follow, 3_s)
+     *        .atDistance(12_in, intake.makeForwardCommand())
+     *        .atDistanceFromEnd(6_in, clamp.makeExtendCommand());
+     * @endcode
+     */
+    MotionStep& atDistanceFromEnd(QLength distance, std::unique_ptr<Command> command);
+
+    /**
      * @brief Run this step even if the routine's time budget has expired.
      *
      * Marking a long drive `mustRun()` mostly defeats the point of the budget;
@@ -329,8 +384,17 @@ public:
   QTime stepTimeout(std::size_t index) const;
 
   /**
+   * @brief How many atTime(), atDistance() and atDistanceFromEnd() commands
+   *        never started because their step ended first.
+   *
+   * @details Each one also prints a line to the terminal when its step ends.
+   */
+  std::size_t missedEvents() const;
+
+  /**
    * @brief True when a motion was added with no chassis to run it on, or a
-   *        motion step was given an empty until() condition.
+   *        motion step was given an empty until() condition or an invalid
+   *        early exit or event.
    *
    * @details A routine with a configuration error does not run at all: it
    * prints why on the terminal and finishes on its first tick, without
@@ -513,7 +577,20 @@ private:
     QTime timeout{};
     /// @brief Ends the step early once it returns true. Empty means never.
     std::function<bool()> until;
+    /// @brief withEarlyExit() for steps that end at a distance. Zero is off.
+    QLength early_exit_distance{};
+    /// @brief withEarlyExit() for steps that end at a heading. Zero is off.
+    QAngle early_exit_heading{};
   };
+
+  /// @brief What a motion step measures how far it has left to go in.
+  enum class RemainingUnit { None, Length, Angle };
+
+  /// @brief What an atTime() / atDistance() / atDistanceFromEnd() waits on.
+  enum class EventMeasure { Time, Travelled, Remaining };
+
+  /// @brief A command one of those starts.
+  struct MotionEvent;
 
   using MotionFactory =
       std::function<std::unique_ptr<Command>(const MotionOptions&)>;
@@ -537,12 +614,30 @@ private:
     bool is_trigger = false;
     /// @brief This step is a waitUntil(), which can end by giving up.
     bool is_wait_until = false;
+    /// @brief Which withEarlyExit() and atDistanceFromEnd() this step takes.
+    RemainingUnit remaining_unit = RemainingUnit::None;
+    /// @brief Commands to start partway through this step.
+    std::vector<std::shared_ptr<MotionEvent>> events;
   };
 
-  MotionStep addMotion(MotionFactory factory, QTime timeout);
-  MotionStep addMotion(MotionFactory factory,
+  MotionStep addMotion(RemainingUnit remaining_unit,
+                       MotionFactory factory,
+                       QTime timeout);
+  MotionStep addMotion(RemainingUnit remaining_unit,
+                       MotionFactory factory,
                        MotionOptions options,
                        QTime timeout);
+  /// @brief Print why the routine will not run, and refuse to run it.
+  void configurationError(const char* message);
+  /// @brief Add a command to start partway through step @p index.
+  void addEvent(std::size_t index,
+                EventMeasure measure,
+                double threshold,
+                std::unique_ptr<Command> command);
+  /// @brief Start the running step's events that have come due.
+  void fireDueEvents();
+  /// @brief Record and report the running step's events that never fired.
+  void noteMissedEvents();
   /// @brief The placeholder step a motion becomes when there is no chassis.
   MotionStep addMissingChassisStep();
   void rebuildMotion(std::size_t index);
@@ -579,7 +674,13 @@ private:
   bool m_deadline_applied = false;
   std::size_t m_skipped_steps = 0;
   std::size_t m_timed_out_waits = 0;
+  std::size_t m_missed_events = 0;
   bool m_configuration_error = false;
+  /// @brief When the running step started, for its atTime() events.
+  std::uint32_t m_step_start_ms = 0;
+  /// @brief Path length the pose has covered since the running step started.
+  double m_step_travelled_in = 0;
+  Pose2D m_step_last_pose{};
 };
 
 using AutonomousRoutine = Routine;

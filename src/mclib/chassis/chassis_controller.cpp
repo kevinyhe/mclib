@@ -327,9 +327,10 @@ std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(
     QTime time_limit,
     bool exit,
     QVoltage max_output,
-    QVoltage min_speed) {
+    QVoltage min_speed,
+    QAngle early_exit_range) {
   return makeAsyncControlCommand([=]() {
-    turnToAngle(turn_angle, time_limit, exit, max_output, min_speed);
+    turnToAngle(turn_angle, time_limit, exit, max_output, min_speed, early_exit_range);
   });
 }
 
@@ -338,9 +339,10 @@ std::unique_ptr<Command> ChassisController::makeDriveToCommand(
     QTime time_limit,
     bool exit,
     QVoltage max_output,
-    QVoltage min_speed) {
+    QVoltage min_speed,
+    QLength early_exit_range) {
   return makeAsyncControlCommand([=]() {
-    driveTo(distance, time_limit, exit, max_output, min_speed);
+    driveTo(distance, time_limit, exit, max_output, min_speed, early_exit_range);
   });
 }
 
@@ -351,7 +353,8 @@ std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(
     bool exit,
     QVoltage max_output,
     QVoltage min_speed,
-    bool reverse) {
+    bool reverse,
+    QLength early_exit_range) {
   return makeAsyncControlCommand([=]() {
     curveCircle(result_angle,
                 center_radius,
@@ -359,7 +362,8 @@ std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(
                 exit,
                 max_output,
                 min_speed,
-                reverse);
+                reverse,
+                early_exit_range);
   });
 }
 
@@ -369,14 +373,16 @@ std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(
     QTime time_limit,
     bool exit,
     QVoltage max_output,
-    QVoltage min_speed) {
+    QVoltage min_speed,
+    QLength early_exit_range) {
   return makeAsyncControlCommand([=]() {
     curveCircleReverse(result_angle,
                        center_radius,
                        time_limit,
                        exit,
                        max_output,
-                       min_speed);
+                       min_speed,
+                       early_exit_range);
   });
 }
 
@@ -386,14 +392,16 @@ std::unique_ptr<Command> ChassisController::makeSwingCommand(
     QTime time_limit,
     bool exit,
     QVoltage max_output,
-    QVoltage min_speed) {
+    QVoltage min_speed,
+    QAngle early_exit_range) {
   return makeAsyncControlCommand([=]() {
     swing(swing_angle,
           drive_direction,
           time_limit,
           exit,
           max_output,
-          min_speed);
+          min_speed,
+          early_exit_range);
   });
 }
 
@@ -443,7 +451,8 @@ std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(
     bool exit,
     QVoltage max_output,
     bool overturn,
-    QVoltage min_speed) {
+    QVoltage min_speed,
+    QLength early_exit_range) {
   return makeAsyncControlCommand([=]() {
     moveToPoint(x,
                 y,
@@ -452,7 +461,8 @@ std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(
                 exit,
                 max_output,
                 overturn,
-                min_speed);
+                min_speed,
+                early_exit_range);
   });
 }
 
@@ -466,7 +476,8 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(
     bool exit,
     QVoltage max_output,
     bool overturn,
-    QVoltage min_speed) {
+    QVoltage min_speed,
+    QLength early_exit_range) {
   return makeAsyncControlCommand([=]() {
     boomerang(x,
               y,
@@ -477,7 +488,8 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(
               exit,
               max_output,
               overturn,
-              min_speed);
+              min_speed,
+              early_exit_range);
   });
 }
 
@@ -486,13 +498,15 @@ std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
     const control::RamseteConfig& config,
     QTime time_limit,
     bool exit,
-    QVoltage max_output) {
+    QVoltage max_output,
+    QLength early_exit_range) {
   // Shared, because AsyncControlCommand copies its action into a new task on
   // every start and a trajectory is a few hundred samples.
   auto owned = std::make_shared<const path::Trajectory>(trajectory);
-  return makeAsyncControlCommand([owned, config, time_limit, exit, max_output]() {
-    followTrajectory(*owned, config, time_limit, exit, max_output);
-  });
+  return makeAsyncControlCommand(
+      [owned, config, time_limit, exit, max_output, early_exit_range]() {
+        followTrajectory(*owned, config, time_limit, exit, max_output, early_exit_range);
+      });
 }
 
 std::unique_ptr<Command> ChassisController::makeArcadeDriveCommand(

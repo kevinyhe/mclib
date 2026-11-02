@@ -24,6 +24,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   the zone and speeds up after it. Before this, a slow section meant
   splitting the path into two trajectories, and the two splines met at
   different headings.
+- `Routine` motion steps take `.atTime(t, command)`, `.atDistance(d, command)`
+  and `.atDistanceFromEnd(d, command)`. Each starts its command partway
+  through the motion, while the robot is still moving: a `trigger()` after a
+  motion step only starts once the motion ends. `missedEvents()` counts the
+  commands whose step ended before they came due.
+- `early_exit_range` on `turnToAngle()`, `driveTo()`, `curveCircle()`,
+  `curveCircleReverse()`, `swing()`, `moveToPoint()`, `boomerang()` and
+  `followTrajectory()`, and on the matching `ChassisController` commands, and
+  `.withEarlyExit(range)` on `Routine` motion steps. A chained motion ends
+  once the robot is that close to its end, still moving. Above zero with
+  `exit` true, or negative, the motion returns `InvalidValue`.
+- `followTrajectory()` publishes `remaining_in` in its motion telemetry.
+- `Chassis::setPose(QLength, QLength, QAngle)`:
+  `chassis.setPose(0_in, -58_in, 180_deg)`. `Pose2D::theta` is radians, so
+  `setPose(Pose2D(0, 0, 180))` sets 180 rad, about 233°.
 
 ### Changed
 
@@ -44,6 +59,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   to become a step that did nothing while the rest of the routine ran, so
   a missing `setChassis()` showed up as a robot that ran its mechanisms and
   never drove.
+- A chained `moveToPoint()` hands off as soon as the robot is inside
+  `distance_exit.big_error` (1.5 in by default) of the target, or when it
+  passes the target within 8 in. It used to hand off only when it crossed
+  the line through the target within 1.5 in of it. On `six_motor_450` in the
+  simulator it stalled 1.3 in short and timed out after 2 s, and at an 8 V
+  floor the second move of a zigzag timed out.
+- A chained `moveToPoint()` no longer sets the drive to 0 V when it starts.
+  One that hands off on its first tick keeps the previous motion's wheel
+  commands, as `boomerang()` already did.
+- A chained `boomerang()` also hands off when it passes the target within
+  8 in. It used to wait for the 1.5 in band, and in the simulator every
+  chained boomerang timed out after 2.5 s, turning 215-420°.
 
 ### Fixed
 

@@ -204,6 +204,17 @@ bool cancelled() {
       mclib::control::CancelToken::Motion);
 }
 
+// Above zero, an early exit hands a moving robot to the next motion, so only
+// a chained motion can have one.
+bool validEarlyExit(double range, bool exit) {
+  return range >= 0 && (range == 0 || !exit);
+}
+
+// A chained point move that passes its target within this distance hands off
+// there. Turning back for a target it missed circled until the time limit in
+// the physics simulator.
+constexpr double kChainPassRadiusIn = 8.0;
+
 /**
  * @brief True once someone has asked correctHeading() to stop.
  *
@@ -347,14 +358,17 @@ const char* mclib::control::toString(MotionResult result) {
   return "Unknown";
 }
 
-MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, QAngle early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Turn);
   if (mclib::control::requireDrive("turnToAngle") == nullptr) {
     return MotionResult::NoDrive;
   }
-  MotionSafety safety(time_limit, {turn_angle_target.deg(), max_voltage.volts(), min_voltage.volts()});
+  MotionSafety safety(time_limit, {turn_angle_target.deg(), max_voltage.volts(), min_voltage.volts(),
+                                   early_exit_range.deg()});
+  if (!validEarlyExit(early_exit_range.deg(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
+  const double early_exit_deg = early_exit_range.deg();
   // Unwrap once, here. Everything below is the arithmetic this routine always
   // ran, on the same doubles; see the file comment.
   double turn_angle = turn_angle_target.deg();
@@ -380,7 +394,7 @@ MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, 
   if (!exit && safety.heading() < turn_angle)
   {
     // early exit path drives until the inertial pose passes the commanded heading allowing chained moves
-    while (safety.heading() < turn_angle && pros::millis() - start_time <= time_limit_msec && safety.running())
+    while (turn_angle - safety.heading() > early_exit_deg && pros::millis() - start_time <= time_limit_msec && safety.running())
     {
       output = telemetry.heading(pid, safety.heading());
       // keep a minimum turning speed so the robot doesn't stall mid-chain
@@ -397,7 +411,7 @@ MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, 
   }
   else if (!exit && safety.heading() > turn_angle)
   {
-    while (safety.heading() > turn_angle && pros::millis() - start_time <= time_limit_msec && safety.running())
+    while (safety.heading() - turn_angle > early_exit_deg && pros::millis() - start_time <= time_limit_msec && safety.running())
     {
       output = telemetry.heading(pid, safety.heading());
       output = applyMinSpeedFloor(output, min_speed_output);
@@ -431,14 +445,17 @@ MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, 
   return safety.result();
 }
 
-MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, QLength early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Drive);
   if (mclib::control::requireDrive("driveTo") == nullptr) {
     return MotionResult::NoDrive;
   }
-  MotionSafety safety(time_limit, {distance.in(), max_voltage.volts(), min_voltage.volts()});
+  MotionSafety safety(time_limit, {distance.in(), max_voltage.volts(), min_voltage.volts(),
+                                   early_exit_range.in()});
+  if (!validEarlyExit(early_exit_range.in(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
+  const double early_exit_in = early_exit_range.in();
   double distance_in = distance.in();
   const double time_limit_msec = time_limit.ms();
   const double max_output = max_voltage.volts();
@@ -506,6 +523,7 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
       // integrate wheel travel by converting encoder degrees into linear inches and averaging both treads
       current_distance = (fabs(encoderDegreesToInches(safety.left() - start_left)) + fabs(encoderDegreesToInches(safety.right() - start_right))) / 2;
     }
+    if (early_exit_in > 0 && distance_in - current_distance <= early_exit_in) break;
     current_angle = safety.heading();
     left_output = pid_distance.update(current_distance) * drive_direction;
     if (exit)
@@ -585,14 +603,17 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
   return safety.result();
 }
 
-MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, bool reverse)
+MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, bool reverse, QLength early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Arc);
   if (mclib::control::requireDrive("curveCircle") == nullptr) {
     return MotionResult::NoDrive;
   }
-  MotionSafety safety(time_limit, {result_angle_target.deg(), center_radius.in(), max_voltage.volts(), min_voltage.volts()});
+  MotionSafety safety(time_limit, {result_angle_target.deg(), center_radius.in(), max_voltage.volts(), min_voltage.volts(),
+                                   early_exit_range.in()});
+  if (!validEarlyExit(early_exit_range.in(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
+  const double early_exit_in = early_exit_range.in();
 
   // With useRamseteForArcs(), plan the same arc and follow it on the pose.
   if (exit)
@@ -762,7 +783,7 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
     }
     // Preserve the preceding live command at a successful chaining boundary;
     // updating the PID after the crossing can reverse the drive for one tick.
-    if (!exit && progress >= out_arc) break;
+    if (!exit && out_arc - progress <= early_exit_in) break;
     real_angle = progress / out_arc * (result_angle_deg - entry_angle_deg) + entry_angle_deg + steer_deg;
     telemetry.target(pid_turn, safety.normalize(real_angle));
     double outer_output = pid_out.update(progress) * drive_direction * speed_scale;
@@ -816,19 +837,23 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
   return safety.result();
 }
 
-MotionResult curveCircleReverse(QAngle result_angle, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult curveCircleReverse(QAngle result_angle, QLength center_radius, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, QLength early_exit_range)
 {
-  return curveCircle(result_angle, center_radius, time_limit, exit, max_voltage, min_voltage, true);
+  return curveCircle(result_angle, center_radius, time_limit, exit, max_voltage, min_voltage, true,
+                     early_exit_range);
 }
 
-MotionResult swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage)
+MotionResult swing(QAngle swing_angle_target, double drive_direction, QTime time_limit, bool exit, QVoltage max_voltage, QVoltage min_voltage, QAngle early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Swing);
   if (mclib::control::requireDrive("swing") == nullptr) {
     return MotionResult::NoDrive;
   }
-  MotionSafety safety(time_limit, {swing_angle_target.deg(), drive_direction, max_voltage.volts(), min_voltage.volts()});
+  MotionSafety safety(time_limit, {swing_angle_target.deg(), drive_direction, max_voltage.volts(), min_voltage.volts(),
+                                   early_exit_range.deg()});
+  if (!validEarlyExit(early_exit_range.deg(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
+  const double early_exit_deg = early_exit_range.deg();
   double swing_angle = swing_angle_target.deg();
   const double time_limit_msec = time_limit.ms();
   const double max_output = max_voltage.volts();
@@ -890,8 +915,9 @@ MotionResult swing(QAngle swing_angle_target, double drive_direction, QTime time
     current_heading = safety.heading();
     // Preserve the preceding live command at the crossing. Running another
     // PID tick beyond the target can reverse the swing before handing off.
-    if (heading_must_rise ? current_heading >= swing_angle
-                          : current_heading <= swing_angle) break;
+    const double heading_left = heading_must_rise ? swing_angle - current_heading
+                                                  : current_heading - swing_angle;
+    if (heading_left <= early_exit_deg) break;
     output = telemetry.heading(pid, current_heading);
 
     // Clamp output
@@ -1146,21 +1172,26 @@ MotionResult turnToPoint(QLength x, QLength y, int direction, QTime time_limit, 
   return safety.result();
 }
 
-MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
+MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage, QLength early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Point);
   if (mclib::control::requireDrive("moveToPoint") == nullptr) {
     return MotionResult::NoDrive;
   }
-  MotionSafety safety(time_limit, {x.in(), y.in(), max_voltage.volts(), min_voltage.volts()});
+  MotionSafety safety(time_limit, {x.in(), y.in(), max_voltage.volts(), min_voltage.volts(),
+                                   early_exit_range.in()});
+  if (!validEarlyExit(early_exit_range.in(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
+  const double early_exit_in = early_exit_range.in();
   const double x_in = x.in();
   const double y_in = y.in();
   const double time_limit_msec = time_limit.ms();
   const double max_output = max_voltage.volts();
   const double min_speed = min_voltage.volts();
 
-  stopChassis(mclib::device::BrakeMode::Coast); // Stop chassis before moving
+  // A chained move that hands off on its first tick must leave the previous
+  // motion's live wheel commands on, as boomerang() does.
+  if (exit) stopChassis(mclib::device::BrakeMode::Coast);
   state().setTurning(true);                      // Set turning state
   int add = dir > 0 ? 0 : 180;
   const double min_speed_output = minSpeedOutput(min_speed, minOutput());
@@ -1247,6 +1278,20 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
                                           cfg().distance_exit.big_error);
     const double bearing_error = mclib::wrapAngle(
         atan2(x_in - pose.x, y_in - pose.y) + degToRad(add - current_angle));
+    // A chained move inside the band has arrived. Without this, a distance
+    // PID that settles just short of the crossing tolerance below sat there
+    // until the time limit.
+    if (!exit && remaining <= std::max(position_band, early_exit_in)) break;
+    // Check if robot has crossed the perpendicular line to the target. Before
+    // the pivot below: passing a target sends its bearing past 60 deg, and a
+    // pivot that skipped this check turned a chained move back for it.
+    perpendicular_line = ((pose.y - y_in) * -cos(degToRad(safety.normalize(current_angle + add))) <= (pose.x - x_in) * sin(degToRad(safety.normalize(current_angle + add))) + exittolerance);
+    if (!exit && perpendicular_line && !prev_perpendicular_line &&
+        remaining <= kChainPassRadiusIn)
+    {
+      break;
+    }
+    prev_perpendicular_line = perpendicular_line;
     // A nearby target beside/behind the robot still needs steering. Allow a
     // symmetric pivot before translating, without the distance-oriented slew
     // turning (+yaw,-yaw) into a lopsided drive command.
@@ -1261,15 +1306,6 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
       pros::delay(10);
       continue;
     }
-    // Check if robot has crossed the perpendicular line to the target
-    perpendicular_line = ((pose.y - y_in) * -cos(degToRad(safety.normalize(current_angle + add))) <= (pose.x - x_in) * sin(degToRad(safety.normalize(current_angle + add))) + exittolerance);
-    if (!exit && perpendicular_line && !prev_perpendicular_line &&
-        remaining <= std::max(position_band, exittolerance))
-    {
-      break;
-    }
-    prev_perpendicular_line = perpendicular_line;
-
     bool heading_voltage_limited = false;
     double requested_yaw = 0;
     // Continue endpoint steering until inside the configured position band.
@@ -1358,14 +1394,17 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
   return safety.result();
 }
 
-MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage)
+MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, double dlead, QTime time_limit, bool exit, QVoltage max_voltage, bool overturn, QVoltage min_voltage, QLength early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Pursuit);
   if (mclib::control::requireDrive("boomerang") == nullptr) {
     return MotionResult::NoDrive;
   }
-  MotionSafety safety(time_limit, {x.in(), y.in(), final_heading.deg(), dlead, max_voltage.volts(), min_voltage.volts()});
+  MotionSafety safety(time_limit, {x.in(), y.in(), final_heading.deg(), dlead, max_voltage.volts(), min_voltage.volts(),
+                                   early_exit_range.in()});
+  if (!validEarlyExit(early_exit_range.in(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
+  const double early_exit_in = early_exit_range.in();
   const double x_in = x.in();
   const double y_in = y.in();
   // The final heading, degrees. `dlead` is genuinely dimensionless.
@@ -1431,6 +1470,9 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
   // Speed over the ground from the pose, in/s, smoothed over about 50 ms.
   double speed_ips = 0, last_pose_x = NAN, last_pose_y = NAN;
   double frozen_heading = 0;
+  // True while the target is not ahead of the robot. Starting true means a
+  // target that begins behind it needs a real crossing to count as passed.
+  bool was_past_target = true;
 
   // Main PID loop for boomerang path
   while (pros::millis() - start_time <= time_limit_msec && safety.running())
@@ -1498,7 +1540,14 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
     // line allowed success arbitrarily far sideways, while requiring an
     // exact crossing conflicts with a distance PID that settles just short.
     // A level condition also permits recovery after an earlier distant pass.
-    if (!exit && hypotenuse <= position_band) {
+    // Passing the target within kChainPassRadiusIn also hands off: turning
+    // back for it circled until the time limit in the physics simulator.
+    const double travel_rad = degToRad(current_angle - add);
+    const bool past_target =
+        (x_in - pose.x) * sin(travel_rad) + (y_in - pose.y) * cos(travel_rad) <= 0;
+    const bool just_passed = past_target && !was_past_target && hypotenuse <= kChainPassRadiusIn;
+    was_past_target = past_target;
+    if (!exit && (hypotenuse <= std::max(position_band, early_exit_in) || just_passed)) {
       break;
     }
 
@@ -1692,7 +1741,8 @@ MotionResult boomerang(QLength x, QLength y, int dir, QAngle final_heading, doub
 
 MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
                               const mclib::control::RamseteConfig& config,
-                              QTime time_limit, bool exit, QVoltage max_voltage)
+                              QTime time_limit, bool exit, QVoltage max_voltage,
+                              QLength early_exit_range)
 {
   MotionObservation telemetry(MotionPhase::Pursuit);
   if (mclib::control::requireDrive("followTrajectory") == nullptr) {
@@ -1703,12 +1753,17 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
                                    config.feedforward.kS.raw(),
                                    config.feedforward.kV.raw(),
                                    config.feedforward.kA.raw(),
-                                   config.track_width.raw()});
+                                   config.track_width.raw(),
+                                   early_exit_range.in()});
   if (trajectory.empty() || !(config.feedforward.kV.raw() > 0) ||
-      !(config.gains.b > 0) || !(config.gains.zeta >= 0)) {
+      !(config.gains.b > 0) || !(config.gains.zeta >= 0) ||
+      !validEarlyExit(early_exit_range.in(), exit)) {
     safety.reject();
   }
   if (!safety.running()) return safety.result();
+  const double early_exit_in = early_exit_range.in();
+  const double length_in = trajectory.length().in();
+  const int travel_direction = trajectory.sample(trajectory.duration() * 0.5).velocity.raw() < 0 ? -1 : 1;
 
   const mclib::control::Ramsete ramsete(config.gains);
   const mclib::control::SimpleMotorFeedforward feedforward(config.feedforward);
@@ -1729,7 +1784,17 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
     const QTime elapsed = static_cast<double>(
         static_cast<uint32_t>(pros::millis() - start_time)) * mclib::units::millisecond;
     const mclib::path::TrajectoryState target = trajectory.sample(elapsed);
-    mclib::control::RamseteOutput command = ramsete.calculate(safety.pose(), target);
+    const mclib::Pose2D pose = safety.pose();
+    // How far the robot is along the plan: the planned distance, plus how far
+    // ahead of the planned point it is along the path.
+    const double heading_rad = target.heading.rad();
+    const double ahead_of_plan_in =
+        travel_direction * ((pose.x - target.x.in()) * std::sin(heading_rad) +
+                            (pose.y - target.y.in()) * std::cos(heading_rad));
+    const double remaining_in = length_in - target.distance.in() - ahead_of_plan_in;
+    telemetry.value.remaining_in = remaining_in;
+    if (early_exit_in > 0 && remaining_in <= early_exit_in) break;
+    mclib::control::RamseteOutput command = ramsete.calculate(pose, target);
     // Catching up on a lag must not take the robot past the speed the plan
     // allowed anywhere, or it can take a corner faster than its grip. In the
     // physics simulator an uncapped 450 rpm drive reached 46 in/s on a 24 in
