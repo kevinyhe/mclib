@@ -8,7 +8,7 @@ Each motion returns a `mclib::control::MotionResult` that says how it ended:
 
 | Result | Meaning |
 | --- | --- |
-| `Reached` | settled on the target, or crossed it when chained |
+| `Reached` | settled on the target; when chained, crossed it or came within `early_exit_range` of it |
 | `TimedOut` | `time_limit` ran out first, including during the stop ramp |
 | `Cancelled` | `requestCancel(CancelToken::Motion)` was called |
 | `Disabled` | the robot was disabled |

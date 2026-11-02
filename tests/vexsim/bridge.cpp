@@ -37,6 +37,8 @@ Advance advance = nullptr;
 Output output = nullptr;
 mclib::Pose2D last_integrated_pose{};
 double boomerang_lead = 0.5;
+double chain_min_volts = -1;
+int last_motion_result = 0;
 mclib::control::RamseteConfig ramsete_config;
 
 // PoseFusion in the loop, the same class the odometry task runs on a robot.
@@ -125,6 +127,8 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   advance = step; output = write;
   sample = {};
   boomerang_lead = 0.5;
+  chain_min_volts = -1;
+  last_motion_result = 0;
   ramsete_config = {};
   ramsete_limits = {};
   // The arc switch is library-global; each simulated robot starts without it.
@@ -342,16 +346,21 @@ extern "C" int sim_run(int action, double a, double b, double heading,
                         double volts, double current_threshold_ma) {
   using namespace mclib::units;
   const auto limit = timeout_ms * millisecond;
+  const auto min_volts = chain_min_volts * volt;
+  auto record = [](mclib::control::MotionResult result) {
+    last_motion_result = static_cast<int>(result);
+  };
   switch (action) {
-    case 0: turnToAngle(a * degree, limit, exit, volts * volt); break;
-    case 1: driveTo(a * inch, limit, exit, volts * volt); break;
-    case 2: curveCircle(a * degree, b * inch, limit, exit, volts * volt); break;
-    case 3: curveCircleReverse(a * degree, b * inch, limit, exit, volts * volt); break;
-    case 4: swing(a * degree, direction, limit, exit, volts * volt); break;
-    case 5: turnToPoint(a * inch, b * inch, direction, limit); break;
-    case 6: moveToPoint(a * inch, b * inch, direction, limit, exit, volts * volt); break;
-    case 7: boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
-                       limit, exit, volts * volt); break;
+    case 0: record(turnToAngle(a * degree, limit, exit, volts * volt, min_volts)); break;
+    case 1: record(driveTo(a * inch, limit, exit, volts * volt, min_volts)); break;
+    case 2: record(curveCircle(a * degree, b * inch, limit, exit, volts * volt, min_volts)); break;
+    case 3: record(curveCircleReverse(a * degree, b * inch, limit, exit, volts * volt, min_volts)); break;
+    case 4: record(swing(a * degree, direction, limit, exit, volts * volt, min_volts)); break;
+    case 5: record(turnToPoint(a * inch, b * inch, direction, limit, min_volts)); break;
+    case 6: record(moveToPoint(a * inch, b * inch, direction, limit, exit, volts * volt, true,
+                               min_volts)); break;
+    case 7: record(boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
+                             limit, exit, volts * volt, true, min_volts)); break;
     case 9:
     case 10:
     case 13: {
@@ -457,6 +466,11 @@ extern "C" void sim_set_gains(const double* gains) {
 }
 
 extern "C" void sim_set_lead(double lead) { boomerang_lead = lead; }
+
+// Voltage floor for the motions run by sim_run(); negative is the library
+// default. The MotionResult of the last one, since sim_run() returns 0.
+extern "C" void sim_set_min_volts(double volts) { chain_min_volts = volts; }
+extern "C" int sim_last_motion_result() { return last_motion_result; }
 
 extern "C" double sim_heading_target() {
   return mclib::control::robotState().correctAngleDeg();

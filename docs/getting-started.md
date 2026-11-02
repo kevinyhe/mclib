@@ -126,7 +126,15 @@ a horizontal tracker sees. Forward slip is small on these drives. With
 `PoseFusion`, set `odom_along_var_per_in` and `odom_side_var_per_in` apart
 for one tracker: low in the direction it measures, about 0.09 in the other.
 
-Reset the IMU and the pose together. `Chassis::setPose()` sets both.
+Reset the IMU and the pose together. `Chassis::setPose()` sets both. Pass
+units so the heading is in degrees:
+
+```cpp
+chassis.setPose(0_in, -58_in, 180_deg);
+```
+
+`Pose2D::theta` is radians. `chassis.setPose(mclib::Pose2D(0, 0, 180))` sets a
+heading of 180 rad, which is about 233°.
 
 Without an IMU, a differential `Chassis` computes heading from the difference in
 left and right wheel travel divided by track width. Set a measured, positive

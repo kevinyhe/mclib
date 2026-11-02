@@ -431,23 +431,23 @@ std::unique_ptr<Command> ChassisController::makeTurnToHeadingCommand(QAngle, QTi
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(QAngle, QTime, bool, QVoltage, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(QAngle, QTime, bool, QVoltage, QVoltage, QAngle) {
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeDriveToCommand(QLength, QTime, bool, QVoltage, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeDriveToCommand(QLength, QTime, bool, QVoltage, QVoltage, QLength) {
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool) {
+std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool, QLength) {
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, QLength) {
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage, QAngle) {
   return nullptr;
 }
 
@@ -459,16 +459,16 @@ std::unique_ptr<Command> ChassisController::makeTurnToPointCommand(QLength, QLen
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(QLength, QLength, int, QTime, bool, QVoltage, bool, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(QLength, QLength, int, QTime, bool, QVoltage, bool, QVoltage, QLength) {
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLength, int, QAngle, double, QTime, bool, QVoltage, bool, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLength, int, QAngle, double, QTime, bool, QVoltage, bool, QVoltage, QLength) {
   return nullptr;
 }
 
 std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
-    const path::Trajectory&, const control::RamseteConfig&, QTime, bool, QVoltage) {
+    const path::Trajectory&, const control::RamseteConfig&, QTime, bool, QVoltage, QLength) {
   return nullptr;
 }
 

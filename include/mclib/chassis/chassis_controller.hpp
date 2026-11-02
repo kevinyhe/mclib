@@ -113,13 +113,15 @@ public:
       QTime time_limit,
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
-      QVoltage min_speed = -1.0 * units::volt);
+      QVoltage min_speed = -1.0 * units::volt,
+      QAngle early_exit_range = 0.0 * units::degree);
   std::unique_ptr<Command> makeDriveToCommand(
       QLength distance,
       QTime time_limit,
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
-      QVoltage min_speed = -1.0 * units::volt);
+      QVoltage min_speed = -1.0 * units::volt,
+      QLength early_exit_range = 0.0 * units::inch);
   std::unique_ptr<Command> makeCurveCircleCommand(
       QAngle result_angle,
       QLength center_radius,
@@ -127,21 +129,24 @@ public:
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
       QVoltage min_speed = -1.0 * units::volt,
-      bool reverse = false);
+      bool reverse = false,
+      QLength early_exit_range = 0.0 * units::inch);
   std::unique_ptr<Command> makeCurveCircleReverseCommand(
       QAngle result_angle,
       QLength center_radius,
       QTime time_limit,
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
-      QVoltage min_speed = -1.0 * units::volt);
+      QVoltage min_speed = -1.0 * units::volt,
+      QLength early_exit_range = 0.0 * units::inch);
   std::unique_ptr<Command> makeSwingCommand(
       QAngle swing_angle,
       double drive_direction,
       QTime time_limit,
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
-      QVoltage min_speed = -1.0 * units::volt);
+      QVoltage min_speed = -1.0 * units::volt,
+      QAngle early_exit_range = 0.0 * units::degree);
   std::unique_ptr<Command> makeCorrectHeadingCommand();
   std::unique_ptr<Command> makeWallResetCommand(
       QLength reset_x,
@@ -165,7 +170,8 @@ public:
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
       bool overturn = true,
-      QVoltage min_speed = -1.0 * units::volt);
+      QVoltage min_speed = -1.0 * units::volt,
+      QLength early_exit_range = 0.0 * units::inch);
   std::unique_ptr<Command> makeBoomerangCommand(
       QLength x,
       QLength y,
@@ -176,7 +182,8 @@ public:
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
       bool overturn = true,
-      QVoltage min_speed = -1.0 * units::volt);
+      QVoltage min_speed = -1.0 * units::volt,
+      QLength early_exit_range = 0.0 * units::inch);
   /**
    * @brief followTrajectory() as a command.
    *
@@ -189,7 +196,8 @@ public:
       const control::RamseteConfig& config,
       QTime time_limit,
       bool exit = true,
-      QVoltage max_output = 12.0 * units::volt);
+      QVoltage max_output = 12.0 * units::volt,
+      QLength early_exit_range = 0.0 * units::inch);
   // Driver control. Each returns a command meant to be the subsystem's
   // default: it runs whenever no autonomous command owns the drive, reads
   // the sticks every scheduler pass, shapes them through the curves in

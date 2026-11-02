@@ -193,21 +193,49 @@ int main() {
   CHECK(now_ms < 1000);
   CHECK_EQ(hw.left, 0);
 
-  // A chained move in the same settle band keeps a live output until the
-  // actual line crossing; PID settlement must not latch it off.
+  // A chained move inside the same settle band has arrived: it hands off at
+  // once and leaves the live output on. Waiting for the 1 in line crossing
+  // instead sat 1.3 in short until the time limit in the physics simulator.
   now_ms = 0;
   resetOdometry({0, 22.8, 0});
-  bool drove_after_settle = false;
+  hw.left = hw.right = 4;
+  robotState().setPrevOutputs(4, 4);
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s, false) == MotionResult::Reached);
+  CHECK_EQ(now_ms, 0);
+  CHECK_EQ(hw.left, 4);
+  CHECK_EQ(hw.right, 4);
+
+  // Outside the band it keeps driving until it gets there.
+  now_ms = 0;
+  resetOdometry({0, 18, 0});
+  bool drove_outside_band = false;
   on_delay = [&] {
-    if (now_ms > 300 && now_ms < 500)
-      drove_after_settle |= hw.left > 0 && hw.right > 0;
-    if (now_ms >= 500) resetOdometry({0, 24.1, 0});
+    drove_outside_band |= hw.left > 0 && hw.right > 0;
+    if (now_ms >= 300) resetOdometry({0, 23, 0});
   };
   CHECK(moveToPoint(0_in, 24_in, 1, 2_s, false) == MotionResult::Reached);
-  CHECK(drove_after_settle);
-  CHECK(now_ms < 1000);
+  CHECK(drove_outside_band);
+  CHECK_EQ(now_ms, 300);
   CHECK(hw.left > 0 && hw.right > 0);
   on_delay = {};
+
+  // An early exit range hands off further out, still moving.
+  now_ms = 0;
+  resetOdometry({0, 10, 0});
+  on_delay = [&] {
+    if (now_ms >= 200) resetOdometry({0, 18.5, 0});
+  };
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s, false, 12_V, true, -1_V, 6_in) ==
+        MotionResult::Reached);
+  CHECK_EQ(now_ms, 200);
+  CHECK(hw.left > 0 && hw.right > 0);
+  on_delay = {};
+
+  // Above zero it needs a chained move, and it can't be negative.
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s, true, 12_V, true, -1_V, 6_in) ==
+        MotionResult::InvalidValue);
+  CHECK(moveToPoint(0_in, 24_in, 1, 2_s, false, 12_V, true, -1_V, -1_in) ==
+        MotionResult::InvalidValue);
 
   // A stationary chassis five inches from the pose is not a completed
   // boomerang. It must continue trying until its deadline, then stop safely.
@@ -338,9 +366,10 @@ int main() {
     clearCancel();
   }
 
-  // A chained boomerang hands off inside its configured position band.
-  // An infinite line three inches early is not endpoint acceptance,
-  // and consuming that line's edge must not prevent a later close crossing.
+  // A chained boomerang hands off inside its configured position band, or
+  // when it passes the target within 8 in. An infinite line is not endpoint
+  // acceptance, and consuming that line's edge far out must not prevent a
+  // later close crossing.
   for (int direction : {-1, 1}) {
     for (int heading : {-90, 0, 90, 180}) {
       const double angle = heading * mclib::kPi / 180;
@@ -350,7 +379,7 @@ int main() {
         resetOdometry({along * along_x + lateral * std::cos(angle),
                        along * along_y - lateral * std::sin(angle), angle});
       };
-      for (int fixture = 0; fixture < 6; ++fixture) {
+      for (int fixture = 0; fixture < 7; ++fixture) {
         now_ms = 0;
         hw.heading = heading;
         hw.encoder = 0;
@@ -366,15 +395,16 @@ int main() {
           if (fixture == 1) place(-2.9, 0);  // Still short of the endpoint.
           if (fixture == 2) place(.1, 0);   // Start inside the old early line.
           if (fixture == 3) place(.1, now_ms < 50 ? 100 : 0);
-          if (fixture == 4) place(4, 0);    // Overshot outside the endpoint band.
+          if (fixture == 4) place(4, 0);    // Passed outside the band, within 8 in.
+          if (fixture == 6) place(9, 0);    // Passed more than 8 in away.
         };
         boomerang(0_in, 0_in, direction, heading * 1_deg, .5, 100_ms, false);
-        if (fixture == 0 || fixture == 1 || fixture == 4) {
+        if (fixture == 0 || fixture == 1 || fixture == 6) {
           CHECK_EQ(now_ms, 100);
           CHECK_EQ(hw.left, 0);
           CHECK_EQ(hw.right, 0);
         } else {
-          CHECK_EQ(now_ms, fixture == 5 ? 0 : fixture == 2 ? 10 : 50);
+          CHECK_EQ(now_ms, fixture == 5 ? 0 : fixture == 2 || fixture == 4 ? 10 : 50);
           CHECK(std::abs(hw.left) + std::abs(hw.right) > 0);
           if (fixture == 5) {
             CHECK_EQ(hw.left, direction * 5);
@@ -1008,6 +1038,142 @@ int main() {
     CHECK(inside_window != 0);
     CHECK_NEAR(held_output(900, 900.5), inside_window, 1e-12);
     setMotionConfig(saved);
+  }
+
+  // early_exit_range: a chained motion hands off that far from its end, with
+  // the drive still on. Each fake robot moves 1.5 deg or 0.4 in a tick, and
+  // each range falls between two ticks.
+  {
+    const auto start_at_origin = [&] {
+      clearCancel();
+      now_ms = 0;
+      hw.heading = hw.encoder = 0;
+      hw.left = hw.right = 0;
+      resetOdometry({0, 0, 0});
+      robotState().setCorrectAngleDeg(0);
+      robotState().setPrevOutputs(0, 0);
+    };
+    const double encoder_deg_per_in = 360 / (4 * mclib::kPi);
+
+    for (int sign : {-1, 1}) {
+      start_at_origin();
+      on_delay = [&] { hw.heading += sign * 1.5; };
+      CHECK(turnToAngle(sign * 90_deg, 2_s, false, 12_V, -1_V, 16_deg) ==
+            MotionResult::Reached);
+      CHECK_EQ(hw.heading, sign * 75);
+      CHECK(sign * hw.left > 0);
+      CHECK(sign * hw.right < 0);
+
+      start_at_origin();
+      CHECK(swing(sign * 90_deg, 1, 2_s, false, 12_V, -1_V, 16_deg) ==
+            MotionResult::Reached);
+      CHECK_EQ(hw.heading, sign * 75);
+      CHECK(hw.left + hw.right > 0);
+    }
+
+    start_at_origin();
+    on_delay = [&] { hw.encoder += 0.4 * encoder_deg_per_in; };
+    CHECK(driveTo(24_in, 2_s, false, 12_V, -1_V, 7_in) == MotionResult::Reached);
+    CHECK_EQ(now_ms, 430);
+    CHECK(hw.left > 0);
+    CHECK(hw.right > 0);
+
+    start_at_origin();
+    const double outer_arc = 30 * mclib::kPi / 2;
+    double arc_progress = 0;
+    on_delay = [&] {
+      arc_progress += 0.4;
+      hw.encoder = arc_progress * encoder_deg_per_in;
+      hw.heading = 90 * arc_progress / outer_arc;
+      arc_pose(24.0, hw.heading);
+    };
+    CHECK(curveCircle(90_deg, 24_in, 2_s, false, 12_V, -1_V, false, 8_in) ==
+          MotionResult::Reached);
+    // 47.1 in of outer arc: 8 in left comes at 39.2 in, the 98th tick.
+    CHECK_EQ(now_ms, 980);
+    CHECK(hw.left > 0);
+    CHECK(hw.right > 0);
+
+    start_at_origin();
+    double y_in = 0;
+    on_delay = [&] {
+      y_in += 0.4;
+      resetOdometry({0, y_in, 0});
+    };
+    CHECK(boomerang(0_in, 24_in, 1, 0_deg, 0.5, 2_s, false, 12_V, true, -1_V, 7_in) ==
+          MotionResult::Reached);
+    CHECK_EQ(now_ms, 430);
+    CHECK(hw.left > 0);
+    CHECK(hw.right > 0);
+
+    // followTrajectory, tracking the plan exactly. It also publishes how much
+    // of the path is left.
+    start_at_origin();
+    const auto planned_pose = [&] {
+      const mclib::Pose2D pose =
+          trajectory.sample(static_cast<double>(now_ms) * mclib::units::millisecond).pose();
+      resetOdometry(pose);
+      hw.heading = pose.theta * 180 / mclib::kPi;
+    };
+    planned_pose();
+    std::vector<double> remaining_seen;
+    on_delay = [&] {
+      remaining_seen.push_back(robotState().motionTelemetry().remaining_in);
+      planned_pose();
+    };
+    CHECK(followTrajectory(trajectory, ramsete_config, 5_s, false, 12_V, 12_in) ==
+          MotionResult::Reached);
+    const double length_in = trajectory.length().in();
+    std::uint32_t hand_off_ms = 0;
+    while (length_in -
+               trajectory.sample(static_cast<double>(hand_off_ms) * mclib::units::millisecond)
+                   .distance.in() >
+           12)
+      hand_off_ms += 10;
+    CHECK_EQ(now_ms, hand_off_ms);
+    CHECK(now_ms < trajectory.duration().ms());
+    CHECK(hw.left != 0 || hw.right != 0);
+    CHECK(!remaining_seen.empty());
+    if (!remaining_seen.empty()) CHECK_NEAR(remaining_seen.front(), length_in, 1e-9);
+    for (std::size_t i = 1; i < remaining_seen.size(); ++i)
+      CHECK(remaining_seen[i] < remaining_seen[i - 1]);
+    CHECK(std::isnan(robotState().motionTelemetry().remaining_in));
+    on_delay = {};
+
+    // Above zero it needs a chained motion; negative or NaN is never valid.
+    // Rejected before the drive moves.
+    using Ranged = std::function<MotionResult(bool exit, double range)>;
+    const std::vector<Ranged> ranged{
+      [](bool exit, double range) {
+        return turnToAngle(90_deg, 100_ms, exit, 12_V, -1_V, range * 1_deg); },
+      [](bool exit, double range) {
+        return driveTo(24_in, 100_ms, exit, 12_V, -1_V, range * 1_in); },
+      [](bool exit, double range) {
+        return curveCircle(90_deg, 24_in, 100_ms, exit, 12_V, -1_V, false, range * 1_in); },
+      [](bool exit, double range) {
+        return curveCircleReverse(90_deg, 24_in, 100_ms, exit, 12_V, -1_V, range * 1_in); },
+      [](bool exit, double range) {
+        return swing(90_deg, 1, 100_ms, exit, 12_V, -1_V, range * 1_deg); },
+      [](bool exit, double range) {
+        return moveToPoint(0_in, 24_in, 1, 100_ms, exit, 12_V, true, -1_V, range * 1_in); },
+      [](bool exit, double range) {
+        return boomerang(0_in, 24_in, 1, 0_deg, 0.5, 100_ms, exit, 12_V, true, -1_V,
+                         range * 1_in); },
+      [&](bool exit, double range) {
+        return followTrajectory(trajectory, ramsete_config, 100_ms, exit, 12_V,
+                                range * 1_in); },
+    };
+    const std::pair<bool, double> rejected[] = {{true, 6}, {false, -1}, {false, NAN}};
+    for (const auto& motion : ranged) {
+      for (const auto& [exit, range] : rejected) {
+        start_at_origin();
+        hw.left = hw.right = 6;
+        CHECK(motion(exit, range) == MotionResult::InvalidValue);
+        CHECK_EQ(now_ms, 0);
+        CHECK_EQ(hw.left, 0);
+        CHECK_EQ(hw.right, 0);
+      }
+    }
   }
 
   bindDrive(nullptr);
