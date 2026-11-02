@@ -12,7 +12,7 @@ Each motion returns a `mclib::control::MotionResult` that says how it ended:
 | `TimedOut` | `time_limit` ran out first, including during the stop ramp |
 | `Cancelled` | `requestCancel(CancelToken::Motion)` was called |
 | `Disabled` | the robot was disabled |
-| `InvalidValue` | a parameter, sensor reading or output was NaN or infinite, or `time_limit` was not positive |
+| `InvalidValue` | a parameter, sensor reading or output was NaN or infinite, `time_limit` was not positive, or a parameter was out of range, such as a negative `early_exit_range` |
 | `NoDrive` | no drive is bound |
 
 ```cpp

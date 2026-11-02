@@ -15,7 +15,7 @@ mclib::auton::Routine red_safe(drive);
 
 void initialize() {
   drive.setName("drive");
-  drive.setDefaultCommand(drive.makeArcadeDriveCommand(controller));
+  drive.setDefaultCommand(drive.makeArcadeDriveCommand(master));
   drive.registerSelf();
 
   conveyor.setName("conveyor");
@@ -62,7 +62,7 @@ cancelled, the drive brakes, and the next step starts. If it is already true
 when the step starts, the motion does not run at all:
 
 ```cpp
-red_safe.moveToPoint(Point{24_in, 36_in}, 1, 2_s).until([] {
+red_safe.moveToPoint(mclib::auton::Point{24_in, 36_in}, 1, 2_s).until([] {
   return chassis.getPose().distanceTo(mclib::Pose2D(24, 36, 0)) < 3;
 });
 ```
@@ -103,7 +103,8 @@ along a curve. `atDistanceFromEnd` uses the distance the motion steers by:
 - `moveToPoint`, `boomerang`: straight-line distance to the target
 - `followTrajectory`, `driveTo`: distance left along the path
 - `curveCircle`, `curveCircleReverse`: distance left along the outer wheel's
-  path
+  path. With `useRamseteForArcs()` on and the step not chained, distance left
+  along the robot centre's path.
 
 On any other step it is a configuration error.
 
@@ -127,14 +128,15 @@ slows down for its target. Turns take an angle; the rest take a length.
 
 ```cpp
 red_safe
-    .moveToPoint(Point{24_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
-    .moveToPoint(Point{48_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
+    .moveToPoint(mclib::auton::Point{24_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
+    .moveToPoint(mclib::auton::Point{48_in, 24_in}, 1, 2_s).withEarlyExit(6_in)
     .turnToAngle(90_deg, 1_s).withEarlyExit(10_deg)
-    .moveToPoint(Point{48_in, 48_in}, 1, 2_s);
+    .moveToPoint(mclib::auton::Point{48_in, 48_in}, 1, 2_s);
 ```
 
-Range is measured the same way as `atDistanceFromEnd`. `withExit()` or
-`withStop()` after it turns it off. These are configuration errors:
+Range is measured the same way as `atDistanceFromEnd`. `withExit()` after it
+turns off the early exit and the chaining. `withStop()` after it turns off only
+the early exit. These are configuration errors:
 
 - the wrong unit
 - a negative range
@@ -146,8 +148,8 @@ built from a local:
 
 ```cpp
 {
-  const Trajectory curve = Trajectory::generate(route, limits);
-  red_safe.followTrajectory(curve, follow, curve.duration() + 500_ms)
+  const mclib::path::Trajectory curve = mclib::path::Trajectory::generate(route, limits);
+  red_safe.followTrajectory(curve, follow, curve.duration() + 2_s)
       .withMaxVoltage(10_V);
 }
 ```

@@ -106,8 +106,11 @@ or the drivetrain is binding.
 
 `mclib/control/characterize.hpp` has robot routines that do the measuring
 above and log it, and `tools/tune_drive.py` fits the numbers on a computer.
+`mclib/mclib.hpp` does not include this header.
 
 ```cpp
+#include "mclib/control/characterize.hpp"
+
 static mclib::telemetry::RowBuffer<512> buffer;
 mclib::telemetry::SdCardSink sink("tune");
 mclib::telemetry::Logger log(sink, buffer, {.period = 10_ms});
@@ -154,10 +157,13 @@ follower.follow(MotionProfile::generate(48_in, limits));
 const QLength start = travelledDistance();
 while (!follower.isFinished()) {
   const QVoltage command = follower.update(travelledDistance() - start);
-  driveVoltage(command, command);
+  driveChassis(command, command);
   pros::delay(10);
 }
 ```
+
+`travelledDistance()` is your own distance reading, from odometry or
+`DriveGeometry::encoderToDistance()`.
 
 `ProfileFollower` combines the profile, feedforward and a P loop on position.
 Its PID uses the real time step, does not stop early on arrival, and limits the
@@ -189,27 +195,31 @@ without stopping.
 using namespace mclib;
 using namespace mclib::path;
 
-Path route = generateSpline({
-    Waypoint{0_in, 0_in},
-    Waypoint{24_in, 24_in},
-    Waypoint{48_in, 12_in},
-});
+void followRoute(const control::SimpleMotorFeedforward& model) {
+  const Path route = generateSpline({
+      Waypoint{0_in, 0_in},
+      Waypoint{24_in, 24_in},
+      Waypoint{48_in, 12_in},
+  });
 
-PurePursuitConfig config;
-config.lookahead = 12_in;
-config.track_width = 11.375_in;
-config.max_velocity = 48_in / 1_s;
+  PurePursuitConfig config;
+  config.lookahead = 12_in;
+  config.track_width = 11.375_in;
+  config.max_velocity = 48_in / 1_s;
 
-PurePursuit follower(route, config);
-while (true) {
-  const PurePursuitOutput out = follower.update(control::robotState().pose());
-  if (out.finished) {
-    break;
+  PurePursuit follower(route, config);
+  while (true) {
+    const PurePursuitOutput out = follower.update(control::robotState().pose());
+    if (out.finished) {
+      break;
+    }
+    driveChassis(model.calculate(out.wheels.left), model.calculate(out.wheels.right));
+    pros::delay(10);
   }
-  drive(out.wheels.left, out.wheels.right);
-  pros::delay(10);
 }
 ```
+
+`model` is the feedforward from [Feedforward](#feedforward).
 
 Query a path with `atDistance()`, `atParameter()`, `length()` and
 `maxAbsCurvature()`.
@@ -319,17 +329,17 @@ heading jump at every corner.
 `followTrajectory()` drives a tank drive along a trajectory. Each 10 ms it
 compares the odometry pose with where the trajectory says the robot should be,
 and corrects speed and turn rate toward it, along a planned speed.
-`curveCircle()` also measures progress on the pose, but drives at the voltage
-you give it, slowing only to keep sideways acceleration under
-`MotionConfig::arc_max_lateral_accel`.
+`curveCircle()` also measures progress on the pose, but does not plan a
+speed: a distance PID sets the voltage, and it slows down to keep sideways
+acceleration under `MotionConfig::arc_max_lateral_accel`.
 
 ```cpp
 control::RamseteConfig follow;
-follow.feedforward = {0.8_V, 0.18_V / inps, 0.02_V / inps2};  // per side, measured
+follow.feedforward = {0.8_V, 0.18_V / units::inps, 0.02_V / control::inps2};  // per side, measured
 // follow.gains = {2.0, 0.7};  // b and zeta, SI units; these are the defaults
 
 const Trajectory traj = Trajectory::generate(route, limits);
-if (followTrajectory(traj, follow, traj.duration() + 500_ms) !=
+if (followTrajectory(traj, follow, traj.duration() + 2_s) !=
     control::MotionResult::Reached) {
   return;
 }
@@ -340,16 +350,17 @@ if (followTrajectory(traj, follow, traj.duration() + 500_ms) !=
 - The feedforward is per side of the drive: volts for a wheel speed. Measure it
   as in [Measuring kS and kV](#measuring-ks-and-kv). Without it, nothing drives
   the robot, so a `kV` of 0 returns `InvalidValue`.
-- It returns when the trajectory ends. RAMSETE stops correcting once the
-  planned speed reaches zero, so it does not wait to settle. Compare
-  `robotState().pose()` with `traj.states().back()` if the end position
-  matters.
+- RAMSETE stops correcting once the planned speed reaches zero. With `exit`
+  false it returns then, without settling. Compare `robotState().pose()`
+  with `traj.states().back()` if the end position matters. With `exit` true
+  it settles first, as described below.
 - `Ramsete`, `tankWheelSpeeds()` and `ramseteVoltages()` in
   `control/ramsete.hpp` are the same steps without the loop, for use in a
   command.
 - With `exit` false, `early_exit_range` ends it once that much of the path is
   left, so the next motion takes over at speed. The distance left is the
-  planned distance plus how far the robot is ahead of the planned point.
+  planned distance left, minus how far the robot is ahead of the planned
+  point.
   `robotState().motionTelemetry().remaining_in` shows it while it runs.
 
 - Set `follow.track_width` to the drive's effective track width. A skid-steer
@@ -430,7 +441,7 @@ time limits and voltage caps in your autonomous stay the same.
 
 ```cpp
 control::RamseteConfig follow;
-follow.feedforward = {0.7_V, 0.13_V / inps, {}};  // measured, per side
+follow.feedforward = {0.7_V, 0.13_V / units::inps, {}};  // measured, per side
 follow.gains = {50.0, 0.7};
 follow.track_width = 13.5_in;                     // effective, measured
 TrajectoryConstraints arc_limits;
@@ -508,10 +519,11 @@ mclib::HolonomicChassis drive({1}, {-2}, {3}, {-4},
                               mclib::holonomic::Kind::Mecanum,
                               imu);
 
-mclib::HolonomicControllerConfig config;
-config.translation_pid = {0.4, 0.0, 3.0};  // volts per inch
-config.heading_pid = {0.3, 0.0, 1.5};      // volts per degree
-config.field_centric_teleop = true;        // left stick is a field direction
+mclib::HolonomicControllerConfig config{
+    .translation_pid = {0.4, 0.0, 3.0},  // volts per inch
+    .heading_pid = {0.3, 0.0, 1.5},      // volts per degree
+    .field_centric_teleop = true,        // left stick is a field direction
+};
 mclib::HolonomicController controller(drive, config);
 
 void initialize() {
@@ -569,15 +581,15 @@ When the trajectory ends it switches to `moveToPose()` on the last point and
 conditions.
 
 ```cpp
-config.follower.feedforward.forward = {0.6_V, 0.30_V / inps, {}};
-config.follower.feedforward.strafe = {0.9_V, 0.42_V / inps, {}};  // mecanum slips sideways
-config.follower.feedforward.turn = {0.8_V, 2.0_V / radps};
+config.follower.feedforward.forward = {0.6_V, 0.30_V / mclib::units::inps, {}};
+config.follower.feedforward.strafe = {0.9_V, 0.42_V / mclib::units::inps, {}};  // mecanum slips sideways
+config.follower.feedforward.turn = {0.8_V, 2.0_V / mclib::units::radps};
 controller.setConfig(config);
 
-TrajectoryConstraints limits;
+mclib::path::TrajectoryConstraints limits;
 limits.max_velocity = 30_in / 1_s;
 limits.max_acceleration = 60_in / (1_s * 1_s);
-const Trajectory traj = Trajectory::generate(route, limits);  // reversed = false
+const mclib::path::Trajectory traj = mclib::path::Trajectory::generate(route, limits);  // reversed = false
 controller.makeFollowTrajectoryCommand(traj, 90_deg, 5_s)->schedule();
 ```
 

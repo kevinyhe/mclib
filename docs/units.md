@@ -80,8 +80,9 @@ SI base units.
 
 ### Angles
 
-`QAngle` stores radians. The motion functions take degrees and `Pose2D::theta`
-is in radians. Use these helpers to combine angles with lengths:
+`QAngle` stores radians. The motion functions take a `QAngle`, e.g. `90_deg`.
+`Pose2D::theta` is a `double` in radians. Use these helpers to combine angles
+with lengths:
 
 ```cpp
 QLength arc     = arcLength(radius, angle);      // radius * angle
@@ -132,10 +133,10 @@ mclib uses one field frame:
 
 The robot frame matches the field frame at `theta = 0`: +Y forward, +X right.
 
-`math.hpp` uses radians (`Pose2D::theta`, `wrapAngle`). The motion API
-(`Chassis`, `control/motion.cpp`, `RobotState::correctAngleDeg()`) uses
-degrees. Convert with `degToRad` / `radToDeg` from `utils.hpp`. Distances are
-inches.
+`mclib/math.hpp` (namespace `mclib`) uses radians (`Pose2D::theta`,
+`wrapAngle`). The motion API (`Chassis`, `control/motion.cpp`,
+`RobotState::correctAngleDeg()`) uses degrees. Convert with `degToRad` /
+`radToDeg` from `utils.hpp`. Distances are inches.
 
 ### Frame conversions
 

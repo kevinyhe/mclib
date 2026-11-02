@@ -30,9 +30,9 @@
  *    provably behaviour-preserving.
  * 2. Some of it genuinely has no dimension to give. `max_slew_fwd` is volts per
  *    10 ms tick, `chase_power` is an empirical fudge factor, and
- *    `sqrt(chase_power * getRadius(...) * 9.8)` mixes volts, inches and m/s^2
- *    on purpose (see `config.hpp`). Those are documented raw-`double` escapes,
- *    not oversights.
+ *    `sqrt(chase_power * radius_in * 9.8)` mixes volts, inches and m/s^2
+ *    on purpose (see `MotionConfig::chase_power`). Those are documented
+ *    raw-`double` escapes, not oversights.
  *
  * Every parameter below still says its unit in its doc comment, which is the
  * part that was missing before.
@@ -44,8 +44,8 @@ namespace control {
 /**
  * @brief The four tuned slew rates plus the two chaining flags, as motion sees them.
  *
- * Each rate is a **voltage step per nominal 10 ms tick** - `max_slew_accel_fwd`
- * and friends from `config.cpp`, which default to 1, i.e. 1 V per tick.
+ * Each rate is a **voltage step per nominal 10 ms tick** - `MotionConfig::slew`
+ * (`SlewRates`), which defaults to 1, i.e. 1 V per tick.
  */
 struct SlewConfig {
   double accel_fwd = 0.0;  ///< Volts per tick, ramping up while driving forward.
@@ -97,9 +97,9 @@ SlewPlan planSlew(const SlewConfig& config,
  * @brief Resolve the caller's `min_speed` against the `min_output` default.
  *
  * @param min_speed  The caller's request, volts. Negative means "use the default".
- * @param min_output The `min_output` global, volts - the stiction floor,
+ * @param min_output `MotionConfig::min_voltage`, volts - the stiction floor,
  *                   1.5 V of a 12 V rail by default. It was 10 V, i.e. 83% of
- *                   the rail as a minimum; see the note in config.hpp.
+ *                   the rail as a minimum.
  * @return The floor to apply, volts, never negative.
  */
 double minSpeedOutput(double min_speed, double min_output);
@@ -215,7 +215,7 @@ double exitDecel(double max_slew_fwd, double max_slew_rev, double max_output);
  * @brief `boomerang()`'s slip-speed cap: how fast it may drive round an arc of
  *        the given radius before the wheels are expected to break traction.
  *
- * @param chase_power_gain The `chase_power` global. Unitless, empirical.
+ * @param chase_power_gain `MotionConfig::chase_power`. Unitless, empirical.
  * @param radius_in        Arc radius in inches, from `mclib::arcRadius()`.
  *                         **Signed** input is fine - only the magnitude
  *                         matters, since a left-hand arc slips at the same

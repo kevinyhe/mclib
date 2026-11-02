@@ -200,7 +200,7 @@ public:
 	 *
 	 * ```C
 	 * // command must outlive the scheduler registration
-	 * std::unique_ptr<Command> intake_idle = intake.makeDisableCommand();
+	 * std::unique_ptr<Command> intake_idle = intake.makeStopCommand();
 	 * CommandScheduler::registerSubsystem(&intake, intake_idle.get());
 	 * ```
 	 *
@@ -235,7 +235,7 @@ public:
 	 * Subsystem::runPeriodic runs every frame with no command attached.
 	 *
 	 * ```C
-	 * intake.setDefaultCommand(intake.makeDisableCommand());
+	 * intake.setDefaultCommand(intake.makeStopCommand());
 	 * CommandScheduler::registerSubsystem(&intake);
 	 * ```
 	 *

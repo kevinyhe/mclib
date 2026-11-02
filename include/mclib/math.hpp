@@ -34,9 +34,10 @@
  *
  * - Internally, every angle in this header is **radians**. `Pose2D::theta`
  *   and `wrapAngle()` are radians.
- * - The public motion API (`Chassis`, `control/motion.cpp`, and
- *   `RobotState::correctAngleDeg()`) is **degrees**. Convert at that boundary with `degToRad` / `radToDeg`
- *   from `utils.hpp`; `Chassis::headingDeg()` already does.
+ * - The motion code (`Chassis::headingDeg()`, `control/motion.cpp`, and
+ *   `RobotState::correctAngleDeg()`) works in **degrees**. The motion
+ *   functions in `control/motion.hpp` take a `QAngle`, e.g. `90_deg`. Convert
+ *   plain numbers with `degToRad` / `radToDeg` from `utils.hpp`.
  * - Translations are inches.
  *
  * ## Robot frame

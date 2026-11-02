@@ -17,8 +17,8 @@ mclib includes a command-based framework modeled on FRC's WPILib.
 Give the subsystem its default command, then register it:
 
 ```cpp
-PositionMechanism arm{...};
-ConveyorMechanism conveyor{{-20, -21}};
+mclib::mechanism::PositionMechanism arm{...};
+mclib::mechanism::ConveyorMechanism conveyor{{-20, -21}};
 
 void initialize() {
   conveyor.setName("conveyor");
@@ -87,11 +87,11 @@ your program must keep each command alive while it can run:
 3. a global `std::unique_ptr<Command>`
 
 ```cpp
-std::unique_ptr<Command> index;
+std::unique_ptr<Command> index_command;
 
 void opcontrol() {
-  index = conveyor.makeIndexCommand(1500.0);
-  index->schedule();
+  index_command = conveyor.makeIndexCommand(1500.0);
+  index_command->schedule();
 }
 ```
 

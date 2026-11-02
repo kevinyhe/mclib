@@ -220,8 +220,11 @@ class PoseFusion {
    *
    * ```cpp
    * mclib::device::Gps gps(5, 0.0, -4.0);
-   * fusion.setGps({.read = [&] { return gps.pose(); },
-   *                .error_in = [&] { return gps.getErrorM() * 39.37; }});
+   *
+   * void initialize() {
+   *   fusion.setGps({.read = [] { return gps.pose(); },
+   *                  .error_in = [] { return gps.getErrorM() * 39.37; }});
+   * }
    * ```
    */
   void setGps(GpsInput gps);

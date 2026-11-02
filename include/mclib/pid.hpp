@@ -103,7 +103,8 @@ struct LegacyDefault<double> {
  * big_error_tolerance held for big_error_duration milliseconds. Both also
  * require the per-tick change in error to be <= derivative_tolerance (infinite
  * by default, so that check is off until you set it). Whichever window fills
- * first latches `arrived` true. The latch is sticky: only reset() clears it.
+ * first latches `arrived` true. The latch is sticky: only reset() or
+ * setLatchArrival() clears it.
  * setArrive(false) disables arrival detection entirely, so `arrived` never
  * becomes true and update() keeps controlling forever.
  *
@@ -215,7 +216,8 @@ class PIDController {
   void setIntegralMax(Output new_integral_max);
 
   /**
-   * @brief Only accumulate the integral once |error| is below this value.
+   * @brief Only accumulate the integral once |error| is below this value. At
+   * or above it, the accumulated integral is cleared.
    *
    * @details 0 disables the gate, so the integral accumulates at any error.
    */

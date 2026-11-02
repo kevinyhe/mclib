@@ -19,6 +19,7 @@ that variable goes out of scope.
 | [`MultiPositionMechanism`](#multipositionmechanism) | a fixed list of setpoints |
 | [`PresetPositionMechanism`](#presetpositionmechanism) | named positions with a PID loop |
 | [`DiscreteActuatorMechanism`](#discreteactuatormechanism) | several cylinders whose combination sets a position |
+| [`MotorStateMechanism`](#motorstatemechanism) | motors run at a fixed voltage for each state |
 | [`ConveyorMechanism`](#conveyormechanism) | intakes and conveyors with a sensor and jam recovery |
 | [`HomingMechanism`](#homingmechanism) | finding zero by driving into a hard stop |
 | [`PTOMechanism`](#ptomechanism) | motors shared between the drive and another mechanism |
@@ -33,14 +34,15 @@ that variable goes out of scope.
 mclib::device::MotorGroup lift_motors({1, -2}, mclib::device::Gearset::Green);
 mclib::device::Rotation lift_sensor(3);
 
-mclib::mechanism::PositionMechanismConfig cfg;
-cfg.kp = 0.09;
-cfg.max_voltage = 10.0;
-cfg.small_error = 1.5;
+mclib::mechanism::PositionMechanismConfig cfg{
+    .kp = 0.09,
+    .max_voltage = 10.0,
+    .small_error = 1.5,
+};
 
 mclib::mechanism::PositionMechanism lift(
-    [&] { return lift_sensor.getPositionDeg(); },
-    [&](double volts) { lift_motors.setVoltage(volts); },
+    [] { return lift_sensor.getPositionDeg(); },
+    [](double volts) { lift_motors.setVoltage(volts); },
     cfg);
 ```
 
@@ -83,22 +85,25 @@ only after the position drifts outside `small_error`.
 ```cpp
 ml::device::MotorGroup motors({1, -2}, ml::device::Gearset::Blue);
 
-ml::mechanism::VelocityMechanismConfig config;
-config.kv = 12.0 / 600.0;  // volts per motor RPM, max volts / motor free speed
-config.kp = 0.01;
-config.tolerance_rpm = 50.0;
-config.dwell_ms = 200.0;
+ml::mechanism::VelocityMechanismConfig config{
+    .kp = 0.01,
+    .kv = 12.0 / 600.0,  // volts per motor RPM, max volts / motor free speed
+    .tolerance_rpm = 50.0,
+    .dwell_ms = 200.0,
+};
 
 ml::mechanism::VelocityMechanism spinner(
-    [&motors] { return motors.getAverageActualVelocity(); },
-    [&motors](double volts) { motors.setVoltage(volts); },
+    [] { return motors.getAverageActualVelocity(); },
+    [](double volts) { motors.setVoltage(volts); },
     config);
 
-spinner.setTargetRpm(500.0);
-spinner.getCurrentRpm();
-spinner.atSpeed();      // within tolerance_rpm for dwell_ms straight
-spinner.isSpinningUp(); // target commanded, not there yet
-spinner.stop();         // coasts down
+void example() {
+  spinner.setTargetRpm(500.0);
+  spinner.getCurrentRpm();
+  spinner.atSpeed();      // within tolerance_rpm for dwell_ms straight
+  spinner.isSpinningUp(); // target commanded, not there yet
+  spinner.stop();         // coasts down
+}
 ```
 
 Output is `kv * target` plus PID correction. `kv` is the voltage per RPM needed
@@ -133,19 +138,22 @@ is `1.0`.
 Example with a 600 RPM motor geared 1:2:
 
 ```cpp
-ml::mechanism::VelocityMechanismConfig config;
-config.ratio = 2.0;              // wheel spins 2x the motor
-config.kv = 12.0 / 600.0;        // 0.02 V per motor RPM - unchanged by gearing
-config.kp = 0.02;
-config.tolerance_rpm = 10.0;     // 10 wheel RPM, i.e. 5 motor RPM
-config.integral_range_rpm = 100.0;  // 100 wheel RPM, i.e. 50 motor RPM
+ml::mechanism::VelocityMechanismConfig config{
+    .kp = 0.02,
+    .kv = 12.0 / 600.0,           // 0.02 V per motor RPM - unchanged by gearing
+    .ratio = 2.0,                 // wheel spins 2x the motor
+    .tolerance_rpm = 10.0,        // 10 wheel RPM, i.e. 5 motor RPM
+    .integral_range_rpm = 100.0,  // 100 wheel RPM, i.e. 50 motor RPM
+};
 
 ml::mechanism::VelocityMechanism spinner(
-    [&motors] { return motors.getAverageActualVelocity(); },
-    [&motors](double volts) { motors.setVoltage(volts); },
+    [] { return motors.getAverageActualVelocity(); },
+    [](double volts) { motors.setVoltage(volts); },
     config);
 
-spinner.setTargetRpm(600.0);     // 600 wheel RPM = 300 motor RPM
+void example() {
+  spinner.setTargetRpm(600.0);  // 600 wheel RPM = 300 motor RPM
+}
 ```
 
 With the motor at 280 RPM, the wheel is at 560 RPM:
@@ -364,18 +372,22 @@ mclib::mechanism::MultiPositionMechanism<LiftStage> lift(
     {{LiftStage::Down, 0.0}, {LiftStage::Middle, 12.5}, {LiftStage::High, 30.0}},
     [](double setpoint) { lift_target = setpoint; });
 
-lift.setPosition(LiftStage::Middle);
-lift.next();      // -> High, and stays at High if called again
-lift.previous();  // -> Middle
-lift.cycle();     // -> High, then wraps to Down
+void initialize() {
+  lift.setDefaultCommand(lift.idleCommand());
+  lift.registerSelf();
+}
 
-auto lift_hold = lift.idleCommand();
-CommandScheduler::registerSubsystem(&lift, lift_hold.get());
+void example() {
+  lift.setPosition(LiftStage::Middle);
+  lift.next();      // -> High, and stays at High if called again
+  lift.previous();  // -> Middle
+  lift.cycle();     // -> High, then wraps to Down
 
-auto to_high = lift.makePositionCommand(LiftStage::High);
-auto step_up = lift.makeNextCommand();      // one-shot, finishes immediately
-auto step_dn = lift.makePreviousCommand();  // one-shot
-auto rotate  = lift.makeCycleCommand();     // one-shot
+  auto to_high = lift.makePositionCommand(LiftStage::High);
+  auto step_up = lift.makeNextCommand();      // one-shot, finishes immediately
+  auto step_dn = lift.makePreviousCommand();  // one-shot
+  auto rotate  = lift.makeCycleCommand();     // one-shot
+}
 ```
 
 Use `idleCommand()` as the default. `makePositionCommand()` never finishes, so as
@@ -404,8 +416,8 @@ mclib::device::Rotation arm_sensor(13);
 mclib::mechanism::PresetPositionMechanism<ArmPreset> arm(
     ArmPreset::Down,
     {{ArmPreset::Down, 0.0}, {ArmPreset::Load, 45.0}, {ArmPreset::Score, 130.0}},
-    [&]() { return arm_sensor.getAngleDeg(); },
-    [&](double volts) { arm_motors.setVoltage(volts); },
+    []() { return arm_sensor.getPositionDeg(); },
+    [](double volts) { arm_motors.setVoltage(volts); },
     mclib::mechanism::PositionMechanismConfig{.kp = 0.12, .small_error = 1.5});
 
 void initialize() {
@@ -452,6 +464,9 @@ combination selects a named state, e.g. two cylinders giving three angles.
 
 ```cpp
 enum class Tilt { Flat, Angled, Steep };
+
+auto front = std::make_shared<mclib::device::Pneumatic>('C');
+auto back = std::make_shared<mclib::device::Pneumatic>('D');
 
 // Two cylinders, three angles. Add a row to add an angle.
 mclib::mechanism::DiscreteActuatorMechanism<Tilt> tilt(
@@ -539,29 +554,34 @@ again it doesn't drive the voltages it had before. The constructors without an
 a sensor detects an object and reverses briefly when jammed.
 
 ```cpp
-mclib::mechanism::ConveyorConfig config;
-config.motor_ports = {11, -12};
-config.forward_voltage = 12.0;
-config.index_voltage = 8.0;
-config.jam_current_amps = 2.0;
-config.jam_velocity_rpm = 10.0;
-config.jam_dwell_ms = 250.0;
-config.unjam_voltage = -8.0;
-config.unjam_ms = 250.0;
-config.jam_clear_ms = 1000.0;
-config.max_unjam_retries = 3;
+mclib::mechanism::ConveyorConfig config{
+    .motor_ports = {11, -12},
+    .forward_voltage = 12.0,
+    .index_voltage = 8.0,
+    .jam_current_amps = 2.0,
+    .jam_velocity_rpm = 10.0,
+    .jam_dwell_ms = 250.0,
+    .unjam_ms = 250.0,
+    .unjam_voltage = -8.0,
+    .jam_clear_ms = 1000.0,
+    .max_unjam_retries = 3,
+};
 
 mclib::device::Distance sensor(13);
 mclib::mechanism::ConveyorMechanism conveyor(
-    config, [&sensor] { return sensor.getDistanceMm() < 60.0; });
+    config, [] { return sensor.getDistanceMm() < 60.0; });
 
-auto conveyor_stop = conveyor.makeStopCommand();
-CommandScheduler::registerSubsystem(&conveyor, conveyor_stop.get());
+void initialize() {
+  conveyor.setDefaultCommand(conveyor.makeStopCommand());
+  conveyor.registerSelf();
+}
 
-conveyor.setConveyorState(mclib::mechanism::ConveyorState::Forward);
-conveyor.stop();
-bool ready = conveyor.hasObject();
-bool stuck = conveyor.isJammed();
+void example() {
+  conveyor.setConveyorState(mclib::mechanism::ConveyorState::Forward);
+  conveyor.stop();
+  bool ready = conveyor.hasObject();
+  bool stuck = conveyor.isJammed();
+}
 ```
 
 ```cpp
@@ -593,8 +613,9 @@ A jam is current above `jam_current_amps` with speed below `jam_velocity_rpm` fo
 `unjam_ms` and returns to its previous state. The unjam is always opposite to
 the direction that jammed: a jam in Forward or IndexToSensor backs off toward
 the intake, a jam in Reverse pushes toward the scoring end. Only the size of
-`unjam_voltage` is used; its sign is ignored. After `max_unjam_retries` jams in a row it stops,
-and `isJammed()` stays true until the state changes or `clearJam()` is called.
+`unjam_voltage` is used; its sign is ignored. If it jams again after
+`max_unjam_retries` unjams in a row, it stops, and `isJammed()` stays true
+until the state changes or `clearJam()` is called.
 The retry count resets after `jam_clear_ms` of normal running.
 
 Reverse ports (negative numbers) for motors that face opposite directions.
@@ -606,6 +627,8 @@ All motors in a `ConveyorMechanism` run at one voltage. For stages that run
 separately, use one `ConveyorMechanism` per stage:
 
 ```cpp
+Line line_sensor('C');
+
 mclib::mechanism::ConveyorMechanism bottom(
     {.motor_ports = {-20}}, [] { return line_sensor.get(); });
 mclib::mechanism::ConveyorMechanism top({.motor_ports = {-21}});
@@ -635,11 +658,12 @@ void initialize() {
   top_forward = top.makeForwardCommand();
   score = std::make_unique<ParallelCommandGroup>(
       std::initializer_list<Command*>{bottom_forward.get(), top_forward.get()});
-}
 
-void opcontrol() {
-  bottom_index->schedule();
-  score->schedule();
+  // Each runs while its button is held. Both require `bottom`, so pressing one
+  // cancels the other.
+  primary.getTrigger(mclib::device::DigitalButton::L1)
+      ->whileTrue(bottom_index.get());
+  primary.getTrigger(mclib::device::DigitalButton::R1)->whileTrue(score.get());
 }
 ```
 
@@ -652,34 +676,39 @@ tick, so a direct `setConveyorState` call is undone unless a command is running.
 hard stop, then resets the position sensor.
 
 ```cpp
-mclib::mechanism::HomingMechanismConfig cfg;
-cfg.homing_voltage = -3.0;         // signed: direction matters
-cfg.current_threshold_amps = 2.0;  // <= 0 disables the current detector
-cfg.velocity_threshold_rpm = 5.0;  // <= 0 disables the stall detector
-cfg.stall_dwell_ms = 150.0;
-cfg.startup_grace_ms = 150.0;      // ramp-up window
-cfg.timeout_ms = 3000.0;
-cfg.backoff_voltage = 2.0;         // 0 or backoff_ms 0 disables back-off
-cfg.backoff_ms = 150.0;
+mclib::mechanism::HomingMechanismConfig cfg{
+    .homing_voltage = -3.0,         // signed: direction matters
+    .current_threshold_amps = 2.0,  // <= 0 disables the current detector
+    .velocity_threshold_rpm = 5.0,  // <= 0 disables the stall detector
+    .stall_dwell_ms = 150.0,
+    .startup_grace_ms = 150.0,      // ramp-up window
+    .timeout_ms = 3000.0,
+    .backoff_voltage = 2.0,         // 0 or backoff_ms 0 disables back-off
+    .backoff_ms = 150.0,
+};
 
 mclib::mechanism::HomingMechanism homing(
-    cfg, [&](double volts) { arm_motors.setVoltage(volts); });
-
-homing.setVelocitySource([&] { return arm_motors.getAverageActualVelocity(); });
-// getAverageCurrentDraw() is in milliamps; the config threshold is in amps.
-homing.setCurrentSource(
-    [&] { return arm_motors.getAverageCurrentDraw() / 1000.0; });
-homing.setPositionReset([&] { arm_rotation.resetPosition(); });
+    cfg, [](double volts) { arm_motors.setVoltage(volts); });
 
 // Optional third detector, any predicate that is true at the stop.
 pros::adi::DigitalIn arm_limit('A');
-homing.setLimitSwitch([&] { return arm_limit.get_value() != 0; });
+
+void initialize() {
+  homing.setVelocitySource(
+      [] { return arm_motors.getAverageActualVelocity(); });
+  // getAverageCurrentDraw() is in milliamps; the config threshold is in amps.
+  homing.setCurrentSource(
+      [] { return arm_motors.getAverageCurrentDraw() / 1000.0; });
+  homing.setPositionReset([] { arm_sensor.resetPosition(); });
+  homing.setLimitSwitch([] { return arm_limit.get_value() != 0; });
+}
 ```
 
 The first detector to trigger stops homing:
 
 - the limit switch function returns true
-- current rises above `current_threshold_amps`
+- current stays at or above `current_threshold_amps` for `current_dwell_ms`
+  (default 100 ms)
 - speed stays below `velocity_threshold_rpm` for `stall_dwell_ms`
 
 Current is ignored for the first `startup_grace_ms`. The sensor is zeroed at the
@@ -691,9 +720,10 @@ Call `startHoming()`, `cancelHoming()`, `isHoming()`, `isHomed()` and
 ```cpp
 CommandScheduler::registerSubsystem(&homing, nullptr);
 
-auto home_arm = homing.makeHomeCommand(4000 * millisecond);
+auto home_arm = homing.makeHomeCommand(4000.0);
 home_arm->schedule();
 while (home_arm->scheduled()) {
+  CommandScheduler::run();
   pros::delay(10);
 }
 ```
@@ -740,8 +770,10 @@ void opcontrol() {
 accepted. Writes from the side that is not connected are dropped. Accepted
 voltage is applied on the next `periodic()`.
 
-`engage()`, `disengage()` and `toggle()` brake the motors, switch the solenoid,
-and block all drive writes for `shift_settle_time` (default 250 ms).
+When the state changes, `engage()`, `disengage()` and `toggle()` stop the
+motors, switch the solenoid, and block all drive writes for `shift_settle_time`
+(default 250 ms). `engage()` while engaged and `disengage()` while disengaged do
+nothing.
 `isShiftSettled()` and `remainingSettleTime()` report progress. A 0 V command
 brakes.
 
@@ -847,13 +879,17 @@ auto grab_it = auto_grab.makeWaitForTriggerCommand(2000.0);
   already-armed mechanism is left unchanged.
 - If the mechanism is latched with the condition stuck true, the action cannot
   run and the command times out. The default timeout is
-  `kDefaultWaitForTriggerTimeoutMs` (5 s); `0` waits forever. Call `rearm()`
-  first to clear the latch.
+  `kDefaultWaitForTriggerTimeoutMs` (5 s); `0` waits forever. `rearm()` clears
+  the latch, but the action still waits for the condition to go false and then
+  true. `setArmed(true)` clears both, so a condition that is already true can
+  fire.
 
 `makeArmCommand()` and `makeDisarmCommand()` finish immediately. `setArmed()` /
 `isArmed()` are separate from `Subsystem::setEnabled()`. `hasFired()`,
-`fireCount()`, `isLatched()` and `isConditionMet()` report state; `reset()`
-clears everything except the armed flag.
+`fireCount()`, `isLatched()` and `isConditionMet()` report state. `reset()`
+clears the latch, the debounce timer and the fire count. It keeps the armed
+flag, and after a fire the condition must still go false and then true before
+the action runs again.
 
 ## MechanismManager
 

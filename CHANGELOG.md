@@ -74,6 +74,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- Examples in the docs and header comments that did not compile or did the
+  wrong thing. Some called functions that do not exist
+  (`Rotation::getAngleDeg()`, `makeDisableCommand()`, `driveVoltage()`),
+  set config fields with assignments at file scope, or registered a default
+  command held by a local that is destroyed when `initialize()` returns. Docs
+  that disagreed with the code now match it, including `followTrajectory()`'s
+  settle steps and how `driveTo()` and `curveCircle()` measure distance. The
+  example `src/main.cpp` now sets its starting pose with `Chassis::setPose()`.
 - `moveToPoint()` could circle its target until the time limit. Inside 8 in
   it let the heading correction reach the full voltage cap, so a target
   passed a few inches to the side pulled the robot round it (455° and a

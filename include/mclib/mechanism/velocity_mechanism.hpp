@@ -71,8 +71,8 @@ struct VelocityMechanismConfig {
  *
  * @code
  * VelocityMechanism spinner(
- *     [&motors] { return motors.getAverageActualVelocity(); },
- *     [&motors](double volts) { motors.setVoltage(volts); },
+ *     [] { return motors.getAverageActualVelocity(); },
+ *     [](double volts) { motors.setVoltage(volts); },
  *     config);
  * @endcode
  *
