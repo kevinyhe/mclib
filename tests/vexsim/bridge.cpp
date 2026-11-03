@@ -18,6 +18,12 @@
 #include <cstdint>
 #include <memory>
 
+// Set by code linked next to this bridge that runs every time the simulated
+// clock moves, the way the command scheduler runs mechanisms on the robot.
+extern "C" {
+void (*sim_after_refresh_hook)(std::uint32_t millis) = nullptr;
+}
+
 struct Sample {
   double heading, left, right, current_ma, velocity_rpm;
   std::uint32_t millis;
@@ -102,6 +108,7 @@ void refresh(std::uint32_t ms) {
       {drive.headingDeg() * std::acos(-1.0) / 180,
        drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal});
   if (fusion_rig.fusion) runFusion();
+  if (sim_after_refresh_hook) sim_after_refresh_hook(sample.millis);
 }
 }
 

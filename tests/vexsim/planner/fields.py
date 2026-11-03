@@ -28,9 +28,25 @@ def to_planner(x, y):
     return [round(-y / INCH, 3), round(x / INCH, 3)]
 
 
-def make_world(field, sim):
+def piece_pose(values):
+    """[x, y, z, ax, ay, az] in vexsim metres -> planner inches, axis from the
+    first colour's half to the second's."""
+    from vexsim.units import INCH
+    x, y = to_planner(values[0], values[1])
+    return [x, y, round(values[2] / INCH, 3), round(-values[4], 3), round(values[3], 3), round(values[5], 3)]
+
+
+def piece_list(pieces):
+    """Every Pin and Cup with its colours and where it is now."""
+    return [dict(id=piece.id, kind=piece.kind, colors=list(piece.colors),
+                 pose=piece_pose(list(piece.center()) + list(piece.axis())))
+            for piece in pieces.pieces()]
+
+
+def make_world(field, sim, preload="none"):
     """The object whose step() advances the drivetrain and everything around it,
-    or None for the open floor."""
+    or None for the open floor. @p preload is the colour of the half of the
+    preload Pin that points up, or "none"."""
     if field == "open":
         return None
     if field == "push_back":
@@ -38,7 +54,7 @@ def make_world(field, sim):
         return arena.push_back(sim)
     if field == "override":
         from vexsim.override import OverrideWorld
-        return OverrideWorld(sim)
+        return OverrideWorld(sim, preload=None if preload == "none" else preload)
     raise ValueError(f"unknown field {field!r}")
 
 
@@ -67,6 +83,12 @@ def override_drawing():
     quadrants = {"left": [(-half, -half), (0, 0), (-half, half)], "right": [(half, -half), (0, 0), (half, half)],
                  "bottom": [(-half, -half), (0, 0), (half, -half)], "top": [(-half, half), (0, 0), (half, half)]}
     mid = of.MIDFIELD_HALF_DIAGONAL
+    from vexsim.override import FlexGeometry
+    from vexsim.pieces import Pieces
+    layout = Pieces()
+    layout.place_layout(of.starting_layout())
+    flex = FlexGeometry()
+    inches = lambda value: round(value / INCH, 3)  # noqa: E731
     return dict(
         name=GAME_FIELDS["override"], half_in=round(half / INCH, 3),
         tape=dict(auton_line=[to_planner(-half, half), to_planner(half, -half)],
@@ -75,7 +97,14 @@ def override_drawing():
                   midfield=[to_planner(x, y) for x, y in ((mid, 0), (0, mid), (-mid, 0), (0, -mid))]),
         quadrants=[dict(name=name, color=of.QUADRANT_COLOR[name], outline=[to_planner(x, y) for x, y in points])
                    for name, points in quadrants.items()],
-        goals=goals, loaders=loaders, toggles=toggles)
+        goals=goals, loaders=loaders, toggles=toggles, pieces=piece_list(layout),
+        piece_size=dict(pin_length_in=inches(of.PIN_LENGTH), pin_flange_in=inches(of.PIN_FLANGE_ACROSS_CORNERS),
+                        pin_cone_in=inches(of.PIN_CONE_DIAMETER), pin_tip_in=inches(of.PIN_TIP_DIAMETER),
+                        cup_length_in=inches(of.CUP_LENGTH), cup_rim_in=inches(of.CUP_RIM_DIAMETER)),
+        claw=dict(ahead_in=flex.claw_ahead, height_in=flex.claw_height, jaw_length_in=flex.jaw_length,
+                  jaw_thickness_in=flex.jaw_thickness, open_gap_in=flex.jaw_open_gap, lift_travel_in=flex.lift_travel,
+                  incline_deg=flex.lift_incline_deg, arm_full_deg=flex.arm_full_deg,
+                  claw_closed_deg=flex.claw_closed_deg))
 
 
 def push_back_drawing():

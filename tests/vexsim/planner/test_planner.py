@@ -51,6 +51,35 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Field must be one of"):
             validate_project(dict(field="moon"))
 
+    def test_old_files_get_no_preload_and_no_actions(self):
+        project = validate_project({})
+        self.assertEqual(project["preload"], "none")
+        self.assertEqual(project["steps"][0]["actions"], [])
+        self.assertEqual(validate_project(default_project())["preload"], "yellow")
+
+    def test_the_lift_and_claw_need_the_override_field(self):
+        drive_with_action = dict(type="drive", actions=[dict(when="start", mechanism="claw", preset="open")])
+        cases = [
+            (dict(field="open", steps=[dict(type="arm")]), "Step 1 .*only the Override robot"),
+            (dict(field="push_back", steps=[drive_with_action]), "only the Override robot"),
+            (dict(field="open", preload="yellow"), "A preload needs the Override field"),
+            (dict(field="override", preload="green"), "Preload must be one of"),
+            (dict(field="override", steps=[dict(type="arm", arm_preset="sky")]), "Lift position must be one of"),
+            (dict(field="override", steps=[dict(type="arm", actions=drive_with_action["actions"])]),
+             "actions go on drive steps"),
+            (dict(field="override", steps=[dict(type="claw", chain=True), dict(type="drive")]),
+             "drive is not moving during a claw step"),
+            (dict(field="override", steps=[dict(type="drive", actions=[dict(when="time", value=2.5, mechanism="arm",
+                                                                             preset="top")])]),
+             "time must be a whole number"),
+            (dict(field="override", steps=[dict(type="drive", actions=[dict(when="soon", mechanism="arm",
+                                                                             preset="top")])]),
+             "when must be one of"),
+        ]
+        for raw, message in cases:
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                validate_project(raw)
+
     def test_every_example_is_valid(self):
         for path in sorted((HERE / "examples").glob("*.json")):
             with self.subTest(path.name):
@@ -187,6 +216,27 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(code.count("Keeps moving into the next step"), 2)
         self.compile(code)
 
+    def test_export_of_the_lift_claw_and_actions_compiles(self):
+        project = validate_project(dict(field="override", preload="red", steps=[
+            dict(type="drive", distance=12, actions=[dict(when="start", mechanism="arm", preset="above_alliance_goal"),
+                                                     dict(when="distance", value=8, mechanism="claw", preset="open")]),
+            dict(path_step([(0, -24)]), actions=[dict(when="time", value=250, mechanism="arm", preset="down")]),
+            dict(type="arm", arm_preset="into_alliance_goal"),
+            dict(type="claw", claw_preset="closed", timeout_ms=800),
+            dict(type="wall_reset", x=0, y=-63, heading=180,
+                 actions=[dict(when="start", mechanism="arm", preset="top")])]))
+        code = export(project)
+        self.assertIn(exported_helpers("flex_helpers.hpp"), code)
+        for text in ("static pros::Task flex_task", "Preload: Red Pin, red half up",
+                     "flex_rig.moveArm(flex::ArmPreset::IntoAllianceGoal, 1500)",
+                     "flex_rig.moveClaw(flex::ClawPreset::Closed, 800)",
+                     "{flex::Action::When::AfterDistance, 8, false, static_cast<int>(flex::ClawPreset::Open)}",
+                     "{flex::Action::When::AfterTime, 250, true, static_cast<int>(flex::ArmPreset::Down)}",
+                     "const bool result = wallReset("):
+            self.assertIn(text, code)
+        self.assertEqual(code.count("flex_rig.finishActions();"), 3)
+        self.compile(code)
+
     def test_export_without_a_plan_marks_the_placeholders(self):
         code = export(validate_project(example("s_curve")))
         self.assertIn("placeholder", code.lower())
@@ -308,6 +358,31 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(step["contacts"][0]["element"], "the wall")
         self.assertGreater(step["contacts"][0]["peak_force_n"], 20)
         self.assertTrue(any(frame.get("contact") == "the wall" for frame in result["trace"]))
+
+    def test_8_override_preload_goes_into_the_red_goal_and_scores(self):
+        project = dict(field="override", preload="yellow", start=dict(x=0, y=-62.7, heading=0), steps=[
+            dict(type="drive", distance=15.6, actions=[dict(when="start", mechanism="arm",
+                                                             preset="above_alliance_goal")]),
+            dict(type="turn", heading=90),
+            dict(type="drive", distance=13.47),
+            dict(type="arm", arm_preset="into_alliance_goal"),
+            dict(type="claw", claw_preset="open"),
+            dict(type="drive", distance=-10, actions=[dict(when="distance", value=4, mechanism="arm",
+                                                            preset="down")])])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        self.assertEqual(result["summary"]["passed_steps"], 6)
+        drop = next(line for line in result["steps"][4]["info"] if line.startswith("Dropped"))
+        self.assertRegex(drop, r"red/yellow Pin at \(2[34], -4[67]\).*: the claw opened\.")
+        self.assertIn("Lift reached Into an Alliance Goal (290°)", result["steps"][3]["checks"][0]["message"])
+        self.assertEqual(result["score"]["red"], dict(alliance_pins=1, yellow_pins=0, total=5))
+        self.assertEqual(len(result["pieces"]), 74)
+        last = result["trace"][-1]
+        self.assertEqual((last["score_red"], last["score_blue"]), (5, 0))
+        self.assertLess(last["arm_deg"], 30)
+        self.assertIsNone(last["holding"])
+        self.assertEqual(result["trace"][0]["holding"], "a red/yellow Pin")
 
 
 if __name__ == "__main__":

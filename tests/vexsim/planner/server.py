@@ -221,7 +221,8 @@ class Planner:
         if value["status"] in FINISHED:
             value["result"] = self._read(directory, "result.json")
         if value.get("result") is None:
-            value["live"] = dict(steps=(self._read(directory, "live.json") or {}).get("steps", []),
+            live = self._read(directory, "live.json") or {}
+            value["live"] = dict(steps=live.get("steps", []), pieces=live.get("pieces"),
                                  frames_from=frames_from, frames=self._frames(directory, frames_from))
         return value
 

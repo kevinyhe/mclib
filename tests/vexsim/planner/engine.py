@@ -26,12 +26,17 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
-from fields import contact_dict, contacts_between, describe_contact, make_world  # noqa: E402
+from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
+from flex import (MECHANISMS, MOVE_RESULTS, FlexRig, claw_events, declare_flex, frame_telemetry,  # noqa: E402
+                  score_summary)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
 from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, carries_speed, step_name, step_time_limit,
                      strict_json, validate_project)  # noqa: E402
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
+FLEX_BRIDGE = HERE / "flex_bridge.cpp"
+EXTRA_SOURCES = [PATH_BRIDGE, FLEX_BRIDGE, ROOT / "src/mclib/command/subsystem.cpp",
+                 ROOT / "src/mclib/mechanism/position_mechanism.cpp"]
 STATE_VALUES = 8
 MAX_STATES = 40000
 MOTION_RESULTS = ("Reached", "TimedOut", "Cancelled", "Disabled", "InvalidValue", "NoDrive")
@@ -105,7 +110,8 @@ class Progress:
 
 def source_fingerprint(vexsim):
     """Changes whenever the compiled library or the physics could change."""
-    files = [HERE.parent / "run.py", HERE.parent / "bridge.cpp", PATH_BRIDGE, HERE / "path_helpers.hpp"]
+    files = [HERE.parent / "run.py", HERE.parent / "bridge.cpp", PATH_BRIDGE, HERE / "path_helpers.hpp",
+             FLEX_BRIDGE, HERE / "flex_helpers.hpp"]
     files += sorted((ROOT / "src/mclib").rglob("*.cpp")) + sorted((ROOT / "include/mclib").rglob("*.hpp"))
     simulator = Path(vexsim).resolve() / "vexsim"
     files += sorted(simulator.rglob("*.py"))
@@ -144,6 +150,7 @@ def declare_planner(lib):
     lib.planner_follow.restype = C.c_int
     lib.planner_folded_section.argtypes = [doubles, C.c_int]
     lib.planner_folded_section.restype = C.c_int
+    declare_flex(lib)
     return lib
 
 
@@ -166,7 +173,7 @@ def load_library(vexsim, cache, progress, compile_allowed=True):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not marker.is_file():
             try:
-                harness.build(build_dir, extra_sources=[PATH_BRIDGE])
+                harness.build(build_dir, extra_sources=EXTRA_SOURCES)
             except RuntimeError as error:
                 errors = [line for line in str(error).splitlines() if "error" in line][:8]
                 raise StageError("g++ could not compile mclib. First errors:\n" + "\n".join(errors) +
@@ -366,6 +373,8 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
     """Where the controller is asked to finish, as it would be on the robot:
     relative moves count from where the robot is when the step starts."""
     kind = step["type"]
+    if kind in MECHANISMS:
+        return dict(x=None, y=None, heading=None)
     if kind == "drive":
         radians = math.radians(commanded_heading)
         return dict(x=entry_pose[0] + step["distance"] * math.sin(radians),
@@ -400,10 +409,13 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan
     return result
 
 
-def invoke(lib, bridge, project, step, start, feedforward, timeout_ms, plan):
+def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan):
     """Runs one step with the real mclib call. Returns followTrajectory()'s
-    MotionResult for paths, wallReset()'s result for wall resets."""
+    MotionResult for paths, wallReset()'s result for wall resets, and
+    flex::MoveResult for the lift and claw."""
     kind = step["type"]
+    if kind in MECHANISMS:
+        return rig.move(kind, step[f"{kind}_preset"], timeout_ms)
     if kind == "path":
         return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan)
     if kind == "reverse_arc" and math.remainder(step["heading"] - bridge.pose()[2], 360) * step["radius"] > 1e-8:
@@ -435,6 +447,22 @@ def path_gap(frames, states):
 def check(key, label, passed, message, measured=None, limit=None, unit=""):
     return dict(id=key, label=label, passed=bool(passed), message=message, measured=measured, limit=limit,
                 unit=unit)
+
+
+def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, degrees):
+    kind = step["type"]
+    preset = MECHANISMS[kind]["presets"][step[f"{kind}_preset"]]
+    seconds, limit_s = duration_ms / 1000, timeout_ms / 1000
+    name = MECHANISMS[kind]["label"]
+    if motion_result == 1:
+        message = f"{name} reached {preset} in {seconds:.2f} s (limit {limit_s:.2f} s)."
+    elif motion_result == 2:
+        message = (f"The jaws stopped on a game object at {degrees:.0f}° after {seconds:.2f} s "
+                   f"(limit {limit_s:.2f} s).")
+    else:
+        message = f"{name} did not reach {preset} in the {limit_s:.2f} s time limit. It was at {degrees:.0f}°."
+    return [check("time", "Time", motion_result in (1, 2), message, measured=round(seconds, 3), limit=limit_s,
+                  unit="s")]
 
 
 def score_step(step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, stopped,
@@ -604,12 +632,22 @@ def _execute(raw, destination, vexsim, cache, progress):
                                    tuning=project["gains"], start_pose=(start["x"], start["y"], start["heading"]),
                                    sim_time_limit=LIMITS["max_simulated_s"])
     recorder = Recorder(destination)
-    world = make_world(project["field"], bridge.sim)
-    if world is None:
-        bridge.on_capture = recorder.record
-    else:
+    world = make_world(project["field"], bridge.sim, project["preload"])
+    rig = FlexRig(lib, bridge, world) if project["field"] == "override" else None
+    pieces = piece_list(world.pieces) if rig else None
+    if world is not None:
         bridge.step_world = world.step
-        bridge.on_capture = lambda frame: recorder.record(dict(frame, **world.telemetry()))
+
+    def with_world(frame):
+        if world is None:
+            return frame
+        return dict(frame, **(frame_telemetry(world) if rig else world.telemetry()))
+
+    def capture():
+        return with_world(bridge.capture())
+
+    bridge.on_capture = lambda frame: recorder.record(with_world(frame))
+    write_json(destination / "live.json", dict(steps=[], pieces=pieces))
     progress.begin("simulate", "Running each step with the real mclib motion calls against vexsim physics.")
     rows = []
     halted = False
@@ -630,35 +668,48 @@ def _execute(raw, destination, vexsim, cache, progress):
         target = motion_target(step, designed_end, bridge.pose(), bridge.commanded_heading())
         started = bridge.sim.t
         recorder.phase, recorder.step = "motion", index
-        recorder.record(bridge.capture())
+        recorder.record(capture())
         configuration_error = None
+        if rig:
+            rig.begin_actions(step["actions"])
         try:
-            motion_result = invoke(lib, bridge, project, step, designed_start, feedforward, timeout_ms,
+            motion_result = invoke(lib, bridge, rig, project, step, designed_start, feedforward, timeout_ms,
                                    plans[index] if plans else None)
         except ValueError as error:
             configuration_error = str(error)
             motion_result = None
+        late_actions = rig.finish_actions() if rig else 0
         returned = bridge.sim.t
         truth_at_exit, estimate_at_exit = bridge.truth(), bridge.pose()
         coordinate_reset = step["type"] == "wall_reset" and bool(motion_result)
         recorder.reset_frame = coordinate_reset
-        recorder.record(bridge.capture())
+        recorder.record(capture())
         handoff_speed_ips = recorder.trace[-1]["speed_ips"]
         if not step["chain"]:
             recorder.phase = "hold"
             bridge.advance_idle(LIMITS["hold_ms"])
-            recorder.record(bridge.capture())
+            recorder.record(capture())
         actual = bridge.truth()
         duration_ms = (returned - started) * 1000
-        checks, position_error, heading_error = score_step(
-            step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, bridge.stopped(),
-            motion_result, configuration_error)
+        if step["type"] in MECHANISMS:
+            mechanism = getattr(world.mechanism, step["type"])
+            checks = score_mechanism_step(step, timeout_ms, duration_ms, motion_result,
+                                          math.degrees(mechanism.position))
+            position_error = heading_error = None
+        else:
+            checks, position_error, heading_error = score_step(
+                step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, bridge.stopped(),
+                motion_result, configuration_error)
         passed = all(item["passed"] for item in checks)
         odometry_error = None if coordinate_reset else math.dist(estimate_at_exit[:2], truth_at_exit[:2])
         finished = duration_ms < timeout_ms - .5
         chained_path = step["chain"] and step["type"] == "path"
-        notes = advice(checks, position_error, odometry_error, finished, chained_path,
-                       project["path_defaults"]["ramsete_b"])
+        if step["type"] in MECHANISMS:
+            notes = [] if finished else [f"The {step['type']} ran out of time. Check the {step['type']} current in "
+                                         "the telemetry: high current means it was pushing against something."]
+        else:
+            notes = advice(checks, position_error, odometry_error, finished, chained_path,
+                           project["path_defaults"]["ramsete_b"])
         info = []
         if odometry_error is not None:
             info.append(f"Odometry was {odometry_error:.2f} in from the simulated position when the step ended.")
@@ -689,8 +740,13 @@ def _execute(raw, destination, vexsim, cache, progress):
                     notes.append(settle_hint)
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
+        if late_actions:
+            info.append(f"{late_actions} lift or claw action{'s' * (late_actions != 1)} had not run when the "
+                        "motion ended, so " + ("they" if late_actions != 1 else "it") + " ran then.")
         contacts = contacts_between(world, started, bridge.sim.t)
         info.extend(describe_contact(contact, started) for contact in contacts)
+        if rig:
+            info.extend(claw_events(world, started, bridge.sim.t))
         failed = [item["message"] for item in checks if not item["passed"]]
         rows.append(dict(index=index, type=step["type"], executed=True, passed=passed,
                          contacts=[contact_dict(contact, started) for contact in contacts],
@@ -701,10 +757,13 @@ def _execute(raw, destination, vexsim, cache, progress):
                          start_time_s=started, return_time_s=returned, end_time_s=bridge.sim.t,
                          true_pose=actual, estimated_pose_at_exit=estimate_at_exit,
                          coordinate_reset=coordinate_reset,
+                         score=score_summary(world) if rig else None,
+                         move_result=MOVE_RESULTS[motion_result] if step["type"] in MECHANISMS and
+                         motion_result is not None else None,
                          motion_result=MOTION_RESULTS[motion_result] if step["type"] == "path" and
                          motion_result is not None else None))
         halted = not passed and project["stop_on_failure"]
-        write_json(destination / "live.json", dict(steps=rows))
+        write_json(destination / "live.json", dict(steps=rows, pieces=pieces))
     bridge.on_capture = None
     recorder.close()
     progress.step = None
@@ -721,11 +780,11 @@ def _execute(raw, destination, vexsim, cache, progress):
     result = dict(passed=passed_steps == len(rows), summary=summary, steps=rows, trace=recorder.trace,
                   plans=plans or [None] * len(rows), settings=path_settings(project, feedforward) if feedforward else None,
                   designed_poses=poses, project=project, source_fingerprint=fingerprint,
-                  stages=progress.stages)
+                  stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None)
     write_json(destination / "result.json", result)
     with (destination / "trace.csv").open("w", newline="") as handle:
-        fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame))
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame if key != "pieces"))
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(recorder.trace)
     progress.finish("score", f"{passed_steps} of {len(rows)} steps passed.")

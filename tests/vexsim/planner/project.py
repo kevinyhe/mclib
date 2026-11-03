@@ -5,6 +5,7 @@ import json
 import math
 
 from fields import GAME_FIELDS, NEW_ROUTINE_FIELD, OLD_FILE_FIELD
+from flex import ACTION_TIMES, ACTION_UNITS, ARM_PRESETS, CLAW_PRESETS, MECHANISMS, PRELOADS
 
 FORMAT = "mclib-path-planner"
 VERSION = 1
@@ -53,6 +54,11 @@ FIELDS = {
                        help="The step fails if it has not finished by then."),
     "volts": dict(label="Max voltage", unit="V", low=.1, high=12, step=.1,
                   help="Caps the drive voltage. 12 V is full power."),
+    "arm_preset": dict(label="Lift position", choices=ARM_PRESETS,
+                       help="Arm motor degrees. 0 is all the way down, 2000 all the way up."),
+    "claw_preset": dict(label="Claw", choices=CLAW_PRESETS,
+                        help="Claw motor degrees. Closed is past where the jaws meet a Pin, so the motor keeps "
+                             "squeezing it."),
 }
 
 STEP_TYPES = {
@@ -94,7 +100,29 @@ STEP_TYPES = {
                                    "Must be the last step, because it moves the odometry frame.",
                        fields=["x", "y", "heading", "current_ma"],
                        defaults=dict(x=0, y=0, heading=0, current_ma=2500)),
+    "arm": dict(label="Move the lift", call="moveArm()", mechanism="arm",
+                description="Move the lift to a preset and wait until it gets there. The drive holds still. "
+                            "The lift is an mclib PresetPositionMechanism.",
+                fields=["arm_preset"], defaults=dict(arm_preset="above_alliance_goal", timeout_ms=1500)),
+    "claw": dict(label="Open or close the claw", call="moveClaw()", mechanism="claw",
+                 description="Open or close the claw and wait. Closing ends once the jaws have stopped on a game "
+                             "object for 0.1 s. The claw is an mclib PresetPositionMechanism.",
+                 fields=["claw_preset"], defaults=dict(claw_preset="closed", timeout_ms=1000)),
 }
+MECHANISM_STEPS = {kind for kind, info in STEP_TYPES.items() if "mechanism" in info}
+
+ACTIONS = dict(
+    label="Lift and claw during this step",
+    help="Moves the lift or the claw while the robot drives, without waiting for it. Runs at the start, once the "
+         "robot is a distance from where the step started (straight line), or a time after the step started. "
+         "Anything that has not run when the motion ends runs then.",
+    times=ACTION_TIMES, units=ACTION_UNITS,
+    mechanisms={key: dict(label=item["label"], presets=item["presets"]) for key, item in MECHANISMS.items()},
+    max=6, max_distance_in=500, max_time_ms=20000,
+)
+PRELOAD = dict(label="Preload", choices=PRELOADS,
+               help="The red Alliance Pin held in the claw at the start, standing up. The half that points up "
+                    "is the half that will show on top once it is placed.")
 
 CHAIN = dict(
     label="Keep moving into the next step",
@@ -104,6 +132,8 @@ CHAIN = dict(
     not_allowed={
         "turn_to_point": "turnToPoint() has no exit option in mclib, so it always stops.",
         "wall_reset": "A wall reset has to stop against the wall.",
+        "arm": "The drive is not moving during a lift step.",
+        "claw": "The drive is not moving during a claw step.",
     },
     last_step="The last step has to stop: there is no next step to keep moving into.",
 )
@@ -134,7 +164,7 @@ LIMITS = dict(max_steps=40, max_points=30, max_simulated_s=120, max_body_bytes=2
               max_handle_in=300, settle_allowance_ms=4000, chain_allowance_ms=500)
 
 DEFAULT_PROJECT = dict(
-    format=FORMAT, version=VERSION, name="New routine", field=OLD_FILE_FIELD,
+    format=FORMAT, version=VERSION, name="New routine", field=OLD_FILE_FIELD, preload="none",
     robot=dict(preset="six_motor_450", tracking="two", heading_source="imu"),
     conditions={key: item["default"] for key, item in CONDITIONS.items()},
     gains={key: item["default"] for key, item in GAINS.items()},
@@ -199,6 +229,10 @@ def _field(step, key, where):
     if key == "direction":
         if value not in (1, -1) or isinstance(value, bool):
             raise ValueError(f"{where}: Direction must be 1 (forward) or -1 (backward)")
+        return value
+    if "choices" in info:
+        if value not in info["choices"]:
+            raise ValueError(f"{where}: {info['label']} must be one of: {', '.join(info['choices'])}")
         return value
     _number(value, info["low"], info["high"], f"{where}: {info['label']}", info["unit"],
             integer=key == "timeout_ms")
@@ -271,6 +305,11 @@ def validate_project(raw):
     project["field"] = raw.get("field", OLD_FILE_FIELD)
     if project["field"] not in GAME_FIELDS:
         raise ValueError(f"Field must be one of: {', '.join(GAME_FIELDS)}")
+    project["preload"] = raw.get("preload", "none")
+    if project["preload"] not in PRELOADS:
+        raise ValueError(f"Preload must be one of: {', '.join(PRELOADS)}")
+    if project["preload"] != "none" and project["field"] != "override":
+        raise ValueError("A preload needs the Override field: only the Override robot has a claw")
     project["robot"].update(_object(raw.get("robot", {}), project["robot"], "Robot"))
     for key, choices in (("preset", PRESETS), ("tracking", TRACKING), ("heading_source", HEADING_SOURCES)):
         if project["robot"][key] not in choices:
@@ -292,20 +331,47 @@ def validate_project(raw):
     project["steps"] = []
     for index, value in enumerate(steps):
         try:
-            project["steps"].append(_validate_step(index, value, len(steps)))
+            project["steps"].append(_validate_step(index, value, len(steps), project["field"]))
         except ValueError as error:
             raise ProjectError(str(error), index) from error
     return project
 
 
-def _validate_step(index, value, count):
+def _validate_actions(raw, where):
+    if not isinstance(raw, list) or len(raw) > ACTIONS["max"]:
+        raise ValueError(f"{where}: up to {ACTIONS['max']} lift and claw actions per step")
+    actions = []
+    for number, action in enumerate(raw, start=1):
+        at = f"{where}, action {number}"
+        _object(action, {"when", "value", "mechanism", "preset"}, at)
+        clean = dict(when="start", value=0, mechanism="arm", preset=None)
+        clean.update(action)
+        if clean["when"] not in ACTION_TIMES:
+            raise ValueError(f"{at}: when must be one of: {', '.join(ACTION_TIMES)}")
+        if clean["mechanism"] not in MECHANISMS:
+            raise ValueError(f"{at}: mechanism must be one of: {', '.join(MECHANISMS)}")
+        presets = MECHANISMS[clean["mechanism"]]["presets"]
+        if clean["preset"] not in presets:
+            raise ValueError(f"{at}: the {clean['mechanism']} preset must be one of: {', '.join(presets)}")
+        if clean["when"] == "distance":
+            _number(clean["value"], 0, ACTIONS["max_distance_in"], f"{at}: distance", "in")
+        elif clean["when"] == "time":
+            _number(clean["value"], 0, ACTIONS["max_time_ms"], f"{at}: time", "ms", integer=True)
+        else:
+            clean["value"] = 0
+        actions.append(clean)
+    return actions
+
+
+def _validate_step(index, value, count, field):
     where = step_name(index, value)
     if not isinstance(value, dict) or value.get("type") not in STEP_TYPES:
         raise ValueError(f"Step {index + 1}: unknown step type {value.get('type') if isinstance(value, dict) else value!r}")
     kind = value["type"]
     info = STEP_TYPES[kind]
-    _object(value, set(info["defaults"]) | {"type", "note", "timeout_ms", "volts", "chain"}, where)
-    step = dict(type=kind, note="", timeout_ms=4000, volts=6 if kind == "wall_reset" else 12, chain=False)
+    _object(value, set(info["defaults"]) | {"type", "note", "timeout_ms", "volts", "chain", "actions"}, where)
+    step = dict(type=kind, note="", timeout_ms=4000, volts=6 if kind == "wall_reset" else 12, chain=False,
+                actions=[])
     step.update(copy.deepcopy(info["defaults"]))
     step.update(value)
     if not isinstance(step["note"], str) or len(step["note"]) > 80:
@@ -320,6 +386,12 @@ def _validate_step(index, value, count):
         raise ValueError(f"{where}: turnToPoint() always uses up to 12 V")
     if kind == "wall_reset" and index != count - 1:
         raise ValueError(f"{where}: a wall reset must be the last step, because it moves the odometry frame")
+    step["actions"] = _validate_actions(step["actions"], where)
+    uses_claw = kind in MECHANISM_STEPS or step["actions"]
+    if uses_claw and field != "override":
+        raise ValueError(f"{where}: only the Override robot has a lift and claw. Choose the Override field")
+    if step["actions"] and kind in MECHANISM_STEPS:
+        raise ValueError(f"{where}: lift and claw actions go on drive steps")
     if not isinstance(step["chain"], bool):
         raise ValueError(f"{where}: {CHAIN['label']} must be true or false")
     if step["chain"] and kind in CHAIN["not_allowed"]:
@@ -351,17 +423,18 @@ def step_time_limit(step, plan):
     return int(math.ceil(planned_ms / 100) * 100)
 
 
-#: Back against the red Alliance Station wall, facing the red Goal in front of it
-OVERRIDE_START = dict(x=24, y=-62.7, heading=0)
+#: Back against the red Alliance Station wall, midway between the two stacks of Cups on it
+OVERRIDE_START = dict(x=0, y=-62.7, heading=0)
 
 
 def default_project():
-    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START))
+    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START, preload="yellow"))
 
 
 def config():
     """Everything the page needs to draw its forms."""
     return dict(format=FORMAT, version=VERSION, game_fields=GAME_FIELDS, presets=PRESETS, tracking=TRACKING,
                 heading_sources=HEADING_SOURCES, gains=GAINS, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
+                actions=ACTIONS, preload=PRELOAD,
                 path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, limits=LIMITS,
                 default_project=default_project())

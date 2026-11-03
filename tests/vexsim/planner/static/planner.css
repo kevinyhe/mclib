@@ -238,7 +238,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 #field.grab { cursor: grab; }
 #field.grabbing { cursor: grabbing; }
 #field.pointer { cursor: pointer; }
-.field-hint, .cursor-readout, .speed-legend, .stale-badge, .overlay-status {
+.field-hint, .cursor-readout, .speed-legend, .stale-badge, .overlay-status, .score-panel {
   position: absolute;
   background: rgba(255, 255, 255, .92);
   border: 1px solid var(--border);
@@ -253,6 +253,13 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .cursor-readout:empty { display: none; }
 .speed-legend { right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .speed-legend i { width: 90px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #2c5fd6, #14a3a3, #e6b400, #d8432f); }
+.score-panel { right: 10px; top: 10px; padding: 6px 10px; }
+.score-title { color: var(--muted); font-size: 11px; }
+.score-line { display: flex; gap: 12px; font-size: 16px; font-weight: 700; }
+.score-red { color: #c2362f; }
+.score-blue { color: #2556c4; }
+.step-actions-list { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.action-box { display: grid; gap: 6px; margin-bottom: 8px; }
 .stale-badge { left: 50%; bottom: 10px; transform: translateX(-50%); color: var(--warn); background: var(--warn-soft); border-color: #f1dca6; }
 .overlay-status { left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 10px 14px; font-size: 13px; }
 

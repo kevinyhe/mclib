@@ -65,6 +65,7 @@
     viewer: { ready: false, error: "" },
     log: [],
     graphCache: null,
+    pieceCache: null,
   };
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -212,7 +213,7 @@
 
   function newStep(type, after) {
     const info = state.config.step_types[type];
-    const step = { type, note: "", timeout_ms: 4000, volts: type === "wall_reset" ? 6 : 12, chain: false, ...clone(info.defaults) };
+    const step = { type, note: "", timeout_ms: 4000, volts: type === "wall_reset" ? 6 : 12, chain: false, actions: [], ...clone(info.defaults) };
     const pose = poses()[after]?.end ?? state.project.start;
     const ahead = along(pose.heading, 24);
     if ("x" in step && type !== "wall_reset") {
@@ -597,8 +598,19 @@
       case "arc": case "reverse_arc": return `to ${trim(step.heading)}°, radius ${trim(Math.abs(step.radius))} in ${step.radius < 0 ? "left" : "right"}`;
       case "swing": return `to ${trim(step.heading)}°${step.direction === -1 ? ", backward" : ""}`;
       case "wall_reset": return `set odometry to ${p(step.x, step.y)}, ${trim(step.heading)}°`;
+      case "arm": return `to ${state.config.fields.arm_preset.choices[step.arm_preset]}`;
+      case "claw": return state.config.fields.claw_preset.choices[step.claw_preset];
       default: return "";
     }
+  }
+
+  function actionsSummary(step) {
+    const rules = state.config.actions;
+    return (step.actions ?? []).map((action) => {
+      const mechanism = rules.mechanisms[action.mechanism];
+      const when = action.when === "start" ? "at the start" : action.when === "distance" ? `after ${trim(action.value)} in` : `after ${trim(action.value)} ms`;
+      return `${mechanism.label} to ${mechanism.presets[action.preset]} ${when}`;
+    }).join("; ");
   }
 
   function resultBadge(row) {
@@ -637,6 +649,7 @@
         resultBadge(row)),
       element("div", { class: "step-sub", text: stepSummary(step, index) }),
       step.chain ? element("div", { class: "step-chain", text: `Keeps moving into step ${index + 2}` }) : null,
+      step.actions?.length ? element("div", { class: "step-actions-list", text: actionsSummary(step) }) : null,
       problem ? element("div", { class: "step-problem", text: problem }) : null,
       actions);
     });
@@ -807,9 +820,9 @@
 
   function fieldInput(step, key) {
     const info = state.config.fields[key];
-    if (key === "direction") {
-      return selectInput(info.label, String(step.direction), Object.entries(info.choices), info.help,
-        (value) => edit(() => { step.direction = Number(value); }));
+    if (info.choices) {
+      return selectInput(info.label, String(step[key]), Object.entries(info.choices), info.help,
+        (value) => edit(() => { step[key] = key === "direction" ? Number(value) : value; }));
     }
     return numberInput({ label: info.label, unit: info.unit, value: step[key], min: info.low, max: info.high, step: info.step,
       help: info.help, onCommit: (value) => edit(() => { step[key] = key === "timeout_ms" ? Math.round(value) : value; }) });
@@ -925,9 +938,12 @@
       children.push(element("div", { class: "form two" }, ...fields));
       children.push(element("h3", { text: "Limits" }));
       const limits = [fieldInput(step, "timeout_ms")];
-      if (step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
+      if (!info.mechanism && step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
       children.push(element("div", { class: "form two" }, ...limits));
-      children.push(element("h3", { text: "When it ends" }), chainInput(step, index));
+      if (!info.mechanism) {
+        children.push(...actionsPane(step));
+        children.push(element("h3", { text: "When it ends" }), chainInput(step, index));
+      }
     }
     pane.replaceChildren(...children);
   }
@@ -968,8 +984,35 @@
       autoNumber({ label: "Time limit", unit: "ms", value: step.timeout_ms, automatic: automaticTimeout, min: 50, max: 60000, step: 100,
         help: timeoutHelp, autoLabel: "Automatic", onCommit: (value) => edit(() => { step.timeout_ms = value === null ? null : Math.round(value); }) }),
       fieldInput(step, "volts")));
+    out.push(...actionsPane(step));
     out.push(element("h3", { text: "When it ends" }), chainInput(step, index));
     return out;
+  }
+
+  function actionsPane(step) {
+    if (state.project.field !== "override") return [];
+    const rules = state.config.actions;
+    const actions = step.actions ?? [];
+    const firstValue = { start: 0, distance: 12, time: 500 };
+    const rows = actions.map((action, i) => {
+      const mechanism = rules.mechanisms[action.mechanism];
+      const what = selectInput("Move", action.mechanism, Object.entries(rules.mechanisms).map(([key, item]) => [key, item.label]), null,
+        (value) => edit(() => { action.mechanism = value; action.preset = Object.keys(rules.mechanisms[value].presets)[0]; }));
+      const preset = selectInput("To", action.preset, Object.entries(mechanism.presets), null, (value) => edit(() => { action.preset = value; }));
+      const when = selectInput("When", action.when, Object.entries(rules.times), null,
+        (value) => edit(() => { action.when = value; action.value = firstValue[value]; }));
+      const amount = action.when === "start" ? null : numberInput({
+        label: action.when === "distance" ? "Distance" : "Time", unit: rules.units[action.when], value: action.value, min: 0,
+        max: action.when === "distance" ? rules.max_distance_in : rules.max_time_ms, step: action.when === "distance" ? 1 : 50,
+        onCommit: (value) => edit(() => { action.value = action.when === "time" ? Math.round(value) : value; }) });
+      return element("div", { class: "section-box action-box", "data-action": i },
+        element("div", { class: "form two" }, what, preset, when, amount),
+        element("button", { class: "small danger", onclick: () => edit(() => { step.actions.splice(i, 1); }) }, "Remove"));
+    });
+    const add = element("button", { class: "small", id: "add-action", disabled: actions.length >= rules.max,
+      onclick: () => edit(() => { step.actions = [...(step.actions ?? []), { when: "start", value: 0, mechanism: "arm", preset: "above_alliance_goal" }]; }) },
+    "Add a lift or claw action");
+    return [element("h3", { text: rules.label }), element("p", { class: "muted small", text: rules.help }), ...rows, add];
   }
 
   function pointBody(step, i, layout, top) {
@@ -1025,7 +1068,12 @@
       element("div", { class: "form" },
         selectInput("Field", project.field, Object.entries(config.game_fields),
           "What the robot drives on. On a game field it hits the walls, Goals and Loaders, and the results say where and how hard.",
-          (value) => edit(() => { project.field = value; }, { replan: false }))),
+          (value) => edit(() => {
+            project.field = value;
+            if (value !== "override") project.preload = "none";
+          }, { replan: false })),
+        project.field === "override" ? selectInput(config.preload.label, project.preload ?? "none", Object.entries(config.preload.choices), config.preload.help,
+          (value) => edit(() => { project.preload = value; }, { replan: false })) : null),
       element("h3", { text: "Robot" }),
       element("div", { class: "form" },
         selectInput("Drivetrain", robot.preset, Object.entries(config.presets).map(([key, value]) => [key, value.label]),
@@ -1171,6 +1219,137 @@
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  const PIECE_FILL = { red: "#d9483b", blue: "#2f6bd8", yellow: "#e8b400", gray: "#8b929c", clear: "rgba(214,232,244,.9)" };
+
+  function runPieceList() {
+    return state.shown?.result?.pieces ?? state.shown?.live?.pieces ?? null;
+  }
+
+  function designPreload(drawing) {
+    const preload = state.project.preload ?? "none";
+    if (preload === "none") return [];
+    const start = state.project.start;
+    const ahead = along(start.heading, preset().body_length_in / 2 + drawing.claw.ahead_in);
+    const colors = ["red", "yellow"];
+    const up = colors[1] === preload ? 1 : -1;
+    return [{ id: "preload", kind: "pin", colors, pose: [start.x + ahead.x, start.y + ahead.y, drawing.piece_size.pin_length_in / 2, 0, 0, up] }];
+  }
+
+  // Every Pin and Cup at the playback time: the run's starting list moved by
+  // each frame up to now. Without a run, the starting layout and the preload.
+  function piecesNow() {
+    const drawing = fieldDrawing();
+    if (state.project.field !== "override" || !drawing?.pieces) return [];
+    const list = runPieceList();
+    if (!list) return [...drawing.pieces, ...designPreload(drawing)];
+    const frames = trace();
+    const index = frameIndexAt(frames, state.time);
+    let cache = state.pieceCache;
+    if (!cache || cache.frames !== frames || cache.list !== list || cache.index > index) {
+      cache = { frames, list, index: -1, poses: new Map(list.map((piece) => [String(piece.id), piece.pose])) };
+      state.pieceCache = cache;
+    }
+    for (let i = cache.index + 1; i <= index; i++) {
+      for (const [id, pose] of Object.entries(frames[i].pieces ?? {})) cache.poses.set(id, pose);
+    }
+    cache.index = index;
+    return list.map((piece) => ({ ...piece, pose: cache.poses.get(String(piece.id)) }));
+  }
+
+  function strokeBetween(ctx, a, b, color, widthIn) {
+    const p = toScreen(a), q = toScreen(b);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, widthIn * state.view.scale);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(q.x, q.y);
+    ctx.stroke();
+  }
+
+  function disc(ctx, centre, radiusIn, fill, stroke) {
+    const p = toScreen(centre);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(1, radiusIn * state.view.scale), 0, 2 * Math.PI);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Top view. An upright Pin shows its flange ring in the lower half's colour
+  // around the upper half's cone. A lying piece shows both halves end to end.
+  function drawPiece(ctx, piece, size) {
+    const [x, y, , ax, ay, az] = piece.pose;
+    const centre = { x, y };
+    const upright = Math.abs(az) > 0.7;
+    const length = piece.kind === "cup" ? size.cup_length_in : size.pin_length_in;
+    const first = { x: x - ax * length / 2, y: y - ay * length / 2 };
+    const second = { x: x + ax * length / 2, y: y + ay * length / 2 };
+    const fill = (color) => PIECE_FILL[color] ?? "#888";
+    ctx.save();
+    ctx.lineCap = "butt";
+    if (piece.kind === "cup") {
+      if (upright) disc(ctx, centre, size.cup_rim_in / 2, fill("clear"), "#5d6570");
+      else {
+        strokeBetween(ctx, first, centre, fill(piece.colors[0]), size.cup_rim_in);
+        strokeBetween(ctx, centre, second, fill(piece.colors[1]), size.cup_rim_in);
+      }
+    } else if (upright) {
+      const [lower, upper] = az >= 0 ? piece.colors : [piece.colors[1], piece.colors[0]];
+      disc(ctx, centre, size.pin_flange_in / 2, fill(lower), "#2b3038");
+      disc(ctx, centre, size.pin_cone_in / 2, fill(upper), "#2b3038");
+    } else {
+      strokeBetween(ctx, first, centre, fill(piece.colors[0]), size.pin_cone_in);
+      strokeBetween(ctx, centre, second, fill(piece.colors[1]), size.pin_cone_in);
+      const across = Math.hypot(ax, ay) > 1e-6 ? { x: -ay / Math.hypot(ax, ay), y: ax / Math.hypot(ax, ay) } : { x: 1, y: 0 };
+      const flange = size.pin_flange_in / 2;
+      strokeBetween(ctx, { x: x - across.x * flange, y: y - across.y * flange }, { x: x + across.x * flange, y: y + across.y * flange }, "#2b3038", 0.5);
+    }
+    ctx.restore();
+  }
+
+  function drawPieces(ctx) {
+    const drawing = fieldDrawing();
+    const pieces = piecesNow().filter((piece) => piece.pose).sort((a, b) => a.pose[2] - b.pose[2]);
+    for (const piece of pieces) drawPiece(ctx, piece, drawing.piece_size);
+  }
+
+  // The jaws in front of the robot. They move forward as the lift rises,
+  // because the lift leans forward.
+  function drawClaw(ctx, pose, armDeg, gapIn, size = null) {
+    const claw = fieldDrawing()?.claw;
+    if (state.project.field !== "override" || !claw) return;
+    const body = size ?? preset();
+    const lift = armDeg / claw.arm_full_deg * claw.lift_travel_in;
+    const forward = body.body_length_in / 2 + claw.ahead_in + lift * Math.sin(claw.incline_deg * Math.PI / 180);
+    const scale = state.view.scale;
+    const p = toScreen(pose);
+    const half = gapIn / 2 * scale, thick = claw.jaw_thickness_in * scale, length = claw.jaw_length_in * scale;
+    const middle = -forward * scale;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(pose.heading * Math.PI / 180);
+    ctx.fillStyle = "#3a414c";
+    ctx.fillRect(-half - thick, middle - length / 2, thick, length);
+    ctx.fillRect(half, middle - length / 2, thick, length);
+    ctx.fillRect(-half - thick, middle + length / 2, 2 * half + 2 * thick, Math.max(1, thick));
+    ctx.restore();
+  }
+
+  function renderScore() {
+    const panel = $("score-panel");
+    const frame = state.shown ? frameNow() : null;
+    const show = state.mode === "top" && state.project.field === "override" && Number.isFinite(frame?.score_red);
+    panel.hidden = !show;
+    if (!show) return;
+    panel.replaceChildren(
+      element("div", { class: "score-title", text: `Score at ${fmt(frame.t, 2)} s` }),
+      element("div", { class: "score-line" },
+        element("span", { class: "score-red", text: `Red ${frame.score_red}` }),
+        element("span", { class: "score-blue", text: `Blue ${frame.score_blue}` })));
   }
 
   function drawPushBackField(ctx, drawing) {
@@ -1507,6 +1686,7 @@
     const size = Number.isFinite(frame.body_length_in) ? { body_length_in: frame.body_length_in, body_width_in: frame.body_width_in } : null;
     if (state.layers.odometry && !frame.coordinate_reset) drawRobot(ctx, { x: frame.estimated_x, y: frame.estimated_y, heading: frame.estimated_heading }, { stroke: "#e07b00", dash: [4, 3], size });
     if (state.layers.truth) drawRobot(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, { fill: "rgba(255,255,255,.82)", stroke: "#18202c", width: 2, size });
+    if (state.layers.truth && Number.isFinite(frame.arm_deg)) drawClaw(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, frame.arm_deg, frame.claw_gap_in, size);
     if (Number.isFinite(frame.controller_carrot_x)) {
       const p = toScreen({ x: frame.controller_carrot_x, y: frame.controller_carrot_y });
       ctx.save();
@@ -1526,6 +1706,7 @@
     state.size = { width, height };
     $("field").dataset.view = JSON.stringify(state.view);
     drawFieldBackground(ctx);
+    drawPieces(ctx);
     const all = poses();
     state.project.steps.forEach((step, index) => {
       if (index === state.selected) return;
@@ -1538,11 +1719,13 @@
     if (state.project.steps.length > 1) {
       const placed = [];
       state.project.steps.forEach((item, index) => {
+        if (stepInfo(item).mechanism) return;
         if (item.type !== "path" || item.points.length) stepTag(ctx, all[index].end, index + 1, index === state.selected, placed);
       });
     }
     const start = state.project.start;
     drawRobot(ctx, start, { stroke: "#2563eb", dash: [5, 3], width: 1.6, fill: "rgba(37,99,235,.06)" });
+    if (!state.shown) drawClaw(ctx, start, 0, state.project.preload && state.project.preload !== "none" ? fieldDrawing().piece_size.pin_tip_in : 0);
     const startTip = along(start.heading, HEADING_KNOB_IN);
     polyline(ctx, [start, { x: start.x + startTip.x, y: start.y + startTip.y }], "rgba(37,99,235,.6)", 1.2);
     drawKnob(ctx, { x: start.x + startTip.x, y: start.y + startTip.y }, "#2563eb", false, 5);
@@ -1556,6 +1739,7 @@
       drawKnob(ctx, state.hover.at, "#2563eb", false, 6);
       drawLabel(ctx, state.hover.at, "+", "#2563eb");
     }
+    renderScore();
     const plan = currentPlan();
     $("speed-legend").hidden = !plan || !pathSteps().length;
     if (plan) $("speed-legend-max").textContent = `${fmt(plan.settings.top_speed_ips, 0)} in/s`;
