@@ -27,6 +27,7 @@
     ["Esc", "Deselect the point"],
     ["?", "Show the help"],
     ["1 to 4 (3D view)", "Change the 3D camera"],
+    ["5 (Override 3D view)", "Follow the robot"],
   ];
 
   const state = {
@@ -762,7 +763,7 @@
   function renderPlayback() {
     const span = timeline();
     const slider = $("timeline");
-    slider.max = String(Math.max(0.001, span.end));
+    slider.max = String(Math.max(0.001, Math.ceil(span.end * 1000) / 1000));
     slider.value = String(state.time);
     slider.disabled = !span.end;
     $("play").disabled = !span.end;
@@ -786,7 +787,8 @@
   function renderHint() {
     const step = selectedStep();
     let hint = "";
-    if (state.mode === "3d") hint = state.shown ? "vexsim's 3D view of the simulated robot. Click it, then press 1 to 4 to change the camera." : "";
+    if (state.mode === "3d" && state.project.field === "override") hint = "Drag to turn, scroll to zoom. Keys 1 to 4: cameras. 5: follow the robot.";
+    else if (state.mode === "3d") hint = state.shown ? "vexsim's 3D view of the simulated robot. Click it, then press 1 to 4 to change the camera." : "";
     else if (state.drag?.kind === "pan") hint = "";
     else if (state.hover?.hint) hint = state.hover.hint;
     else if (step.type === "path" && !step.points.length) hint = `Click on the field to add points to step ${state.selected + 1}. The path starts where the robot is.`;
@@ -1342,7 +1344,7 @@
   function renderScore() {
     const panel = $("score-panel");
     const frame = state.shown ? frameNow() : null;
-    const show = state.mode === "top" && state.project.field === "override" && Number.isFinite(frame?.score_red);
+    const show = state.project.field === "override" && Number.isFinite(frame?.score_red);
     panel.hidden = !show;
     if (!show) return;
     const lines = [
@@ -1356,7 +1358,7 @@
       lines.push(element("div", { class: "score-detail", text: `Toggles set: ${toggles}.` }));
     }
     const auton = state.shown?.result?.autonomous;
-    if (auton && frame.t >= auton.t - 1e-6) {
+    if (auton && frame.t >= auton.t) {
       const point = auton.win_point;
       lines.push(
         element("div", { class: "score-detail", text: `Autonomous ended at ${fmt(auton.t, 2)} s: red ${auton.red}, blue ${auton.blue}. Autonomous Bonus: red ${auton.bonus.red}, blue ${auton.bonus.blue}.` }),
@@ -1715,7 +1717,12 @@
   }
 
   function drawField() {
-    if (state.mode !== "top" || !state.config) return;
+    if (!state.config) return;
+    if (state.mode !== "top") {
+      renderScore();
+      $("speed-legend").hidden = true;
+      return;
+    }
     const { ctx, width, height } = resizeCanvas($("field"));
     state.size = { width, height };
     $("field").dataset.view = JSON.stringify(state.view);
@@ -1875,20 +1882,29 @@
     $("view-top").setAttribute("aria-selected", String(mode === "top"));
     $("view-3d").setAttribute("aria-selected", String(mode === "3d"));
     $("field").hidden = mode !== "top";
-    const frame = $("viewer3d");
-    frame.hidden = mode !== "3d";
-    if (mode === "3d" && !frame.getAttribute("src")) {
-      frame.src = frame.dataset.src;
-      setTimeout(() => {
-        if (!state.viewer.ready) {
-          state.viewer.error = "The 3D view did not start. It needs Three.js 0.160.0 in the vexsim checkout's node_modules and WebGL in this browser.";
-          sync3d();
-        }
-      }, 10000);
-    }
+    $("viewer3d").hidden = mode !== "3d";
+    if (mode === "3d") loadViewer();
     renderHint();
     drawField();
     sync3d();
+  }
+
+  function viewerSource() {
+    return state.project.field === "override" ? "/field3d.html" : $("viewer3d").dataset.src;
+  }
+
+  function loadViewer() {
+    const frame = $("viewer3d");
+    const source = viewerSource();
+    if (frame.getAttribute("src") === source) return;
+    state.viewer = { ready: false, error: "" };
+    frame.src = source;
+    setTimeout(() => {
+      if (!state.viewer.ready && frame.getAttribute("src") === source) {
+        state.viewer.error = "The 3D view did not start. It needs Three.js 0.160.0 in the vexsim checkout's node_modules and WebGL in this browser.";
+        sync3d();
+      }
+    }, 10000);
   }
 
   function sync3d() {
@@ -1897,21 +1913,25 @@
       status.hidden = true;
       return;
     }
+    loadViewer();
     const frame = frameNow();
+    const override = state.project.field === "override";
     let message = "";
     if (state.viewer.error) message = state.viewer.error;
-    else if (!state.viewer.ready) message = "Loading vexsim's 3D view…";
-    else if (!state.shown) message = "Run a simulation to see the robot in 3D. The 3D view shows recorded physics only.";
+    else if (!state.viewer.ready) message = override ? "Loading the 3D field…" : "Loading vexsim's 3D view…";
+    else if (!state.shown) message = override ? "Run a simulation to see the robot on the field." :
+      "Run a simulation to see the robot in 3D. The 3D view shows recorded physics only.";
     status.textContent = message;
     status.hidden = !message;
     if (state.viewer.ready) {
-      $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-frame", frame: state.shown ? frame : null, playing: state.playing, live: !!state.activeRun }, location.origin);
+      $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-frame", frame: state.shown ? frame : null,
+        pieces: override ? piecesNow() : undefined, playing: state.playing, live: !!state.activeRun }, location.origin);
     }
   }
 
   function fit3d() {
     const frames = trace();
-    if (!state.viewer.ready || !frames.length) return;
+    if (!state.viewer.ready || !frames.length || state.project.field === "override") return;
     const xs = frames.map((f) => f.true_x), ys = frames.map((f) => f.true_y);
     $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-fit", bounds: { min_x: Math.min(...xs), max_x: Math.max(...xs), min_y: Math.min(...ys), max_y: Math.max(...ys) } }, location.origin);
   }

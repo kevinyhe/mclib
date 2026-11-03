@@ -5,6 +5,7 @@ Planner coordinates are inches with +Y away from the red Alliance Station.
 vexsim's are metres with +x toward blue, so a vexsim point (x, y) is planner
 (-y, x).
 """
+import math
 from pathlib import Path
 import sys
 
@@ -104,7 +105,42 @@ def override_drawing():
         claw=dict(ahead_in=flex.claw_ahead, height_in=flex.claw_height, jaw_length_in=flex.jaw_length,
                   jaw_thickness_in=flex.jaw_thickness, open_gap_in=flex.jaw_open_gap, lift_travel_in=flex.lift_travel,
                   incline_deg=flex.lift_incline_deg, arm_full_deg=flex.arm_full_deg,
-                  claw_closed_deg=flex.claw_closed_deg))
+                  claw_closed_deg=flex.claw_closed_deg),
+        solid=override_solids())
+
+
+def _planner_direction(x, y):
+    return [round(-y, 6), round(x, 6)]
+
+
+def override_solids():
+    """Heights and profiles for the 3D view, inches."""
+    from vexsim import override_field as of
+    from vexsim.override import FlexGeometry
+    from vexsim.units import INCH
+    inches = lambda value: round(value / INCH, 4)  # noqa: E731
+    base_radius = (of.GOAL_BASE_ACROSS_FLATS + 2.0 * of.GOAL_BASE_CORNER_RADIUS) / 4.0
+    flex = FlexGeometry()
+    return dict(
+        wall_height_in=inches(of.WALL_HEIGHT), wall_thickness_in=inches(of.WALL_THICKNESS),
+        tile_seams_in=[round(value - of.ORIGIN_IN, 3) for value in of.GRID_IN],
+        goals=[dict(name=g.name, top_of_base_in=inches(g.riser + of.GOAL_BASE_PLATE), height_in=inches(g.height),
+                    base_radius_in=inches(base_radius), top_radius_in=inches(of.GOAL_TOP_ACROSS / 2.0),
+                    hole_radius_in=inches(of.GOAL_HOLE_DIAMETER / 2.0)) for g in of.GOALS],
+        toggles=[dict(quadrant=t.quadrant, axle=to_planner(t.x, t.y), inward=_planner_direction(t.inward_x, t.inward_y),
+                      faces=list(t.faces), length_in=inches(of.TOGGLE_LENGTH), axle_height_in=inches(of.TOGGLE_AXLE_HEIGHT),
+                      circumradius_in=inches(of.TOGGLE_CIRCUMRADIUS),
+                      face_angles_deg=[round(math.degrees(a), 3) for a in of.TOGGLE_FACE_ANGLES]) for t in of.TOGGLES],
+        loader=dict(opening_in=inches(of.LOADER_OPENING), top_in=inches(of.LOADER_TOP_LOWERED),
+                    bore_in=inches(of.LOADER_BORE)),
+        pin_half_profile=[[inches(of.PIN_FLANGE_THICKNESS / 2.0), inches(of.PIN_CONE_DIAMETER / 2.0)],
+                          [inches(of.PIN_LENGTH / 2.0 - of.PIN_TIP_STRAIGHT), inches(of.PIN_TIP_DIAMETER / 2.0)],
+                          [inches(of.PIN_LENGTH / 2.0), inches(of.PIN_TIP_DIAMETER / 2.0)]],
+        pin_flange=dict(thickness_in=inches(of.PIN_FLANGE_THICKNESS), radius_in=inches(of.PIN_FLANGE_ACROSS_FLATS / 2.0)),
+        cup_half_profile=[[0.0, inches(of.CUP_WAIST_DIAMETER / 2.0)], [inches(of.CUP_LENGTH / 2.0),
+                                                                       inches(of.CUP_RIM_DIAMETER / 2.0)]],
+        robot=dict(frame_bottom_in=flex.frame_bottom, frame_top_in=flex.frame_top, tower_back_in=flex.tower_back,
+                   tower_front_in=flex.tower_front, tower_top_in=flex.tower_top, claw_thickness_in=flex.claw_thickness))
 
 
 def push_back_drawing():

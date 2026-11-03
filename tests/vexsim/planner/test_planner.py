@@ -251,6 +251,23 @@ class ExportTests(unittest.TestCase):
 
 
 @unittest.skipUnless((VEXSIM / "vexsim/sim.py").is_file(), f"no vexsim checkout at {VEXSIM}")
+class FieldDrawingTests(unittest.TestCase):
+    def test_override_3d_field_has_the_manual_sizes(self):
+        from fields import drawings
+        drawing = drawings(VEXSIM)["override"]
+        solid = drawing["solid"]
+        self.assertEqual((solid["wall_height_in"], solid["wall_thickness_in"]), (11.54, 2.0))
+        self.assertEqual({goal["name"]: goal["height_in"] for goal in solid["goals"]}["center"], 8.77)
+        self.assertEqual(sorted({goal["height_in"] for goal in solid["goals"]}), [3.25, 5.77, 8.77])
+        left = next(toggle for toggle in solid["toggles"] if toggle["quadrant"] == "left")
+        self.assertEqual((left["axle"], left["inward"], left["faces"]), ([0.0, -70.079], [-0.0, 1.0], ["yellow", "red", "blue"]))
+        self.assertEqual((left["axle_height_in"], left["length_in"]), (13.2, 25.99))
+        self.assertEqual(solid["pin_half_profile"][-1], [3.25, 0.7])
+        kinds = [piece["kind"] for piece in drawing["pieces"]]
+        self.assertEqual((kinds.count("pin"), kinds.count("cup")), (37, 36))
+
+
+@unittest.skipUnless((VEXSIM / "vexsim/sim.py").is_file(), f"no vexsim checkout at {VEXSIM}")
 class EngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

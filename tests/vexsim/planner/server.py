@@ -40,6 +40,8 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset
 EXAMPLES = HERE / "examples"
 PAGE_POLICY = ("default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; "
                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+FRAMED_PAGES = {"/field3d.html"}
+FRAMED_POLICY = PAGE_POLICY.replace("frame-ancestors 'none'", "frame-ancestors 'self'")
 
 
 class BusyError(Exception):
@@ -445,7 +447,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, body, content_type, policy)
         elif path in self.server.static:
             file = self.server.static[path]
-            self.send(200, file.read_bytes(), CONTENT_TYPES[file.suffix])
+            self.send(200, file.read_bytes(), CONTENT_TYPES[file.suffix], FRAMED_POLICY if path in FRAMED_PAGES else None)
         else:
             self.send(404, dict(error="Not found."))
 

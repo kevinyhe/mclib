@@ -1,5 +1,6 @@
 // Drives the real planner page in headless Chromium against a running
-// server.py: place points, plan, run, play back, compare, export, mirror.
+// server.py: place points, plan, run, play back, compare, export, mirror,
+// and run the Override example with its lift, claw, score and 3D field.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -68,6 +69,14 @@ try {
   await page.waitForFunction(() => /Ready/.test(document.querySelector("#engine-pill").textContent), null, { timeout: 600000 });
   pass(`Planner ready: ${await page.locator("#engine-pill").innerText()}`);
   await shot("01-empty");
+
+  await page.locator("#tab-robot").click();
+  const fieldSelect = page.locator("#pane-robot label.field-label", { hasText: /^Field/ }).locator("select");
+  assert.equal(await fieldSelect.inputValue(), "override");
+  await fieldSelect.selectOption("open");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).field === "open");
+  await page.locator("#tab-step").click();
+  pass("A new routine starts on the Override field; these first checks switch it to the open floor");
 
   await clickField(24, -12);
   await clickField(0, 24);
@@ -253,10 +262,79 @@ try {
     return document.querySelector("#viewer3d").dataset.applied || (!status.hidden && /did not start|stopped/.test(status.textContent));
   }, null, { timeout: 30000 });
   const applied = await page.locator("#viewer3d").getAttribute("data-applied");
-  if (applied) pass("The 3D view loaded vexsim's renderer and shows the recorded run");
+  if (applied) pass("The 3D view loaded and answered the page");
   else console.log(`NOTE 3D view not available here: ${await page.locator("#viewer3d-status").innerText()}`);
   await page.waitForTimeout(1500);
   await shot("09-3d");
+
+  await page.locator("#view-top").click();
+  await page.locator("#example-picker").selectOption("override_autonomous");
+  await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
+    /two Toggles/.test(document.querySelector("#routine-name").value));
+  project = await draft();
+  assert.equal(project.field, "override");
+  assert.equal(project.preload, "yellow");
+  assert.match(await page.locator("#step-list li").first().innerText(), /Lift to Under a Toggle's axle \(1350°\) at the start/);
+  await page.locator("#tab-robot").click();
+  const chosen = await page.locator("#pane-robot select").evaluateAll((selects) => selects.map((select) => select.selectedOptions[0]?.text));
+  assert(chosen.includes("Override (2026-27)") && chosen.includes("Red Pin, yellow half up"), JSON.stringify(chosen));
+  await page.locator("#tab-step").click();
+  pass("The Override example opens on the Override field with the preload and lift actions");
+
+  await page.locator("#step-list li").first().click();
+  await page.locator("#add-step summary").click();
+  await page.locator('#add-step-menu button[data-type="claw"]').click();
+  assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Open or close the claw/);
+  assert.match(await page.locator("#step-list li").nth(1).innerText(), /Closed/);
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.length === 12);
+  pass("A claw step can be added after the first step; Ctrl+Z removes it");
+
+  await page.locator("#run").click();
+  await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
+  await page.waitForFunction(finished, null, { timeout: 600000 });
+  assert.match(await page.locator("#run-summary").innerText(), /12 of 12 steps passed/);
+  await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
+  const score = await page.locator("#score-panel").innerText();
+  assert.match(score, /Autonomous ended at 14\.\d\d s: red 55, blue 0/);
+  assert.match(score, /Autonomous Bonus: red 12/);
+  assert.match(score, /Win Point[\s\S]*Earned/);
+  pass(`The Override autonomous scores: ${score.split("\n").find((line) => line.startsWith("Autonomous ended"))}`);
+  await shot("10-override-score");
+
+  await page.locator("#step-list li").nth(2).click();
+  assert.match(await page.locator("#pane-step").innerText(), /Turned the left Toggle: red now faces into the field/);
+  await page.locator("#timeline").evaluate((input) => { input.value = "6.5"; input.dispatchEvent(new Event("input")); });
+  await page.locator("#tab-telemetry").click();
+  const lift = await page.locator("#pane-telemetry").innerText();
+  assert.match(lift, /Lift and claw/i);
+  assert.match(lift, /red\/yellow Pin/);
+  await page.locator("#tab-step").click();
+  pass("The step says when a Toggle turned, and telemetry shows the Pin in the claw");
+  await shot("11-override-top");
+
+  await page.locator("#view-3d").click();
+  await page.waitForFunction(() => {
+    const applied = document.querySelector("#viewer3d").dataset.applied;
+    return applied && JSON.parse(applied).available && JSON.parse(applied).robot.arm_deg > 400;
+  }, null, { timeout: 30000 });
+  await page.waitForTimeout(1500);
+  await shot("12-override-3d");
+  await page.locator("#viewer3d").click({ position: { x: 400, y: 300 } });
+  await page.keyboard.press("5");
+  await page.waitForTimeout(1000);
+  await shot("13-override-claw");
+  pass("The 3D view shows the Override field, the robot with its lift and claw, and the Pins");
+  await page.locator("#view-top").click();
+
+  await page.locator("#export-cpp").click();
+  await page.locator("#cpp-dialog[open]").waitFor();
+  const flexCode = await page.locator("#cpp-code").inputValue();
+  assert.match(flexCode, /flex::Rig flex_rig/);
+  assert.match(flexCode, /flex_rig\.beginActions\(/);
+  assert.match(flexCode, /flex::ArmPreset::UnderToggleAxle/);
+  await page.locator("#cpp-dialog .dialog-foot button.primary").click();
+  pass("Export C++ writes the lift, claw and actions with the same helpers the simulator ran");
 
   const offsite = requests.filter((value) => /^https?:/.test(value) && new URL(value).origin !== url.origin);
   assert.deepEqual(offsite, [], "The page must not load anything from the internet");

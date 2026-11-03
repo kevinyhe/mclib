@@ -147,6 +147,22 @@ class HttpTests(unittest.TestCase):
         connection.close()
         self.assertIn("script-src 'self'", policy)
         self.assertIn("connect-src 'self'", policy)
+        self.assertIn("frame-ancestors 'none'", policy)
+
+    def policy(self, path):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        connection.request("GET", path)
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+        return response.status, response.getheader("Content-Security-Policy")
+
+    def test_only_the_3d_field_may_be_framed_and_only_by_the_planner(self):
+        status, policy = self.policy("/field3d.html")
+        self.assertEqual(status, 200)
+        self.assertIn("frame-ancestors 'self'", policy)
+        self.assertIn("script-src 'self';", policy)
+        self.assertIn("frame-ancestors 'none'", self.policy("/field3d.js")[1])
 
 
 def sleeping_engine(*arguments, vexsim, cache):

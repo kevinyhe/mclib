@@ -157,7 +157,7 @@ def autonomous_summary(world):
     touching = world.arena.touching_perimeter
     state = world.sim.state
     return dict(
-        t=round(world.sim.t, 3), red=score["red"].total, blue=score["blue"].total,
+        t=world.sim.t, red=score["red"].total, blue=score["blue"].total,
         bonus=of.autonomous_bonus(score), toggles=toggles,
         win_point=dict(pins=pins, pins_needed=pins_needed, goals_with_two=goals, goals_needed=goals_needed,
                        touching_perimeter=touching,

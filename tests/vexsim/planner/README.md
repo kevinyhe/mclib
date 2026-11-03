@@ -163,6 +163,18 @@ The step lists what the claw did: "Gripped a yellow Pin at (24, -24), 6.8 in
 up, 0.17 s into the step." or "Dropped a red/yellow Pin at (24, -47), 5.6 in
 up: the claw opened."
 
+## The Override field in 3D
+
+On the Override field, **3D view** shows the field built from the manual's
+sizes: tiles, walls, Goals, Loaders, Toggles, every Pin and Cup, and the
+robot with its lift and claw. Playback moves all of it. Drag to turn the
+view and scroll to zoom. Click the view, then press 1 to 4 for a camera or
+5 to follow the robot. The score panel stays on top.
+
+VEX's Field CAD is not used. Its download page refused this machine (HTTP
+403). The shapes come from the manual's drawings instead, so curved parts
+are simplified. On the other fields the 3D view is vexsim's, as before.
+
 ## Override scoring
 
 The score is worked out from where the Pins and Cups are, as the manual's
@@ -271,6 +283,7 @@ and what to change.
 | Esc | deselect the point |
 | ? | help and this list |
 | 1 to 4 in the 3D view | change the camera |
+| 5 in the Override 3D view | follow the robot |
 
 ## Examples
 
@@ -298,6 +311,7 @@ and what to change.
 | `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
 | `export_cpp.py` | the C++ export |
 | `native_viewer.py` | serves vexsim's 3D view for recorded runs |
+| `static/field3d.html`, `static/field3d.js` | the Override field in 3D |
 | `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `planner.css` |
 
 Each run is kept in its own folder under `--output`: the routine, progress,
