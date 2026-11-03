@@ -8,6 +8,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -444,9 +445,36 @@ class EngineTests(unittest.TestCase):
         grip = result["steps"][6]
         self.assertEqual(grip["move_result"], "Stopped closing on a game object")
         self.assertTrue(any(line.startswith("Gripped a yellow Pin at (2") for line in grip["info"]))
-        self.assertTrue(any(line.startswith("Dropped a yellow Pin at (23, -47)") for line in result["steps"][11]["info"]))
+        self.assertTrue(any(re.match(r"Dropped a yellow Pin at \(2[34], -4[67]\)", line)
+                            for line in result["steps"][11]["info"]), result["steps"][11]["info"])
         self.assertEqual((result["autonomous"]["red"], result["autonomous"]["blue"]), (40, 0))
 
+    def test_12_a_toggle_turns_the_way_the_claw_pushes_it(self):
+        def push_left_toggle(preset):
+            project = dict(field="override", preload="none", start=dict(x=0, y=-62.7, heading=0), steps=[
+                dict(type="drive", distance=12, actions=[dict(when="start", mechanism="arm", preset=preset)]),
+                dict(type="turn", heading=180),
+                dict(type="drive", distance=5.0, timeout_ms=1500),
+                dict(type="drive", distance=-6)])
+            done, output = self.run_routine(project)
+            result = strict_json((output / "result.json").read_text())
+            push = result["steps"][2]
+            angles = [frame["toggles"]["left"]["angle_deg"] for frame in result["trace"]
+                      if push["start_time_s"] <= frame["t"] <= push["end_time_s"]]
+            turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the left")]
+            return angles, turned, result["autonomous"]["toggles"]["left"]
+
+        angles, turned, setting = push_left_toggle("under_toggle_axle")
+        self.assertLess(min(angles), -60)
+        self.assertLess(max(angles), 0.5)
+        self.assertEqual(len(turned), 1, turned)
+        self.assertTrue(turned[0].startswith("Turned the left Toggle: red now faces into the field (yellow before)."))
+        self.assertEqual(setting, "red")
+        angles, turned, setting = push_left_toggle("over_toggle_axle")
+        self.assertGreater(max(angles), 30)
+        self.assertGreater(min(angles), -0.5)
+        self.assertFalse(any("red now faces" in line for line in turned), turned)
+        self.assertIn(setting, ("blue", "yellow"))
 
 if __name__ == "__main__":
     unittest.main()

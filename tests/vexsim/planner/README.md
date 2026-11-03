@@ -141,7 +141,7 @@ are mclib `PresetPositionMechanism`s, written in
 | Above a Neutral Goal | 820° | carries a Pin just clear of a Neutral Goal; grips a Pin standing in a Cup |
 | Above the Center Goal | 1200° | carries a Pin just clear of the Center Goal |
 | Under a Toggle's axle | 1350° | drive into a Toggle to turn your colour into the field |
-| Over a Toggle's axle | 1625° | drive into a Toggle to turn the other colour into the field |
+| Over a Toggle's axle | 1625° | drive into a Toggle to turn its top toward the wall. The claw slides onto the bar's top at about 58°, short of the 60° corner, so the bar falls back unless the robot keeps pushing |
 | Top | 2000° | highest |
 
 The claw has Open (60°) and Closed (467°). Closed is past where the jaws stop
@@ -186,6 +186,11 @@ time. After the run it also shows:
   against the 6 halves and 2 Goals needed;
 - whether the robot is in the Midfield.
 
+A Toggle turns the way the robot pushes it where they touch. Driven into
+it under the axle, the bottom goes toward the wall and your colour comes up
+facing the field. Over the axle, the top goes toward the wall. If it cannot
+turn that way, the robot is held back as by a wall.
+
 A Toggle sets the colour of the yellow halves in its Quadrant only while it
 sits flat on a face and nothing touches it. A robot that is still pushing it
 when autonomous ends gets nothing for it. The step says when a Toggle
@@ -220,6 +225,7 @@ manual, the Q&A or VEX's field drawings.
 | Toggle seat | the bar lifts onto a corner when turned and drops onto a face | what makes it click into three positions |
 | Toggle damping | 2e-3 N m s | a dropped bar stops rocking in about 0.1 s |
 | Toggle push | a robot turns it without slowing; Pins and Cups do not touch it | 0.1 N m is a few newtons on a robot |
+| Toggle contact | the middle of where a part and the bar overlap; friction 0.35 there can hold the bar | the robot on field element figure |
 | Friction | floor 0.5, piece on piece 0.3, piece on robot 0.4, robot on field element 0.35 | plastic on foam tile and plastic |
 | Bounce | restitution 0.15 | moulded plastic |
 | Rest | a piece slower than 0.02 m/s and 0.4 rad/s for 0.2 s sleeps | |
