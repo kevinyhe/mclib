@@ -16,6 +16,8 @@ ARM_PRESETS = {
     "above_alliance_goal": "Above an Alliance Goal (520°)",
     "above_neutral_goal": "Above a Neutral Goal (820°)",
     "above_center_goal": "Above the Center Goal (1200°)",
+    "under_toggle_axle": "Under a Toggle's axle (1350°)",
+    "over_toggle_axle": "Over a Toggle's axle (1625°)",
     "top": "Top (2000°)",
 }
 CLAW_PRESETS = {"open": "Open (60°)", "closed": "Closed (467°)"}
@@ -25,6 +27,8 @@ ACTION_TIMES = {"start": "When the step starts", "distance": "After driving", "t
 ACTION_UNITS = {"start": "", "distance": "in", "time": "ms"}
 PRELOADS = {"none": "No preload", "yellow": "Red Pin, yellow half up", "red": "Red Pin, red half up"}
 MOVE_RESULTS = ("Used the whole time limit", "Reached the preset", "Stopped closing on a game object")
+#: <SC7>: the Autonomous Bonus goes to whoever leads when the period ends
+AUTONOMOUS_S = 15.0
 
 READ_DEGREES = C.CFUNCTYPE(C.c_double, C.c_int)
 WRITE_VOLTS = C.CFUNCTYPE(None, C.c_int, C.c_double)
@@ -139,3 +143,43 @@ def score_summary(world):
     score = world.score(autonomous=True)
     return {alliance: dict(alliance_pins=item.alliance_pins, yellow_pins=item.yellow_pins, total=item.total)
             for alliance, item in score.items()}
+
+
+def autonomous_summary(world):
+    """The score as the autonomous period ends: totals, who gets the
+    Autonomous Bonus, and how close red is to the Autonomous Win Point."""
+    from vexsim import override_field as of
+    from vexsim.units import INCH
+    score = world.score(autonomous=True)
+    toggles = world.toggle_colors
+    pins, goals = of.win_point_progress("red", world.stacks(), toggles)
+    pins_needed, goals_needed = of.win_point_needs()
+    touching = world.arena.touching_perimeter
+    state = world.sim.state
+    return dict(
+        t=round(world.sim.t, 3), red=score["red"].total, blue=score["blue"].total,
+        bonus=of.autonomous_bonus(score), toggles=toggles,
+        win_point=dict(pins=pins, pins_needed=pins_needed, goals_with_two=goals, goals_needed=goals_needed,
+                       touching_perimeter=touching,
+                       earned=pins >= pins_needed and goals >= goals_needed and not touching),
+        robot_in_midfield=of.in_midfield(state.x, state.y),
+        robot_at=to_planner(state.x, state.y), robot_inches_from_midfield=round(
+            max(0.0, abs(state.x) + abs(state.y) - of.MIDFIELD_HALF_DIAGONAL) / INCH, 1))
+
+
+def toggle_faces(world):
+    return {bar.mount.quadrant: bar.inner_face() for bar in world.toggles.bars}
+
+
+def toggle_events(world, before):
+    """Info lines for Toggles whose face into the field changed in a step."""
+    lines = []
+    for bar in world.toggles.bars:
+        quadrant, color = bar.mount.quadrant, bar.inner_face()
+        if color == before[quadrant]:
+            continue
+        line = f"Turned the {quadrant} Toggle: {color} now faces into the field ({before[quadrant]} before)."
+        if bar.touched:
+            line += " The robot is still touching it, so it counts as yellow until the robot lets go."
+        lines.append(line)
+    return lines

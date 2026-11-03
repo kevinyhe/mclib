@@ -1345,11 +1345,25 @@
     const show = state.mode === "top" && state.project.field === "override" && Number.isFinite(frame?.score_red);
     panel.hidden = !show;
     if (!show) return;
-    panel.replaceChildren(
+    const lines = [
       element("div", { class: "score-title", text: `Score at ${fmt(frame.t, 2)} s` }),
       element("div", { class: "score-line" },
         element("span", { class: "score-red", text: `Red ${frame.score_red}` }),
-        element("span", { class: "score-blue", text: `Blue ${frame.score_blue}` })));
+        element("span", { class: "score-blue", text: `Blue ${frame.score_blue}` })),
+    ];
+    if (frame.toggles) {
+      const toggles = Object.entries(frame.toggles).map(([quadrant, toggle]) => `${quadrant} ${toggle.set}`).join(", ");
+      lines.push(element("div", { class: "score-detail", text: `Toggles set: ${toggles}.` }));
+    }
+    const auton = state.shown?.result?.autonomous;
+    if (auton && frame.t >= auton.t - 1e-6) {
+      const point = auton.win_point;
+      lines.push(
+        element("div", { class: "score-detail", text: `Autonomous ended at ${fmt(auton.t, 2)} s: red ${auton.red}, blue ${auton.blue}. Autonomous Bonus: red ${auton.bonus.red}, blue ${auton.bonus.blue}.` }),
+        element("div", { class: "score-detail", text: `Win Point: red owns ${point.pins} of ${point.pins_needed} Pin halves needed and has ${point.goals_with_two} of ${point.goals_needed} Goals with two${point.touching_perimeter ? ", and touches the wall" : ""}. ${point.earned ? "Earned." : "Not earned."}` }),
+        element("div", { class: "score-detail", text: auton.robot_in_midfield ? "The robot ended in the Midfield. That counts only at the end of a match." : `The robot ended ${fmt(auton.robot_inches_from_midfield)} in outside the Midfield.` }));
+    }
+    panel.replaceChildren(...lines);
   }
 
   function drawPushBackField(ctx, drawing) {

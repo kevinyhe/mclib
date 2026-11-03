@@ -258,6 +258,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .score-line { display: flex; gap: 12px; font-size: 16px; font-weight: 700; }
 .score-red { color: #c2362f; }
 .score-blue { color: #2556c4; }
+.score-panel { max-width: 300px; }
+.score-detail { color: var(--muted); font-size: 11px; margin-top: 3px; }
 .step-actions-list { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .action-box { display: grid; gap: 6px; margin-bottom: 8px; }
 .stale-badge { left: 50%; bottom: 10px; transform: translateX(-50%); color: var(--warn); background: var(--warn-soft); border-color: #f1dca6; }

@@ -27,8 +27,8 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
 from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
-from flex import (MECHANISMS, MOVE_RESULTS, FlexRig, claw_events, declare_flex, frame_telemetry,  # noqa: E402
-                  score_summary)
+from flex import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, FlexRig, autonomous_summary, claw_events,  # noqa: E402
+                  declare_flex, frame_telemetry, score_summary, toggle_events, toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
 from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, carries_speed, step_name, step_time_limit,
                      strict_json, validate_project)  # noqa: E402
@@ -638,9 +638,14 @@ def _execute(raw, destination, vexsim, cache, progress):
     if world is not None:
         bridge.step_world = world.step
 
+    autonomous = None
+
     def with_world(frame):
+        nonlocal autonomous
         if world is None:
             return frame
+        if rig and autonomous is None and bridge.sim.t >= AUTONOMOUS_S:
+            autonomous = autonomous_summary(world)
         return dict(frame, **(frame_telemetry(world) if rig else world.telemetry()))
 
     def capture():
@@ -670,6 +675,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         recorder.phase, recorder.step = "motion", index
         recorder.record(capture())
         configuration_error = None
+        faces_before = toggle_faces(world) if rig else None
         if rig:
             rig.begin_actions(step["actions"])
         try:
@@ -747,6 +753,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         info.extend(describe_contact(contact, started) for contact in contacts)
         if rig:
             info.extend(claw_events(world, started, bridge.sim.t))
+            info.extend(toggle_events(world, faces_before))
         failed = [item["message"] for item in checks if not item["passed"]]
         rows.append(dict(index=index, type=step["type"], executed=True, passed=passed,
                          contacts=[contact_dict(contact, started) for contact in contacts],
@@ -766,6 +773,8 @@ def _execute(raw, destination, vexsim, cache, progress):
         write_json(destination / "live.json", dict(steps=rows, pieces=pieces))
     bridge.on_capture = None
     recorder.close()
+    if rig and autonomous is None:
+        autonomous = autonomous_summary(world)
     progress.step = None
     progress.finish("simulate", f"Simulated {bridge.sim.t:.2f} s of robot time in "
                                 f"{time.monotonic() - wall_start:.1f} s.")
@@ -780,7 +789,8 @@ def _execute(raw, destination, vexsim, cache, progress):
     result = dict(passed=passed_steps == len(rows), summary=summary, steps=rows, trace=recorder.trace,
                   plans=plans or [None] * len(rows), settings=path_settings(project, feedforward) if feedforward else None,
                   designed_poses=poses, project=project, source_fingerprint=fingerprint,
-                  stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None)
+                  stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None,
+                  autonomous=autonomous)
     write_json(destination / "result.json", result)
     with (destination / "trace.csv").open("w", newline="") as handle:
         fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame if key != "pieces"))

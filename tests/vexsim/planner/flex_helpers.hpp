@@ -23,7 +23,18 @@ namespace flex {
 // Arm motor degrees: 0 with the lift down, 2000 at the top, the way VEX VR's
 // Flex counts them. The Above presets hold a Pin gripped low on its bottom
 // half just clear of that Goal's top. IntoAllianceGoal puts its tip in.
-enum class ArmPreset { Down, IntoAllianceGoal, AboveAllianceGoal, AboveNeutralGoal, AboveCenterGoal, Top };
+// UnderToggleAxle and OverToggleAxle put the claw where driving it into a
+// Toggle turns it toward the Quadrant's colour or toward the other one.
+enum class ArmPreset {
+  Down,
+  IntoAllianceGoal,
+  AboveAllianceGoal,
+  AboveNeutralGoal,
+  AboveCenterGoal,
+  UnderToggleAxle,
+  OverToggleAxle,
+  Top
+};
 // Claw motor degrees: 0 fully open, 467 fully closed.
 enum class ClawPreset { Open, Closed };
 
@@ -33,7 +44,8 @@ using Claw = mclib::mechanism::PresetPositionMechanism<ClawPreset>;
 inline Arm::Table armPresets() {
   return {{ArmPreset::Down, 0.0},           {ArmPreset::IntoAllianceGoal, 290.0},
           {ArmPreset::AboveAllianceGoal, 520.0}, {ArmPreset::AboveNeutralGoal, 820.0},
-          {ArmPreset::AboveCenterGoal, 1200.0},  {ArmPreset::Top, 2000.0}};
+          {ArmPreset::AboveCenterGoal, 1200.0},  {ArmPreset::UnderToggleAxle, 1350.0},
+          {ArmPreset::OverToggleAxle, 1625.0},   {ArmPreset::Top, 2000.0}};
 }
 
 inline Claw::Table clawPresets() {
