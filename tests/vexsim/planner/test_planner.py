@@ -424,6 +424,18 @@ class EngineTests(unittest.TestCase):
         turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the")]
         self.assertEqual([line.split(":")[0] for line in turned], ["Turned the left Toggle", "Turned the bottom Toggle"])
 
+    def test_11_a_step_stopped_by_a_goal_names_the_goal_not_the_controller(self):
+        project = dict(field="override", preload="none", start=dict(x=24, y=-62.7, heading=0),
+                       steps=[dict(type="drive", distance=30, timeout_ms=2500)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 1, done.stderr[-3000:])
+        row = strict_json((output / "result.json").read_text())["steps"][0]
+        self.assertFalse(row["passed"])
+        self.assertTrue(any(line.startswith("Hit the red left Goal") for line in row["info"]))
+        self.assertEqual(len(row["notes"]), 1, row["notes"])
+        self.assertRegex(row["notes"][0], r"^The robot was stopped by the red left Goal: it moved \d\.\d in of the "
+                                          r"30\.0 in asked for\. The controller was not at fault\.")
+
     def test_10_cup_to_goal_example_grips_and_drops_the_pin(self):
         done, output = self.run_routine(example("override_cup_to_goal"))
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])

@@ -568,6 +568,20 @@ def advice(checks, position_error, odometry_error, finished, chained_path, ramse
     return notes
 
 
+def stopped_by_hit(contacts, entry, end, target):
+    """The one hint for a step that failed after the robot hit something:
+    what stopped it and how much of the move it made."""
+    hardest = max(contacts, key=lambda contact: contact.peak_force)
+    if target["x"] is not None:
+        asked = math.dist(entry[:2], (target["x"], target["y"]))
+        made = f"it moved {math.dist(entry[:2], end[:2]):.1f} in of the {asked:.1f} in asked for"
+    else:
+        asked = abs(math.remainder(target["heading"] - entry[2], 360))
+        made = f"it turned {abs(math.remainder(end[2] - entry[2], 360)):.0f}° of the {asked:.0f}° asked for"
+    return (f"The robot was stopped by {hardest.element}: {made}. The controller was not at fault. "
+            "Move the route clear of it, or end the step before it.")
+
+
 def execute(raw, destination, vexsim, cache):
     """Runs the whole routine in vexsim with mclib's C++ and scores each step."""
     destination = Path(destination)
@@ -674,6 +688,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         started = bridge.sim.t
         recorder.phase, recorder.step = "motion", index
         recorder.record(capture())
+        entry_truth = bridge.truth()
         configuration_error = None
         faces_before = toggle_faces(world) if rig else None
         if rig:
@@ -710,9 +725,14 @@ def _execute(raw, destination, vexsim, cache, progress):
         odometry_error = None if coordinate_reset else math.dist(estimate_at_exit[:2], truth_at_exit[:2])
         finished = duration_ms < timeout_ms - .5
         chained_path = step["chain"] and step["type"] == "path"
+        contacts = contacts_between(world, started, bridge.sim.t)
+        hit_hint = (stopped_by_hit(contacts, entry_truth, actual, target)
+                    if contacts and not passed and step["type"] not in MECHANISMS else None)
         if step["type"] in MECHANISMS:
             notes = [] if finished else [f"The {step['type']} ran out of time. Check the {step['type']} current in "
                                          "the telemetry: high current means it was pushing against something."]
+        elif hit_hint:
+            notes = [hit_hint]
         else:
             notes = advice(checks, position_error, odometry_error, finished, chained_path,
                            project["path_defaults"]["ramsete_b"])
@@ -742,14 +762,13 @@ def _execute(raw, destination, vexsim, cache, progress):
                                                          returned, project["path_defaults"]["ramsete_b"])
                 if settle_info:
                     info.append(settle_info)
-                if settle_hint:
+                if settle_hint and not hit_hint:
                     notes.append(settle_hint)
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
         if late_actions:
             info.append(f"{late_actions} lift or claw action{'s' * (late_actions != 1)} had not run when the "
                         "motion ended, so " + ("they" if late_actions != 1 else "it") + " ran then.")
-        contacts = contacts_between(world, started, bridge.sim.t)
         info.extend(describe_contact(contact, started) for contact in contacts)
         if rig:
             info.extend(claw_events(world, started, bridge.sim.t))
