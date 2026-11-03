@@ -1,23 +1,22 @@
 {
   "format": "mclib-path-planner",
   "version": 1,
-  "name": "Override: 15 s autonomous with two Toggles",
-  "description": "Red's 15 s autonomous on the Override field. Turns the left Toggle red, puts the preloaded Pin in the red left Goal, then turns the bottom Toggle red. Ends with 55 points and the Autonomous Win Point.",
+  "name": "Override: two Toggles and the preload",
+  "description": "Turns the left and bottom Toggles red and puts the preload in the red left Goal. Red has 55 points when the 15 s end, takes the Autonomous Bonus and earns the Autonomous Win Point. The drive into the Goal keeps moving into the next step, so the claw lets go without a settle.",
   "field": "override",
   "preload": "yellow",
+  "robot": {"preset": "four_motor_450"},
   "start": {"x": 0, "y": -62.7, "heading": 0},
   "steps": [
-    {"type": "drive", "note": "lift the claw to just under the Toggle's axle", "distance": 12, "actions": [{"when": "start", "mechanism": "arm", "preset": "under_toggle_axle"}]},
-    {"type": "turn", "heading": 180},
-    {"type": "drive", "note": "push the left Toggle until red faces in", "distance": 5.0, "timeout_ms": 1500},
-    {"type": "drive", "distance": -8.5, "actions": [{"when": "distance", "value": 2, "mechanism": "arm", "preset": "above_alliance_goal"}]},
-    {"type": "turn", "heading": 90},
-    {"type": "drive", "note": "lower the preload into the red left Goal", "distance": 13.47, "actions": [{"when": "distance", "value": 12.5, "mechanism": "arm", "preset": "into_alliance_goal"}]},
-    {"type": "drive", "note": "let go of the Pin", "distance": -8, "actions": [{"when": "start", "mechanism": "claw", "preset": "open"}, {"when": "distance", "value": 3, "mechanism": "arm", "preset": "down"}]},
-    {"type": "turn", "heading": 25},
-    {"type": "path", "note": "around the red bottom Goal", "points": [{"x": 24, "y": -34}, {"x": 30, "y": -12}, {"x": 34, "y": 0, "heading": 0}], "sections": [{"speed_percent": 60, "reverse": false}, {"speed_percent": 60, "reverse": false}, {"speed_percent": 60, "reverse": false}], "actions": [{"when": "start", "mechanism": "arm", "preset": "under_toggle_axle"}], "chain": true},
-    {"type": "turn", "heading": 90},
-    {"type": "drive", "note": "push the bottom Toggle until red faces in", "distance": 20.5, "timeout_ms": 1800},
-    {"type": "drive", "note": "back off so the Toggle counts", "distance": -6, "actions": [{"when": "distance", "value": 2, "mechanism": "arm", "preset": "down"}]}
+    {"type": "drive", "note": "swing the Toggle arm back once clear of the wall", "distance": 5, "actions": [{"when": "distance", "mechanism": "toggle_arm", "preset": "under_the_axle", "value": 2.5}]},
+    {"type": "drive", "note": "back the pad into the left Toggle", "distance": -5, "timeout_ms": 1500, "actions": [{"when": "end", "mechanism": "toggle_arm", "preset": "stowed"}]},
+    {"type": "path", "note": "the aligner centres the preload over the red left Goal", "points": [{"x": 10.5, "y": -54.07, "heading": 61.8}, {"x": 15.79, "y": -51.23, "heading": 61.8}], "sections": [{"speed_percent": 60, "reverse": false}, {"speed_percent": 35, "reverse": false}], "actions": [{"when": "start", "mechanism": "lift", "preset": "over_alliance_goal"}, {"when": "distance", "mechanism": "claw", "preset": "open", "value": 18.8}], "chain": true},
+    {"type": "drive", "note": "clear the Goal", "distance": -12.0, "actions": [{"when": "distance", "mechanism": "lift", "preset": "down", "value": 1.5}]},
+    {"type": "point", "note": "back up between Cups 4 and 9", "x": 13.0, "y": -14.5, "direction": -1},
+    {"type": "point", "note": "back up under Cup 5 toward the bottom Toggle", "x": 50.0, "y": 0.0, "direction": -1, "actions": [{"when": "distance", "mechanism": "toggle_arm", "preset": "under_the_axle", "value": 20.0}]},
+    {"type": "turn", "note": "square up to the wall", "heading": -90},
+    {"type": "drive", "note": "back the pad into the bottom Toggle at a steady 4 V", "distance": -10.7, "volts": 4.0, "chain": true},
+    {"type": "drive", "note": "settle against the wall", "distance": -2.5, "timeout_ms": 1000, "actions": [{"when": "end", "mechanism": "toggle_arm", "preset": "stowed"}]},
+    {"type": "drive", "note": "let go of the Toggle so it counts", "distance": 4}
   ]
 }

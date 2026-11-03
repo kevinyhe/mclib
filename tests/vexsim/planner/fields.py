@@ -54,8 +54,9 @@ def make_world(field, sim, preload="none"):
         from vexsim import arena
         return arena.push_back(sim)
     if field == "override":
+        from vexsim.cascade import CascadeRobot
         from vexsim.override import OverrideWorld
-        return OverrideWorld(sim, preload=None if preload == "none" else preload)
+        return OverrideWorld(sim, preload=None if preload == "none" else preload, robot=CascadeRobot())
     raise ValueError(f"unknown field {field!r}")
 
 
@@ -84,11 +85,9 @@ def override_drawing():
     quadrants = {"left": [(-half, -half), (0, 0), (-half, half)], "right": [(half, -half), (0, 0), (half, half)],
                  "bottom": [(-half, -half), (0, 0), (half, -half)], "top": [(-half, half), (0, 0), (half, half)]}
     mid = of.MIDFIELD_HALF_DIAGONAL
-    from vexsim.override import FlexGeometry
     from vexsim.pieces import Pieces
     layout = Pieces()
     layout.place_layout(of.starting_layout())
-    flex = FlexGeometry()
     inches = lambda value: round(value / INCH, 3)  # noqa: E731
     return dict(
         name=GAME_FIELDS["override"], half_in=round(half / INCH, 3),
@@ -102,11 +101,32 @@ def override_drawing():
         piece_size=dict(pin_length_in=inches(of.PIN_LENGTH), pin_flange_in=inches(of.PIN_FLANGE_ACROSS_CORNERS),
                         pin_cone_in=inches(of.PIN_CONE_DIAMETER), pin_tip_in=inches(of.PIN_TIP_DIAMETER),
                         cup_length_in=inches(of.CUP_LENGTH), cup_rim_in=inches(of.CUP_RIM_DIAMETER)),
-        claw=dict(ahead_in=flex.claw_ahead, height_in=flex.claw_height, jaw_length_in=flex.jaw_length,
-                  jaw_thickness_in=flex.jaw_thickness, open_gap_in=flex.jaw_open_gap, lift_travel_in=flex.lift_travel,
-                  incline_deg=flex.lift_incline_deg, arm_full_deg=flex.arm_full_deg,
-                  claw_closed_deg=flex.claw_closed_deg),
-        solid=override_solids())
+        robot=cascade_drawing(), solid=override_solids())
+
+
+def cascade_drawing():
+    """The cascade robot's shapes, inches. Forward and left are from the
+    middle of the drivetrain, except the aligner legs, which are from the
+    claw's grip point, and the Toggle arm pivot, which is from the back."""
+    from vexsim.cascade import GEOMETRY as g, TOGGLE_ARM_ANGLES
+    from vexsim.units import INCH
+    legs = [[[round(x / INCH, 4), round(y / INCH, 4)] for x, y in leg] for leg in g.aligner_legs(0.0)]
+    return dict(
+        frame=dict(bottom_in=g.frame_bottom, top_in=g.frame_top, notch_depth_in=g.front_notch_depth,
+                   notch_half_width_in=g.front_notch_half_width),
+        rails=dict(bottom_in=g.rail_bottom, length_in=g.rail_length, inner_in=g.rail_inner, outer_in=g.rail_outer,
+                   back_in=g.rail_back, front_in=g.rail_front, stages=g.stages),
+        claw=dict(ahead_in=g.claw_ahead, jaw_length_in=g.jaw_length, jaw_thickness_in=g.jaw_thickness,
+                  below_in=g.jaw_below, above_in=g.jaw_above, slot_in=g.flange_slot, open_gap_in=g.jaw_open_gap,
+                  closed_gap_in=g.jaw_closed_gap,
+                  lowest_in=g.grip_lowest, highest_in=g.grip_highest),
+        carriage=dict(front_in=g.carriage_front, below_in=g.carriage_below, above_in=g.carriage_above),
+        aligner=dict(legs_in=legs, top_below_grip_in=g.aligner_top_below_grip,
+                     bottom_below_grip_in=g.aligner_bottom_below_grip),
+        toggle_arm=dict(pivot_from_back_in=g.toggle_pivot_ahead, pivot_height_in=g.toggle_pivot_height,
+                        length_in=g.toggle_arm_length, pad_size_in=g.toggle_pad_size,
+                        pad_width_in=g.toggle_pad_width, tower_half_width_in=g.toggle_tower_half_width,
+                        stowed_deg=TOGGLE_ARM_ANGLES["stowed"]))
 
 
 def _planner_direction(x, y):
@@ -116,11 +136,9 @@ def _planner_direction(x, y):
 def override_solids():
     """Heights and profiles for the 3D view, inches."""
     from vexsim import override_field as of
-    from vexsim.override import FlexGeometry
     from vexsim.units import INCH
     inches = lambda value: round(value / INCH, 4)  # noqa: E731
     base_radius = (of.GOAL_BASE_ACROSS_FLATS + 2.0 * of.GOAL_BASE_CORNER_RADIUS) / 4.0
-    flex = FlexGeometry()
     return dict(
         wall_height_in=inches(of.WALL_HEIGHT), wall_thickness_in=inches(of.WALL_THICKNESS),
         tile_seams_in=[round(value - of.ORIGIN_IN, 3) for value in of.GRID_IN],
@@ -138,9 +156,7 @@ def override_solids():
                           [inches(of.PIN_LENGTH / 2.0), inches(of.PIN_TIP_DIAMETER / 2.0)]],
         pin_flange=dict(thickness_in=inches(of.PIN_FLANGE_THICKNESS), radius_in=inches(of.PIN_FLANGE_ACROSS_FLATS / 2.0)),
         cup_half_profile=[[0.0, inches(of.CUP_WAIST_DIAMETER / 2.0)], [inches(of.CUP_LENGTH / 2.0),
-                                                                       inches(of.CUP_RIM_DIAMETER / 2.0)]],
-        robot=dict(frame_bottom_in=flex.frame_bottom, frame_top_in=flex.frame_top, tower_back_in=flex.tower_back,
-                   tower_front_in=flex.tower_front, tower_top_in=flex.tower_top, claw_thickness_in=flex.claw_thickness))
+                                                                       inches(of.CUP_RIM_DIAMETER / 2.0)]])
 
 
 def push_back_drawing():

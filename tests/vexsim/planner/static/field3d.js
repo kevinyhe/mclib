@@ -186,8 +186,19 @@ function addToggles() {
     axle.rotation.z = Math.PI / 2;
     mount.add(axle);
     scene.add(mount);
-    toggleMeshes.push({ quadrant: toggle.quadrant, spin, sign });
+    const faces = toggle.faces.map((color, index) => {
+      const angle = toggle.face_angles_deg[index] * Math.PI / 180;
+      return { color, normal: new THREE.Vector3(0, Math.sin(angle), sign * Math.cos(angle)) };
+    });
+    const intoTheField = inward.clone().multiplyScalar(Math.cos(Math.PI / 6)).addScaledVector(up, Math.sin(Math.PI / 6));
+    toggleMeshes.push({ quadrant: toggle.quadrant, spin, sign, faces, intoTheField });
   }
+}
+
+function shownInnerColor(toggle) {
+  const turned = toggle.spin.getWorldQuaternion(new THREE.Quaternion());
+  const facing = (face) => face.normal.clone().applyQuaternion(turned).dot(toggle.intoTheField);
+  return toggle.faces.reduce((best, face) => (facing(face) > facing(best) ? face : best)).color;
 }
 
 function lathe(profile, color, extra = {}) {
@@ -239,64 +250,107 @@ function box(width, height, length, color) {
   return new THREE.Mesh(new THREE.BoxGeometry(width, height, length), material(color));
 }
 
-function buildRobot(lengthIn, widthIn, claw) {
-  const shape = solids.robot;
+// Robot-frame inches to the robot group's coordinates: forward is -Z, left
+// is -X and up is +Y.
+function placeBox(mesh, back, front, right, left, bottom, top) {
+  mesh.scale.set(Math.max(0.01, left - right), Math.max(0.01, top - bottom), Math.max(0.01, front - back));
+  mesh.position.set(-(left + right) / 2, (top + bottom) / 2, -(front + back) / 2);
+}
+
+function partBox(group, color) {
+  const mesh = box(1, 1, 1, color);
+  group.add(mesh);
+  return mesh;
+}
+
+function alignerLeg(points, height) {
+  const shape = new THREE.Shape(points.map(([forward, left]) => new THREE.Vector2(-left, forward)));
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+  geometry.rotateX(-Math.PI / 2);
+  return new THREE.Mesh(geometry, material(COLORS.metal, { metalness: 0.4 }));
+}
+
+function buildRobot(lengthIn, widthIn) {
+  const shape = drawing.robot;
   const group = new THREE.Group();
-  const frameHeight = shape.frame_top_in - shape.frame_bottom_in;
-  const chassis = box(widthIn, frameHeight, lengthIn, COLORS.chassis);
-  chassis.position.y = shape.frame_bottom_in + frameHeight / 2;
-  group.add(chassis);
-  const stripe = box(widthIn + 0.1, 1.2, lengthIn + 0.1, COLORS.robot);
-  stripe.position.y = shape.frame_top_in - 1.2;
-  group.add(stripe);
-  for (const side of [-1, 1]) for (const end of [-1, 1]) {
+  const half = lengthIn / 2, side = widthIn / 2;
+  const frame = shape.frame;
+  const notchBack = half - frame.notch_depth_in;
+  placeBox(partBox(group, COLORS.chassis), -half, notchBack, -side, side, frame.bottom_in, frame.top_in);
+  placeBox(partBox(group, COLORS.chassis), notchBack, half, frame.notch_half_width_in, side, frame.bottom_in, frame.top_in);
+  placeBox(partBox(group, COLORS.chassis), notchBack, half, -side, -frame.notch_half_width_in, frame.bottom_in, frame.top_in);
+  placeBox(partBox(group, COLORS.robot), -half - 0.05, notchBack, -side - 0.05, side + 0.05, frame.top_in - 1.2, frame.top_in);
+  for (const across of [-1, 1]) for (const end of [-1, 1]) {
     const wheel = new THREE.Mesh(new THREE.CylinderGeometry(1.625, 1.625, 1.0, 20), material(COLORS.wheel));
     wheel.rotation.z = Math.PI / 2;
-    wheel.position.set(side * (widthIn / 2 + 0.5), 1.625, end * (lengthIn / 2 - 2));
+    wheel.position.set(across * (side + 0.5), 1.625, end * (half - 2));
     group.add(wheel);
   }
-  const incline = claw.incline_deg * Math.PI / 180;
-  const railBase = lengthIn / 2 - (shape.tower_back_in + shape.tower_front_in) / 2;
-  const railLength = (shape.tower_top_in - shape.frame_top_in) / Math.cos(incline);
   const rails = [];
-  for (const side of [-1, 1]) {
-    const rail = box(0.6, railLength, 0.8, COLORS.metal);
-    rail.rotation.x = -incline;
-    rail.position.set(side * (widthIn / 2 - 1.5), shape.frame_top_in + Math.cos(incline) * railLength / 2,
-      -(railBase + Math.sin(incline) * railLength / 2));
-    group.add(rail);
-    rails.push(rail);
+  const railWidth = (shape.rails.outer_in - shape.rails.inner_in) / shape.rails.stages;
+  for (let stage = 0; stage < shape.rails.stages; stage++) {
+    const outer = shape.rails.outer_in - stage * railWidth, inner = outer - railWidth;
+    for (const across of [1, -1]) {
+      rails.push({ stage, mesh: partBox(group, stage % 2 ? COLORS.metal : COLORS.rail),
+        right: across > 0 ? inner : -outer, left: across > 0 ? outer : -inner });
+    }
   }
-  const carriage = box(widthIn - 2, 1.0, 0.8, COLORS.robot);
-  carriage.rotation.x = -incline;
-  group.add(carriage);
-  const reach = box(0.8, shape.claw_thickness_in, 1, COLORS.metal);
-  group.add(reach);
-  const back = box(1, shape.claw_thickness_in, 0.4, COLORS.metal);
-  group.add(back);
-  const jaws = [-1, 1].map(() => {
-    const jaw = box(claw.jaw_thickness_in, shape.claw_thickness_in, claw.jaw_length_in, COLORS.robot);
-    group.add(jaw);
-    return jaw;
+  const carriage = partBox(group, COLORS.robot);
+  const jaws = [1, -1].map((across) => ({ across, upper: partBox(group, COLORS.robot), lip: partBox(group, COLORS.robot),
+    mount: partBox(group, COLORS.metal) }));
+  const aligner = shape.aligner;
+  const legs = aligner.legs_in.map((points) => {
+    const leg = alignerLeg(points, aligner.bottom_below_grip_in - aligner.top_below_grip_in);
+    group.add(leg);
+    return leg;
   });
+  const arm = shape.toggle_arm;
+  const pivot = -half + arm.pivot_from_back_in;
+  placeBox(partBox(group, COLORS.metal), pivot - arm.tower_half_width_in, pivot + arm.tower_half_width_in,
+    -arm.tower_half_width_in, arm.tower_half_width_in, frame.top_in, arm.pivot_height_in);
+  const swing = new THREE.Group();
+  swing.position.set(0, arm.pivot_height_in, -pivot);
+  const bar = box(0.5, arm.length_in, 0.3, COLORS.metal);
+  bar.position.y = arm.length_in / 2;
+  swing.add(bar);
+  group.add(swing);
+  const pad = partBox(group, COLORS.robot);
   scene.add(group);
-  return { group, lengthIn, widthIn, claw, carriage, reach, back, jaws, incline, railBase };
+  return { group, lengthIn, widthIn, rails, carriage, jaws, legs, swing, pad, pivot };
 }
 
 function poseRobot(frame) {
-  const claw = robot.claw;
-  const lift = Math.min(1, Math.max(0, (frame.arm_deg ?? 0) / claw.arm_full_deg)) * claw.lift_travel_in;
-  const gap = frame.claw_gap_in ?? claw.open_gap_in;
-  const forward = robot.lengthIn / 2 + claw.ahead_in + lift * Math.sin(robot.incline);
-  const height = claw.height_in + lift * Math.cos(robot.incline);
-  const jawBack = forward - claw.jaw_length_in / 2;
-  robot.carriage.position.set(0, height, -(robot.railBase + (height - solids.robot.frame_top_in) * Math.tan(robot.incline)));
-  const reachFrom = -robot.carriage.position.z, reachTo = jawBack - 0.2;
-  robot.reach.scale.z = Math.max(0.1, reachTo - reachFrom);
-  robot.reach.position.set(0, height, -(reachFrom + reachTo) / 2);
-  robot.back.scale.x = gap + 2 * claw.jaw_thickness_in;
-  robot.back.position.set(0, height, -(jawBack - 0.2));
-  robot.jaws.forEach((jaw, index) => jaw.position.set((index ? 1 : -1) * (gap / 2 + claw.jaw_thickness_in / 2), height, -forward));
+  const shape = drawing.robot;
+  const claw = shape.claw;
+  const half = robot.lengthIn / 2;
+  const grip = frame.lift_height_in;
+  const rise = grip - claw.lowest_in;
+  const rails = shape.rails;
+  for (const rail of robot.rails) {
+    const bottom = rails.bottom_in + rise * rail.stage / rails.stages;
+    placeBox(rail.mesh, half - rails.back_in, half - rails.front_in, rail.right, rail.left, bottom, bottom + rails.length_in);
+  }
+  const carriage = shape.carriage;
+  placeBox(robot.carriage, half - rails.front_in, half - carriage.front_in, -rails.inner_in, rails.inner_in,
+    grip - carriage.below_in, grip + carriage.above_in);
+  const gap = frame.claw_gap_in;
+  const forward = half + claw.ahead_in;
+  const jawBack = forward - claw.jaw_length_in / 2, jawFront = forward + claw.jaw_length_in / 2;
+  for (const jaw of robot.jaws) {
+    const near = jaw.across * gap / 2, far = jaw.across * (gap / 2 + claw.jaw_thickness_in);
+    const right = Math.min(near, far), left = Math.max(near, far);
+    placeBox(jaw.upper, jawBack, jawFront, right, left, grip + claw.slot_in / 2, grip + claw.above_in);
+    placeBox(jaw.lip, jawBack, jawFront, right, left, grip - claw.below_in, grip - claw.below_in + 0.06);
+    const middle = jaw.across * (gap / 2 + claw.jaw_thickness_in / 2);
+    placeBox(jaw.mount, half - carriage.front_in, jawBack, middle - 0.12, middle + 0.12, grip + claw.above_in - 0.35, grip + claw.above_in);
+  }
+  for (const leg of robot.legs) leg.position.set(0, grip - shape.aligner.bottom_below_grip_in, -forward);
+  const arm = shape.toggle_arm;
+  const angle = frame.toggle_arm_angle_deg * Math.PI / 180;
+  robot.swing.rotation.x = angle;
+  const padForward = robot.pivot - arm.length_in * Math.sin(angle), padUp = arm.pivot_height_in + arm.length_in * Math.cos(angle);
+  placeBox(robot.pad, padForward - arm.pad_size_in / 2, padForward + arm.pad_size_in / 2, -arm.pad_width_in / 2, arm.pad_width_in / 2,
+    padUp - arm.pad_size_in / 2, padUp + arm.pad_size_in / 2);
   robot.group.position.copy(at(frame.true_x, frame.true_y, 0));
   robot.group.rotation.y = -frame.true_heading * Math.PI / 180;
 }
@@ -317,10 +371,9 @@ function showFrame(frame, pieces, playing, live) {
     tellParent({ type: "mclib-vexsim-applied", t: null, robot: null, available: false, reason: "no recorded frame" });
     return;
   }
-  const claw = drawing.claw;
   if (!robot || robot.lengthIn !== frame.body_length_in || robot.widthIn !== frame.body_width_in) {
     if (robot) scene.remove(robot.group);
-    robot = buildRobot(frame.body_length_in, frame.body_width_in, claw);
+    robot = buildRobot(frame.body_length_in, frame.body_width_in);
   }
   robot.group.visible = true;
   poseRobot(frame);
@@ -331,7 +384,9 @@ function showFrame(frame, pieces, playing, live) {
   const holding = frame.holding ? ` · holding ${frame.holding}` : "";
   statusLine.textContent = `Override field · ${live ? "live" : playing ? "replay" : "paused"} · ${frame.t.toFixed(2)} s${holding} · 1–5 camera views`;
   tellParent({ type: "mclib-vexsim-applied", t: frame.t, available: true,
-    robot: { x: frame.true_x, y: frame.true_y, heading: frame.true_heading, arm_deg: frame.arm_deg, claw_gap_in: frame.claw_gap_in } });
+    robot: { x: frame.true_x, y: frame.true_y, heading: frame.true_heading, lift_height_in: frame.lift_height_in,
+      claw_gap_in: frame.claw_gap_in, toggle_arm_angle_deg: frame.toggle_arm_angle_deg },
+    toggles: Object.fromEntries(toggleMeshes.map((toggle) => [toggle.quadrant, shownInnerColor(toggle)])) });
 }
 
 let drawing = null;

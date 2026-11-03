@@ -599,8 +599,9 @@
       case "arc": case "reverse_arc": return `to ${trim(step.heading)}°, radius ${trim(Math.abs(step.radius))} in ${step.radius < 0 ? "left" : "right"}`;
       case "swing": return `to ${trim(step.heading)}°${step.direction === -1 ? ", backward" : ""}`;
       case "wall_reset": return `set odometry to ${p(step.x, step.y)}, ${trim(step.heading)}°`;
-      case "arm": return `to ${state.config.fields.arm_preset.choices[step.arm_preset]}`;
+      case "lift": return `to ${state.config.fields.lift_preset.choices[step.lift_preset]}`;
       case "claw": return state.config.fields.claw_preset.choices[step.claw_preset];
+      case "toggle_arm": return `to ${state.config.fields.toggle_arm_preset.choices[step.toggle_arm_preset]}`;
       default: return "";
     }
   }
@@ -609,7 +610,7 @@
     const rules = state.config.actions;
     return (step.actions ?? []).map((action) => {
       const mechanism = rules.mechanisms[action.mechanism];
-      const when = action.when === "start" ? "at the start" : action.when === "distance" ? `after ${trim(action.value)} in` : `after ${trim(action.value)} ms`;
+      const when = { start: "at the start", end: "when the motion ends", distance: `after ${trim(action.value)} in`, time: `after ${trim(action.value)} ms` }[action.when];
       return `${mechanism.label} to ${mechanism.presets[action.preset]} ${when}`;
     }).join("; ");
   }
@@ -995,7 +996,7 @@
     if (state.project.field !== "override") return [];
     const rules = state.config.actions;
     const actions = step.actions ?? [];
-    const firstValue = { start: 0, distance: 12, time: 500 };
+    const firstValue = { start: 0, distance: 12, time: 500, end: 0 };
     const rows = actions.map((action, i) => {
       const mechanism = rules.mechanisms[action.mechanism];
       const what = selectInput("Move", action.mechanism, Object.entries(rules.mechanisms).map(([key, item]) => [key, item.label]), null,
@@ -1003,7 +1004,7 @@
       const preset = selectInput("To", action.preset, Object.entries(mechanism.presets), null, (value) => edit(() => { action.preset = value; }));
       const when = selectInput("When", action.when, Object.entries(rules.times), null,
         (value) => edit(() => { action.when = value; action.value = firstValue[value]; }));
-      const amount = action.when === "start" ? null : numberInput({
+      const amount = action.when === "start" || action.when === "end" ? null : numberInput({
         label: action.when === "distance" ? "Distance" : "Time", unit: rules.units[action.when], value: action.value, min: 0,
         max: action.when === "distance" ? rules.max_distance_in : rules.max_time_ms, step: action.when === "distance" ? 1 : 50,
         onCommit: (value) => edit(() => { action.value = action.when === "time" ? Math.round(value) : value; }) });
@@ -1012,8 +1013,8 @@
         element("button", { class: "small danger", onclick: () => edit(() => { step.actions.splice(i, 1); }) }, "Remove"));
     });
     const add = element("button", { class: "small", id: "add-action", disabled: actions.length >= rules.max,
-      onclick: () => edit(() => { step.actions = [...(step.actions ?? []), { when: "start", value: 0, mechanism: "arm", preset: "above_alliance_goal" }]; }) },
-    "Add a lift or claw action");
+      onclick: () => edit(() => { step.actions = [...(step.actions ?? []), { when: "start", value: 0, mechanism: "lift", preset: "over_alliance_goal" }]; }) },
+    "Add a mechanism action");
     return [element("h3", { text: rules.label }), element("p", { class: "muted small", text: rules.help }), ...rows, add];
   }
 
@@ -1233,10 +1234,11 @@
     const preload = state.project.preload ?? "none";
     if (preload === "none") return [];
     const start = state.project.start;
-    const ahead = along(start.heading, preset().body_length_in / 2 + drawing.claw.ahead_in);
+    const claw = drawing.robot.claw;
+    const ahead = along(start.heading, preset().body_length_in / 2 + claw.ahead_in);
     const colors = ["red", "yellow"];
     const up = colors[1] === preload ? 1 : -1;
-    return [{ id: "preload", kind: "pin", colors, pose: [start.x + ahead.x, start.y + ahead.y, drawing.piece_size.pin_length_in / 2, 0, 0, up] }];
+    return [{ id: "preload", kind: "pin", colors, pose: [start.x + ahead.x, start.y + ahead.y, claw.lowest_in, 0, 0, up] }];
   }
 
   // Every Pin and Cup at the playback time: the run's starting list moved by
@@ -1319,25 +1321,50 @@
     for (const piece of pieces) drawPiece(ctx, piece, drawing.piece_size);
   }
 
-  // The jaws in front of the robot. They move forward as the lift rises,
-  // because the lift leans forward.
-  function drawClaw(ctx, pose, armDeg, gapIn, size = null) {
-    const claw = fieldDrawing()?.claw;
-    if (state.project.field !== "override" || !claw) return;
+  // The cascade robot's parts seen from above: the lift rails, the jaws, the
+  // aligner's V under them, and the Toggle arm and its pad.
+  function drawCascade(ctx, pose, gapIn, toggleArmDeg, size = null) {
+    const robot = fieldDrawing()?.robot;
+    if (state.project.field !== "override" || !robot) return;
     const body = size ?? preset();
-    const lift = armDeg / claw.arm_full_deg * claw.lift_travel_in;
-    const forward = body.body_length_in / 2 + claw.ahead_in + lift * Math.sin(claw.incline_deg * Math.PI / 180);
+    const half = body.body_length_in / 2;
     const scale = state.view.scale;
     const p = toScreen(pose);
-    const half = gapIn / 2 * scale, thick = claw.jaw_thickness_in * scale, length = claw.jaw_length_in * scale;
-    const middle = -forward * scale;
+    const rect = (back, front, right, left) => ctx.fillRect(-left * scale, -front * scale, (left - right) * scale, (front - back) * scale);
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(pose.heading * Math.PI / 180);
+    const rails = robot.rails;
+    ctx.fillStyle = "#9aa1ab";
+    for (const side of [1, -1]) {
+      const inner = side * rails.inner_in, outer = side * rails.outer_in;
+      rect(half - rails.back_in, half - rails.front_in, Math.min(inner, outer), Math.max(inner, outer));
+    }
+    const claw = robot.claw;
+    const grip = half + claw.ahead_in;
+    ctx.fillStyle = "rgba(90,98,110,.55)";
+    for (const leg of robot.aligner.legs_in) {
+      ctx.beginPath();
+      leg.forEach(([forward, left], index) => (index ? ctx.lineTo : ctx.moveTo).call(ctx, -left * scale, -(grip + forward) * scale));
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.fillStyle = "#3a414c";
-    ctx.fillRect(-half - thick, middle - length / 2, thick, length);
-    ctx.fillRect(half, middle - length / 2, thick, length);
-    ctx.fillRect(-half - thick, middle + length / 2, 2 * half + 2 * thick, Math.max(1, thick));
+    for (const side of [1, -1]) {
+      const near = side * gapIn / 2, far = side * (gapIn / 2 + claw.jaw_thickness_in);
+      rect(grip - claw.jaw_length_in / 2, grip + claw.jaw_length_in / 2, Math.min(near, far), Math.max(near, far));
+    }
+    const arm = robot.toggle_arm;
+    const pivot = -half + arm.pivot_from_back_in;
+    const pad = pivot - arm.length_in * Math.sin(toggleArmDeg * Math.PI / 180);
+    ctx.strokeStyle = "#b3262e";
+    ctx.lineWidth = Math.max(1, 0.35 * scale);
+    ctx.beginPath();
+    ctx.moveTo(0, -pivot * scale);
+    ctx.lineTo(0, -pad * scale);
+    ctx.stroke();
+    ctx.fillStyle = "#b3262e";
+    rect(pad - arm.pad_size_in / 2, pad + arm.pad_size_in / 2, -arm.pad_width_in / 2, arm.pad_width_in / 2);
     ctx.restore();
   }
 
@@ -1702,7 +1729,7 @@
     const size = Number.isFinite(frame.body_length_in) ? { body_length_in: frame.body_length_in, body_width_in: frame.body_width_in } : null;
     if (state.layers.odometry && !frame.coordinate_reset) drawRobot(ctx, { x: frame.estimated_x, y: frame.estimated_y, heading: frame.estimated_heading }, { stroke: "#e07b00", dash: [4, 3], size });
     if (state.layers.truth) drawRobot(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, { fill: "rgba(255,255,255,.82)", stroke: "#18202c", width: 2, size });
-    if (state.layers.truth && Number.isFinite(frame.arm_deg)) drawClaw(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, frame.arm_deg, frame.claw_gap_in, size);
+    if (state.layers.truth && Number.isFinite(frame.claw_gap_in)) drawCascade(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, frame.claw_gap_in, frame.toggle_arm_angle_deg, size);
     if (Number.isFinite(frame.controller_carrot_x)) {
       const p = toScreen({ x: frame.controller_carrot_x, y: frame.controller_carrot_y });
       ctx.save();
@@ -1746,7 +1773,11 @@
     }
     const start = state.project.start;
     drawRobot(ctx, start, { stroke: "#2563eb", dash: [5, 3], width: 1.6, fill: "rgba(37,99,235,.06)" });
-    if (!state.shown) drawClaw(ctx, start, 0, state.project.preload && state.project.preload !== "none" ? fieldDrawing().piece_size.pin_tip_in : 0);
+    if (!state.shown && state.project.field === "override") {
+      const drawing = fieldDrawing();
+      const held = state.project.preload && state.project.preload !== "none";
+      drawCascade(ctx, start, held ? drawing.piece_size.pin_cone_in : drawing.robot.claw.closed_gap_in, drawing.robot.toggle_arm.stowed_deg);
+    }
     const startTip = along(start.heading, HEADING_KNOB_IN);
     polyline(ctx, [start, { x: start.x + startTip.x, y: start.y + startTip.y }], "rgba(37,99,235,.6)", 1.2);
     drawKnob(ctx, { x: start.x + startTip.x, y: start.y + startTip.y }, "#2563eb", false, 5);
@@ -2331,7 +2362,8 @@
         sync3d();
         fit3d();
       } else if (type === "mclib-vexsim-applied") {
-        $("viewer3d").dataset.applied = JSON.stringify({ t: event.data.t ?? null, robot: event.data.robot ?? null, available: event.data.available });
+        $("viewer3d").dataset.applied = JSON.stringify({ t: event.data.t ?? null, robot: event.data.robot ?? null,
+          toggles: event.data.toggles ?? null, available: event.data.available });
       } else if (type === "mclib-vexsim-error") {
         state.viewer.error = `The 3D view stopped: ${String(event.data.message || "unknown error")}`;
         sync3d();

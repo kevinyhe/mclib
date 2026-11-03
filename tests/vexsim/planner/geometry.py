@@ -96,7 +96,7 @@ def step_end_pose(step, pose, track_width_in):
         return (x + dx, y + dy, heading)
     if kind == "turn":
         return (x, y, step["heading"])
-    if kind in ("arm", "claw"):
+    if kind in ("lift", "claw", "toggle_arm"):
         return pose
     if kind == "turn_to_point":
         return (x, y, wrap(bearing((x, y), (step["x"], step["y"])) + (180 if step["direction"] == -1 else 0)))

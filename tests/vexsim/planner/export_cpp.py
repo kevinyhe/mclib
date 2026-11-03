@@ -1,11 +1,11 @@
 """A routine as an mclib autonomous() in C++.
 
 Paths use the code in path_helpers.hpp, copied into the output, so the robot
-bakes, plans and follows each path exactly as the simulator did. The lift
-and claw use flex_helpers.hpp the same way."""
+bakes, plans and follows each path exactly as the simulator did. The lift,
+the claw and the Toggle arm use cascade_helpers.hpp the same way."""
 from pathlib import Path
 
-from flex import ACTION_TIMES, MECHANISMS, PRELOADS, cpp_preset
+from mechanisms import ACTION_TIMES, MECHANISM_ENUMS, MECHANISMS, PRELOADS, cpp_preset
 from geometry import designed_poses, path_layout
 from project import MECHANISM_STEPS, PRESETS, STEP_TYPES, TRACKING, carries_speed, step_time_limit
 
@@ -40,61 +40,66 @@ def exported_helpers(name="path_helpers.hpp"):
     return text[text.index(begin) + len(begin):text.index(end)].rstrip() + "\n"
 
 
-def uses_flex(project):
+def uses_cascade(project):
     return project["preload"] != "none" or any(step["type"] in MECHANISM_STEPS or step["actions"]
                                                for step in project["steps"])
 
 
-FLEX_SETUP = """// The lift and claw motors. The ports are placeholders: set them to your
-// robot's. Before the match, with the lift all the way down and the claw
-// fully open, power on the robot so both encoders read 0.
-mclib::device::MotorGroup arm_motors({7}, mclib::device::Gearset::Green);
-mclib::device::MotorGroup claw_motors({8}, mclib::device::Gearset::Green);
-flex::Rig flex_rig([] { return arm_motors.getAveragePositionDeg(); },
-                   [](double volts) { arm_motors.setVoltage(volts); },
-                   [] { return claw_motors.getAveragePositionDeg(); },
-                   [](double volts) { claw_motors.setVoltage(volts); });
+CASCADE_SETUP = """// The lift, claw and Toggle arm motors. The ports are placeholders: set them
+// to your robot's. The two lift motors share one shaft, so one is reversed.
+// Before the match, with the lift all the way down, the claw fully open and
+// the Toggle arm folded forward, power on the robot so the encoders read 0.
+mclib::device::MotorGroup lift_motors({7, -8}, mclib::device::Gearset::Green);
+mclib::device::MotorGroup claw_motor({9}, mclib::device::Gearset::Green);
+mclib::device::MotorGroup toggle_arm_motor({10}, mclib::device::Gearset::Green);
+cascade::Rig cascade_rig([] { return lift_motors.getAveragePositionDeg(); },
+                         [](double volts) { lift_motors.setVoltage(volts); },
+                         [] { return claw_motor.getAveragePositionDeg(); },
+                         [](double volts) { claw_motor.setVoltage(volts); },
+                         [] { return toggle_arm_motor.getAveragePositionDeg(); },
+                         [](double volts) { toggle_arm_motor.setVoltage(volts); });
 """
 
-FLEX_TASK = """  // Runs the lift, the claw and the actions of each motion every 10 ms, as
-  // the simulator did. It keeps holding the last presets after autonomous.
-  static pros::Task flex_task([] {
+CASCADE_TASK = """  // Runs the lift, the claw, the Toggle arm and the actions of each motion
+  // every 10 ms, as the simulator did. It keeps holding the last presets
+  // after autonomous.
+  static pros::Task cascade_task([] {
     while (true) {
       const auto pose = mclib::control::robotState().pose();
-      flex_rig.tick(pose.x, pose.y, mclib::time::millis());
+      cascade_rig.tick(pose.x, pose.y, mclib::time::millis());
       pros::delay(10);
     }
   });"""
 
 
 def action_literal(action):
-    when = "flex::Action::When::" + {"start": "Start", "distance": "AfterDistance", "time": "AfterTime"}[action["when"]]
+    when = "cascade::Action::When::" + {"start": "Start", "distance": "AfterDistance", "time": "AfterTime",
+                                        "end": "End"}[action["when"]]
     preset = f"static_cast<int>({cpp_preset(action['mechanism'], action['preset'])})"
-    arm = "true" if action["mechanism"] == "arm" else "false"
-    return f"{{{when}, {number(action['value'])}, {arm}, {preset}}}"
+    return f"{{{when}, {number(action['value'])}, {MECHANISM_ENUMS[action['mechanism']]}, {preset}}}"
 
 
 def with_actions(step, call, stop, result_type="MotionResult", reached="MotionResult::Reached"):
-    """A motion call wrapped so the step's lift and claw actions run during it."""
+    """A motion call wrapped so the step's mechanism actions run during it."""
     literals = ", ".join(action_literal(action) for action in step["actions"])
     when = "; ".join(f"{MECHANISMS[action['mechanism']]['label']} to "
                      f"{MECHANISMS[action['mechanism']]['presets'][action['preset']]} "
                      f"{ACTION_TIMES[action['when']].lower()}"
                      + (f" {number(action['value'])} {'in' if action['when'] == 'distance' else 'ms'}"
-                        if action["when"] != "start" else "")
+                        if action["when"] in ("distance", "time") else "")
                      for action in step["actions"])
     check = (f"    if (result != {reached}) return;" if stop else "    (void)result;")
     return ["  {", f"    // During this motion: {when}.",
             "    const auto pose = mclib::control::robotState().pose();",
-            f"    flex_rig.beginActions({{{literals}}}, pose.x, pose.y, mclib::time::millis());",
+            f"    cascade_rig.beginActions({{{literals}}}, pose.x, pose.y, mclib::time::millis());",
             f"    const {result_type} result = {call};",
-            "    flex_rig.finishActions();", check, "  }"]
+            "    cascade_rig.finishActions();", check, "  }"]
 
 
 def mechanism_call(step):
     kind = step["type"]
-    method = "moveArm" if kind == "arm" else "moveClaw"
-    return f"flex_rig.{method}({cpp_preset(kind, step[kind + '_preset'])}, {step['timeout_ms']})"
+    method = MECHANISMS[kind]["method"]
+    return f"cascade_rig.{method}({cpp_preset(kind, step[kind + '_preset'])}, {step['timeout_ms']})"
 
 
 def describe(step, index):
@@ -141,7 +146,7 @@ def export(project, settings=None, plans=None):
     start = project["start"]
     poses = designed_poses(project)
     has_path = any(step["type"] == "path" for step in project["steps"])
-    flex = uses_flex(project)
+    cascade = uses_cascade(project)
     stop = project["stop_on_failure"]
     name = project["name"].replace("\"", "'")
     lines = [f"// \"{name}\", exported from the mclib path planner.",
@@ -154,10 +159,11 @@ def export(project, settings=None, plans=None):
         lines += ["// From mclib tests/vexsim/planner/path_helpers.hpp (Mozilla Public License 2.0):",
                   "// bakes each path, plans its speeds and follows it, as the simulator did.",
                   exported_helpers()]
-    if flex:
-        lines += ["// From mclib tests/vexsim/planner/flex_helpers.hpp (Mozilla Public License 2.0):",
-                  "// the lift and claw presets, and the actions run during a motion, as the simulator ran them.",
-                  exported_helpers("flex_helpers.hpp"), FLEX_SETUP]
+    if cascade:
+        lines += ["// From mclib tests/vexsim/planner/cascade_helpers.hpp (Mozilla Public License 2.0):",
+                  "// the lift, claw and Toggle arm presets, and the actions run during a motion, as the",
+                  "// simulator ran them.",
+                  exported_helpers("cascade_helpers.hpp"), CASCADE_SETUP]
     lines += ["using namespace mclib::units::literals;", "using mclib::control::MotionResult;", "",
               "void autonomous() {",
               "  mclib::control::DriveHardware* drive = mclib::control::requireDrive(\"autonomous\");",
@@ -166,10 +172,10 @@ def export(project, settings=None, plans=None):
               f"  mclib::control::resetOdometry({{{number(start['x'])}, {number(start['y'])}, "
               f"{number(start['heading'])} * mclib::kPi / 180}});",
               f"  mclib::control::robotState().setCorrectAngleDeg({number(start['heading'])});"]
-    if flex:
+    if cascade:
         if project["preload"] != "none":
-            lines.append(f"  // Preload: {PRELOADS[project['preload']]}, held in the claw.")
-        lines.append(FLEX_TASK)
+            lines.append(f"  // Preload: {PRELOADS[project['preload']]}, held in the claw by its flange.")
+        lines.append(CASCADE_TASK)
     if has_path:
         source = ("measured on the simulated robot. Measure your own robot (docs/motion.md)."
                   if settings else "placeholders. Measure them on your robot (docs/motion.md).")
@@ -230,7 +236,7 @@ def export(project, settings=None, plans=None):
                 lines.append(f"  if (!{call}) return;" if stop else f"  {call};")
         elif step["type"] in MECHANISM_STEPS:
             call = mechanism_call(step)
-            lines.append(f"  if ({call} == flex::MoveResult::TimedOut) return;" if stop else f"  {call};")
+            lines.append(f"  if ({call} == cascade::MoveResult::TimedOut) return;" if stop else f"  {call};")
         elif step["actions"]:
             lines += with_actions(step, motion_call(step), stop)
         else:

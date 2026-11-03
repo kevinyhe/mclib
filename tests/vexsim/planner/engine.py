@@ -27,15 +27,16 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
 from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
-from flex import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, FlexRig, autonomous_summary, claw_events,  # noqa: E402
-                  declare_flex, frame_telemetry, score_summary, toggle_events, toggle_faces)
+from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, RuleWatch,  # noqa: E402
+                        autonomous_summary, claw_events, declare_cascade, frame_telemetry, mechanism_reading,
+                        score_summary, toggle_events, toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
 from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, carries_speed, step_name, step_time_limit,
                      strict_json, validate_project)  # noqa: E402
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
-FLEX_BRIDGE = HERE / "flex_bridge.cpp"
-EXTRA_SOURCES = [PATH_BRIDGE, FLEX_BRIDGE, ROOT / "src/mclib/command/subsystem.cpp",
+CASCADE_BRIDGE = HERE / "cascade_bridge.cpp"
+EXTRA_SOURCES = [PATH_BRIDGE, CASCADE_BRIDGE, ROOT / "src/mclib/command/subsystem.cpp",
                  ROOT / "src/mclib/mechanism/position_mechanism.cpp"]
 STATE_VALUES = 8
 MAX_STATES = 40000
@@ -111,7 +112,7 @@ class Progress:
 def source_fingerprint(vexsim):
     """Changes whenever the compiled library or the physics could change."""
     files = [HERE.parent / "run.py", HERE.parent / "bridge.cpp", PATH_BRIDGE, HERE / "path_helpers.hpp",
-             FLEX_BRIDGE, HERE / "flex_helpers.hpp"]
+             CASCADE_BRIDGE, HERE / "cascade_helpers.hpp"]
     files += sorted((ROOT / "src/mclib").rglob("*.cpp")) + sorted((ROOT / "include/mclib").rglob("*.hpp"))
     simulator = Path(vexsim).resolve() / "vexsim"
     files += sorted(simulator.rglob("*.py"))
@@ -150,7 +151,7 @@ def declare_planner(lib):
     lib.planner_follow.restype = C.c_int
     lib.planner_folded_section.argtypes = [doubles, C.c_int]
     lib.planner_folded_section.restype = C.c_int
-    declare_flex(lib)
+    declare_cascade(lib)
     return lib
 
 
@@ -412,7 +413,7 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan
 def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan):
     """Runs one step with the real mclib call. Returns followTrajectory()'s
     MotionResult for paths, wallReset()'s result for wall resets, and
-    flex::MoveResult for the lift and claw."""
+    cascade::MoveResult for the lift, the claw and the Toggle arm."""
     kind = step["type"]
     if kind in MECHANISMS:
         return rig.move(kind, step[f"{kind}_preset"], timeout_ms)
@@ -449,20 +450,34 @@ def check(key, label, passed, message, measured=None, limit=None, unit=""):
                 unit=unit)
 
 
-def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, degrees):
+def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading):
     kind = step["type"]
     preset = MECHANISMS[kind]["presets"][step[f"{kind}_preset"]]
     seconds, limit_s = duration_ms / 1000, timeout_ms / 1000
     name = MECHANISMS[kind]["label"]
     if motion_result == 1:
-        message = f"{name} reached {preset} in {seconds:.2f} s (limit {limit_s:.2f} s)."
+        message = f"The {name.lower()} reached {preset} in {seconds:.2f} s (limit {limit_s:.2f} s): {reading}."
     elif motion_result == 2:
-        message = (f"The jaws stopped on a game object at {degrees:.0f}° after {seconds:.2f} s "
-                   f"(limit {limit_s:.2f} s).")
+        message = (f"The jaws stopped on a game object after {seconds:.2f} s (limit {limit_s:.2f} s): "
+                   f"{reading}.")
     else:
-        message = f"{name} did not reach {preset} in the {limit_s:.2f} s time limit. It was at {degrees:.0f}°."
+        message = (f"The {name.lower()} did not reach {preset} in the {limit_s:.2f} s time limit: "
+                   f"{reading}.")
     return [check("time", "Time", motion_result in (1, 2), message, measured=round(seconds, 3), limit=limit_s,
                   unit="s")]
+
+
+def rule_checks(report):
+    """Checks for the first step: the robot's size at the start and its motors against the rules."""
+    start, motors = report["start_in"], report["motors_w"]
+    size = f"{start['length']:.2f} in long, {start['width']:.2f} in wide and {start['height']:.2f} in tall"
+    return [check("start_size", "Size at the start", start["passed"],
+                  f"The robot starts {size}. Each must be at most {start['limit']:g} in (SG1).",
+                  measured=max(start["length"], start["width"], start["height"]), limit=start["limit"], unit="in"),
+            check("motors", "Motors", motors["passed"],
+                  f"The drive motors are rated {motors['drive']:g} W and all the motors {motors['total']:g} W. "
+                  f"The limits are {motors['drive_limit']:g} W for the drive (R11) and {motors['total_limit']:g} W "
+                  "in all (R10).", measured=motors["total"], limit=motors["total_limit"], unit="W")]
 
 
 def score_step(step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, stopped,
@@ -647,7 +662,9 @@ def _execute(raw, destination, vexsim, cache, progress):
                                    sim_time_limit=LIMITS["max_simulated_s"])
     recorder = Recorder(destination)
     world = make_world(project["field"], bridge.sim, project["preload"])
-    rig = FlexRig(lib, bridge, world) if project["field"] == "override" else None
+    rig = CascadeRig(lib, bridge, world) if project["field"] == "override" else None
+    rules = RuleWatch(world, PRESETS[robot["preset"]]["drive_watts"]) if rig else None
+    rule_breaks = []
     pieces = piece_list(world.pieces) if rig else None
     if world is not None:
         bridge.step_world = world.step
@@ -658,8 +675,12 @@ def _execute(raw, destination, vexsim, cache, progress):
         nonlocal autonomous
         if world is None:
             return frame
+        if rig:
+            broken = rules.watch()
+            if broken:
+                rule_breaks.append((bridge.sim.t, broken))
         if rig and autonomous is None and bridge.sim.t >= AUTONOMOUS_S:
-            autonomous = autonomous_summary(world)
+            autonomous = autonomous_summary(world, rules)
         return dict(frame, **(frame_telemetry(world) if rig else world.telemetry()))
 
     def capture():
@@ -713,14 +734,17 @@ def _execute(raw, destination, vexsim, cache, progress):
         actual = bridge.truth()
         duration_ms = (returned - started) * 1000
         if step["type"] in MECHANISMS:
-            mechanism = getattr(world.mechanism, step["type"])
-            checks = score_mechanism_step(step, timeout_ms, duration_ms, motion_result,
-                                          math.degrees(mechanism.position))
+            reading, _ = mechanism_reading(world, step["type"])
+            checks = score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading)
             position_error = heading_error = None
         else:
             checks, position_error, heading_error = score_step(
                 step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, bridge.stopped(),
                 motion_result, configuration_error)
+        if rig and index == 0:
+            checks = rule_checks(rules.report()) + checks
+        checks += [check("rules", "Rules", False, message) for t, message in rule_breaks
+                   if started <= t <= bridge.sim.t]
         passed = all(item["passed"] for item in checks)
         odometry_error = None if coordinate_reset else math.dist(estimate_at_exit[:2], truth_at_exit[:2])
         finished = duration_ms < timeout_ms - .5
@@ -729,8 +753,9 @@ def _execute(raw, destination, vexsim, cache, progress):
         hit_hint = (stopped_by_hit(contacts, entry_truth, actual, target)
                     if contacts and not passed and step["type"] not in MECHANISMS else None)
         if step["type"] in MECHANISMS:
-            notes = [] if finished else [f"The {step['type']} ran out of time. Check the {step['type']} current in "
-                                         "the telemetry: high current means it was pushing against something."]
+            name = MECHANISMS[step["type"]]["label"].lower()
+            notes = [] if finished else [f"The {name} ran out of time. Check the {name} current in the telemetry: "
+                                         "high current means it was pushing against something."]
         elif hit_hint:
             notes = [hit_hint]
         else:
@@ -767,7 +792,7 @@ def _execute(raw, destination, vexsim, cache, progress):
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
         if late_actions:
-            info.append(f"{late_actions} lift or claw action{'s' * (late_actions != 1)} had not run when the "
+            info.append(f"{late_actions} mechanism action{'s' * (late_actions != 1)} had not run when the "
                         "motion ended, so " + ("they" if late_actions != 1 else "it") + " ran then.")
         info.extend(describe_contact(contact, started) for contact in contacts)
         if rig:
@@ -793,7 +818,7 @@ def _execute(raw, destination, vexsim, cache, progress):
     bridge.on_capture = None
     recorder.close()
     if rig and autonomous is None:
-        autonomous = autonomous_summary(world)
+        autonomous = autonomous_summary(world, rules)
     progress.step = None
     progress.finish("simulate", f"Simulated {bridge.sim.t:.2f} s of robot time in "
                                 f"{time.monotonic() - wall_start:.1f} s.")

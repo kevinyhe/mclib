@@ -5,19 +5,24 @@ import json
 import math
 
 from fields import GAME_FIELDS, NEW_ROUTINE_FIELD, OLD_FILE_FIELD
-from flex import ACTION_TIMES, ACTION_UNITS, ARM_PRESETS, CLAW_PRESETS, MECHANISMS, PRELOADS
+from mechanisms import (ACTION_TIMES, ACTION_UNITS, CLAW_PRESETS, LIFT_PRESETS, MECHANISMS, PRELOADS,
+                        RETIRED_MECHANISMS, TOGGLE_ARM_PRESETS)
 
 FORMAT = "mclib-path-planner"
 VERSION = 1
 
 PRESETS = {
     "six_motor_450": dict(label="6 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
-                          body_length_in=15.0, body_width_in=12.5),
+                          body_length_in=15.0, body_width_in=12.5, drive_watts=66),
+    "four_motor_450": dict(label="4 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
+                           body_length_in=15.0, body_width_in=12.5, drive_watts=44),
     "four_motor_200": dict(label="4 motors, 200 RPM, 3.25 in wheels", track_width_in=11.5,
-                           body_length_in=15.0, body_width_in=12.5),
+                           body_length_in=15.0, body_width_in=12.5, drive_watts=44),
     "speed_base": dict(label="4 motors, 450 RPM, 4 in wheels", track_width_in=11.0,
-                       body_length_in=15.0, body_width_in=12.5),
+                       body_length_in=15.0, body_width_in=12.5, drive_watts=44),
 }
+#: The Override robot's drive: four 11 W motors leave 33 W for the lift, the claw and the Toggle arm
+OVERRIDE_PRESET = "four_motor_450"
 TRACKING = {
     "two": "Two tracking wheels (forward and sideways)",
     "drive": "Drive motor encoders only",
@@ -54,11 +59,16 @@ FIELDS = {
                        help="The step fails if it has not finished by then."),
     "volts": dict(label="Max voltage", unit="V", low=.1, high=12, step=.1,
                   help="Caps the drive voltage. 12 V is full power."),
-    "arm_preset": dict(label="Lift position", choices=ARM_PRESETS,
-                       help="Arm motor degrees. 0 is all the way down, 2000 all the way up."),
+    "lift_preset": dict(label="Lift position", choices=LIFT_PRESETS,
+                        help="How high the claw's grip line is above the floor. The claw holds a Pin by its "
+                             "flange, so that is where the flange will be. The Over presets hang a Pin just above "
+                             "that Goal's top."),
     "claw_preset": dict(label="Claw", choices=CLAW_PRESETS,
                         help="Claw motor degrees. Closed is past where the jaws meet a Pin, so the motor keeps "
                              "squeezing it."),
+    "toggle_arm_preset": dict(label="Toggle arm", choices=TOGGLE_ARM_PRESETS,
+                              help="Toggle arm motor degrees, geared 3:1. Under the axle turns the colour of the "
+                                   "Toggle's quadrant into the field; Over the axle turns the other colour in."),
 }
 
 STEP_TYPES = {
@@ -100,28 +110,37 @@ STEP_TYPES = {
                                    "Must be the last step, because it moves the odometry frame.",
                        fields=["x", "y", "heading", "current_ma"],
                        defaults=dict(x=0, y=0, heading=0, current_ma=2500)),
-    "arm": dict(label="Move the lift", call="moveArm()", mechanism="arm",
-                description="Move the lift to a preset and wait until it gets there. The drive holds still. "
-                            "The lift is an mclib PresetPositionMechanism.",
-                fields=["arm_preset"], defaults=dict(arm_preset="above_alliance_goal", timeout_ms=1500)),
+    "lift": dict(label="Move the lift", call="moveLift()", mechanism="lift",
+                 description="Raise or lower the cascade lift to a preset and wait until it gets there. The drive "
+                             "holds still. The lift is an mclib PresetPositionMechanism on two motors.",
+                 fields=["lift_preset"], defaults=dict(lift_preset="over_alliance_goal", timeout_ms=1500)),
     "claw": dict(label="Open or close the claw", call="moveClaw()", mechanism="claw",
                  description="Open or close the claw and wait. Closing ends once the jaws have stopped on a game "
                              "object for 0.1 s. The claw is an mclib PresetPositionMechanism.",
                  fields=["claw_preset"], defaults=dict(claw_preset="closed", timeout_ms=1000)),
+    "toggle_arm": dict(label="Swing the Toggle arm", call="moveToggleArm()", mechanism="toggle_arm",
+                       description="Swing the Toggle arm to a preset and wait. To turn a Toggle, swing it back, "
+                                   "then back the robot into the wall under the Toggle at a steady few volts: a "
+                                   "drive that keeps moving into the next step, with Max voltage about 4 V, then a "
+                                   "short drive onto the wall. A drive that slows to a stop can leave the Toggle "
+                                   "half turned. Swing the arm to Stowed before driving away, or the pad drags the "
+                                   "Toggle back. The Toggle arm is an mclib PresetPositionMechanism.",
+                       fields=["toggle_arm_preset"], defaults=dict(toggle_arm_preset="under_the_axle",
+                                                                  timeout_ms=1000)),
 }
 MECHANISM_STEPS = {kind for kind, info in STEP_TYPES.items() if "mechanism" in info}
 
 ACTIONS = dict(
-    label="Lift and claw during this step",
-    help="Moves the lift or the claw while the robot drives, without waiting for it. Runs at the start, once the "
-         "robot is a distance from where the step started (straight line), or a time after the step started. "
-         "Anything that has not run when the motion ends runs then.",
+    label="Mechanisms during this step",
+    help="Moves the lift, the claw or the Toggle arm while the robot drives, without waiting for it. Runs at the start, once the "
+         "robot is a distance from where the step started (straight line), a time after the step started, or when the "
+         "motion ends. Anything that has not run when the motion ends runs then.",
     times=ACTION_TIMES, units=ACTION_UNITS,
     mechanisms={key: dict(label=item["label"], presets=item["presets"]) for key, item in MECHANISMS.items()},
     max=6, max_distance_in=500, max_time_ms=20000,
 )
 PRELOAD = dict(label="Preload", choices=PRELOADS,
-               help="The red Alliance Pin held in the claw at the start, standing up. The half that points up "
+               help="The red Alliance Pin held in the claw by its flange at the start, standing up. The half that points up "
                     "is the half that will show on top once it is placed.")
 
 CHAIN = dict(
@@ -132,8 +151,9 @@ CHAIN = dict(
     not_allowed={
         "turn_to_point": "turnToPoint() has no exit option in mclib, so it always stops.",
         "wall_reset": "A wall reset has to stop against the wall.",
-        "arm": "The drive is not moving during a lift step.",
+        "lift": "The drive is not moving during a lift step.",
         "claw": "The drive is not moving during a claw step.",
+        "toggle_arm": "The drive is not moving during a Toggle arm step.",
     },
     last_step="The last step has to stop: there is no next step to keep moving into.",
 )
@@ -339,15 +359,17 @@ def validate_project(raw):
 
 def _validate_actions(raw, where):
     if not isinstance(raw, list) or len(raw) > ACTIONS["max"]:
-        raise ValueError(f"{where}: up to {ACTIONS['max']} lift and claw actions per step")
+        raise ValueError(f"{where}: up to {ACTIONS['max']} mechanism actions per step")
     actions = []
     for number, action in enumerate(raw, start=1):
         at = f"{where}, action {number}"
         _object(action, {"when", "value", "mechanism", "preset"}, at)
-        clean = dict(when="start", value=0, mechanism="arm", preset=None)
+        clean = dict(when="start", value=0, mechanism="lift", preset=None)
         clean.update(action)
         if clean["when"] not in ACTION_TIMES:
             raise ValueError(f"{at}: when must be one of: {', '.join(ACTION_TIMES)}")
+        if clean["mechanism"] in RETIRED_MECHANISMS:
+            raise ValueError(f"{at}: {retired(clean['mechanism'])}")
         if clean["mechanism"] not in MECHANISMS:
             raise ValueError(f"{at}: mechanism must be one of: {', '.join(MECHANISMS)}")
         presets = MECHANISMS[clean["mechanism"]]["presets"]
@@ -363,8 +385,17 @@ def _validate_actions(raw, where):
     return actions
 
 
+def retired(mechanism):
+    replacement = RETIRED_MECHANISMS[mechanism]
+    return (f"the {mechanism} was the Flex robot's inclined lift, which the planner no longer has. Use the "
+            f"{MECHANISMS[replacement]['label'].lower()} instead (\"{replacement}\", with "
+            f"{replacement}_preset one of: {', '.join(MECHANISMS[replacement]['presets'])})")
+
+
 def _validate_step(index, value, count, field):
     where = step_name(index, value)
+    if isinstance(value, dict) and value.get("type") in RETIRED_MECHANISMS:
+        raise ValueError(f"Step {index + 1}: {retired(value['type'])}")
     if not isinstance(value, dict) or value.get("type") not in STEP_TYPES:
         raise ValueError(f"Step {index + 1}: unknown step type {value.get('type') if isinstance(value, dict) else value!r}")
     kind = value["type"]
@@ -389,9 +420,10 @@ def _validate_step(index, value, count, field):
     step["actions"] = _validate_actions(step["actions"], where)
     uses_claw = kind in MECHANISM_STEPS or step["actions"]
     if uses_claw and field != "override":
-        raise ValueError(f"{where}: only the Override robot has a lift and claw. Choose the Override field")
+        raise ValueError(f"{where}: only the Override robot has a lift, a claw and a Toggle arm. Choose the "
+                         "Override field")
     if step["actions"] and kind in MECHANISM_STEPS:
-        raise ValueError(f"{where}: lift and claw actions go on drive steps")
+        raise ValueError(f"{where}: mechanism actions go on drive steps")
     if not isinstance(step["chain"], bool):
         raise ValueError(f"{where}: {CHAIN['label']} must be true or false")
     if step["chain"] and kind in CHAIN["not_allowed"]:
@@ -428,7 +460,8 @@ OVERRIDE_START = dict(x=0, y=-62.7, heading=0)
 
 
 def default_project():
-    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START, preload="yellow"))
+    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START, preload="yellow",
+                              robot=dict(DEFAULT_PROJECT["robot"], preset=OVERRIDE_PRESET)))
 
 
 def config():
