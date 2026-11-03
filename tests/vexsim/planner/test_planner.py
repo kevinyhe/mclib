@@ -237,6 +237,13 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(code.count("flex_rig.finishActions();"), 3)
         self.compile(code)
 
+    def test_override_examples_export_and_compile(self):
+        for name in ("override_autonomous", "override_preload", "override_cup_to_goal"):
+            with self.subTest(name):
+                code = export(validate_project(example(name)))
+                self.assertIn("static pros::Task flex_task", code)
+                self.compile(code)
+
     def test_export_without_a_plan_marks_the_placeholders(self):
         code = export(validate_project(example("s_curve")))
         self.assertIn("placeholder", code.lower())
