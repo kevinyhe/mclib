@@ -384,6 +384,33 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(last["holding"])
         self.assertEqual(result["trace"][0]["holding"], "a red/yellow Pin")
 
+    def test_9_override_autonomous_example_earns_the_win_point(self):
+        done, output = self.run_routine(example("override_autonomous"))
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        self.assertEqual(result["summary"]["failed_steps"], 0)
+        autonomous = result["autonomous"]
+        self.assertLessEqual(autonomous["t"], 15.0)
+        self.assertEqual((autonomous["red"], autonomous["blue"]), (55, 0))
+        self.assertEqual(autonomous["bonus"], dict(red=12, blue=0))
+        self.assertEqual(autonomous["toggles"], dict(left="red", bottom="red", top="yellow", right="yellow"))
+        self.assertTrue(autonomous["win_point"]["earned"])
+        self.assertFalse(any(contact["element"].endswith("Goal") for row in result["steps"]
+                             for contact in row["contacts"]))
+        turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the")]
+        self.assertEqual([line.split(":")[0] for line in turned], ["Turned the left Toggle", "Turned the bottom Toggle"])
+
+    def test_10_cup_to_goal_example_grips_and_drops_the_pin(self):
+        done, output = self.run_routine(example("override_cup_to_goal"))
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        self.assertEqual(result["summary"]["failed_steps"], 0)
+        grip = result["steps"][6]
+        self.assertEqual(grip["move_result"], "Stopped closing on a game object")
+        self.assertTrue(any(line.startswith("Gripped a yellow Pin at (2") for line in grip["info"]))
+        self.assertTrue(any(line.startswith("Dropped a yellow Pin at (23, -47)") for line in result["steps"][11]["info"]))
+        self.assertEqual((result["autonomous"]["red"], result["autonomous"]["blue"]), (40, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

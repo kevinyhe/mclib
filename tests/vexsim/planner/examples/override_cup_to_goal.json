@@ -1,0 +1,24 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: take a Pin out of a Cup",
+  "description": "Turns the left Toggle red, then uses claw and lift steps to take the yellow Pin out of a Cup and drop it in the red left Goal. Both yellow halves score for red: 40 points.",
+  "field": "override",
+  "preload": "none",
+  "start": {"x": 0, "y": -62.7, "heading": 0},
+  "steps": [
+    {"type": "drive", "distance": 12, "actions": [{"when": "start", "mechanism": "arm", "preset": "under_toggle_axle"}]},
+    {"type": "turn", "heading": 180},
+    {"type": "drive", "note": "push the left Toggle until red faces in", "distance": 5.0, "timeout_ms": 1500},
+    {"type": "drive", "distance": -8.5, "actions": [{"when": "distance", "value": 2, "mechanism": "arm", "preset": "above_neutral_goal"}]},
+    {"type": "turn", "heading": 45, "actions": [{"when": "start", "mechanism": "claw", "preset": "open"}]},
+    {"type": "drive", "note": "jaws around the Pin in the Cup", "distance": 21.6},
+    {"type": "claw", "note": "grip the Pin", "claw_preset": "closed"},
+    {"type": "arm", "note": "lift it clear of the Cup", "arm_preset": "top"},
+    {"type": "drive", "distance": -14},
+    {"type": "turn_to_point", "x": 23.55, "y": -47.09, "actions": [{"when": "start", "mechanism": "arm", "preset": "above_neutral_goal"}]},
+    {"type": "drive", "note": "Pin over the red left Goal", "distance": 7.4},
+    {"type": "claw", "note": "drop it in", "claw_preset": "open"},
+    {"type": "drive", "distance": -8, "actions": [{"when": "distance", "value": 3, "mechanism": "arm", "preset": "down"}]}
+  ]
+}

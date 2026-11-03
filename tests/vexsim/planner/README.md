@@ -76,8 +76,8 @@ Drive straight, turn to heading, turn to face a point, drive to a point,
 drive to a pose (boomerang), arc, reverse arc, swing turn and wall reset.
 Each one calls the mclib function named next to its title. Drag its target
 or its round heading knob on the field, or type the values. A wall reset
-must be the last step: the simulator has no walls, so it locks the motors
-to make them stall.
+must be the last step. On the open floor there are no walls, so it locks
+the motors to make them stall.
 
 ## Keep moving into the next step
 
@@ -101,6 +101,119 @@ on a wall reset, or on the last step. A chained step is checked where it
 hands off: position against the usual limit, heading only for turns, swings
 and arcs, and no Stopped check. Export C++ writes `false` for `exit`, and
 the join speeds for chained paths.
+
+## Fields
+
+**Field** on the Robot & settings tab picks what the robot drives on:
+
+| Field | What is there |
+| --- | --- |
+| Override (2026-27) | walls, Goals, Toggles, Loaders, Pins and Cups. New routines start here. |
+| Push Back (2025-26) | walls, Long Goals, the Center Goal and Loaders. No game objects. |
+| Open floor, no walls | nothing. Files saved before fields existed open with this. |
+
+On a field the robot stops against what it hits, and the drive motors feel
+it: current rises and the wheels slow. Each hit is listed under its step,
+for example "Hit the red left Goal at (21, -47) 1.07 s into the step, peak
+66 N, drive current up to 2.2 A."
+
+The Override field follows the Game Manual version 2.0 (3 September 2026).
+Coordinates: red's Alliance Station is at the bottom (-Y). The left Toggle
+is at (0, -70.1), on red's wall. New routines start at (0, -62.7) facing
++Y, the robot's back against that wall.
+
+## The Override robot: lift and claw
+
+On the Override field the robot is VEX VR's Flex: a lift tilted 20° forward
+with a claw at the bottom of it. The claw grips by contact. It closes until
+the jaws touch something, and holds it by friction. A Pin drops when the
+claw opens, when the jaws cannot hold its weight, or when the field pushes
+it out of the claw. The lift and the claw
+are mclib `PresetPositionMechanism`s, written in
+[flex_helpers.hpp](flex_helpers.hpp). The simulator runs that file, and
+**Export C++** copies it.
+
+| Lift preset | Arm motor | Use |
+| --- | --- | --- |
+| Down | 0° | driving |
+| Into an Alliance Goal | 290° | lowers a Pin gripped low into an Alliance Goal |
+| Above an Alliance Goal | 520° | carries a Pin gripped low just clear of an Alliance Goal |
+| Above a Neutral Goal | 820° | carries a Pin just clear of a Neutral Goal; grips a Pin standing in a Cup |
+| Above the Center Goal | 1200° | carries a Pin just clear of the Center Goal |
+| Under a Toggle's axle | 1350° | drive into a Toggle to turn your colour into the field |
+| Over a Toggle's axle | 1625° | drive into a Toggle to turn the other colour into the field |
+| Top | 2000° | highest |
+
+The claw has Open (60°) and Closed (467°). Closed is past where the jaws stop
+on a Pin, so the motor keeps squeezing.
+
+Three ways to use them:
+
+- **Move the lift** and **Open or close the claw** steps wait for the
+  mechanism. The drive holds still. A claw step that closes on a Pin ends
+  0.1 s after the jaws stop: "Stopped closing on a game object".
+- **Lift and claw during this step**, on any drive step: move the lift or
+  claw at the start, after the robot has gone some inches, or after some
+  milliseconds. The step does not wait for it. Whatever has not run when
+  the motion ends runs then, and the step says so.
+- **Preload**: none, or a red Alliance Pin standing in the claw with its
+  red or its yellow half up.
+
+The step lists what the claw did: "Gripped a yellow Pin at (24, -24), 6.8 in
+up, 0.17 s into the step." or "Dropped a red/yellow Pin at (24, -47), 5.6 in
+up: the claw opened."
+
+## Override scoring
+
+The score is worked out from where the Pins and Cups are, as the manual's
+<SC1> to <SC8> say. The score panel on the field shows it at the playback
+time. After the run it also shows:
+
+- the score at 15 s, when autonomous ends, and who gets the Autonomous Bonus;
+- the Autonomous Win Point: Pin halves owned and Goals with two of them,
+  against the 6 halves and 2 Goals needed;
+- whether the robot is in the Midfield.
+
+A Toggle sets the colour of the yellow halves in its Quadrant only while it
+sits flat on a face and nothing touches it. A robot that is still pushing it
+when autonomous ends gets nothing for it. The step says when a Toggle
+turned: "Turned the left Toggle: red now faces into the field (yellow
+before)."
+
+## Guessed numbers
+
+VEX publishes no drawing of Flex and no masses for game objects. These
+numbers are guesses. Everything else on the Override field comes from the
+manual, the Q&A or VEX's field drawings.
+
+| What | Guess | Why |
+| --- | --- | --- |
+| Flex frame | 0.4 to 5.0 in high, lift tower 15 in | VR pictures |
+| Claw | 1.75 in ahead of the frame, 1.6 in up with the lift down; jaws 2.5 in long, 0.4 in thick, 4.0 in apart open | VR pictures |
+| Lift | 16.7 in of travel, tilted 20° forward, over 2000° of the arm motor; 0.6 kg carriage | VR's 2000° arm range |
+| Claw motor | 0 to 467° from open to closed, gap closing in proportion | VR's claw range |
+| Jaw pads | friction 0.5 | rubber on plastic |
+| Lift and claw motors | green cartridge; draw nothing from the battery | |
+| Lift presets | the degrees in the table above | worked out from the Goal heights and the lift guesses |
+| Lift gains | kp 0.06, kd 0.002, 12 V | tuned in the simulator |
+| Claw gains | kp 0.05, 8 V | tuned in the simulator |
+| Pin mass | 60 g | hollow moulded part of this size |
+| Cup mass | 45 g | thin moulded shell |
+| Toggle mass | 0.40 kg | 26 in triangular extrusion |
+| Pin flange | 0.64 in thick | 6.50 - 2 x 2.93 in |
+| Cup shape | straight taper from rim to waist | the drawing shows a curve |
+| Goal shape | neutral and Center Goal risers use the Alliance Goal's 5.61 in base; game objects see the octagon as a circle | |
+| Toggle face | equilateral, 2.05 in | the glossary's face width |
+| Toggle seated | within 3° of a face | |
+| Toggle seat | the bar lifts onto a corner when turned and drops onto a face | what makes it click into three positions |
+| Toggle damping | 2e-3 N m s | a dropped bar stops rocking in about 0.1 s |
+| Toggle push | a robot turns it without slowing; Pins and Cups do not touch it | 0.1 N m is a few newtons on a robot |
+| Friction | floor 0.5, piece on piece 0.3, piece on robot 0.4, robot on field element 0.35 | plastic on foam tile and plastic |
+| Bounce | restitution 0.15 | moulded plastic |
+| Rest | a piece slower than 0.02 m/s and 0.4 rad/s for 0.2 s sleeps | |
+| Nesting | a Pin tip inside a Goal or Cup opening, lined up within 25°, drops in and is held | |
+| Hit force | averaged over 20 ms | how long a frame and bumper take to give |
+| Exported ports | lift on port 7, claw on port 8, green cartridges | placeholders: change them to your robot's |
 
 ## Checks
 
@@ -168,6 +281,9 @@ and what to change.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles and the preload, 55 points and the Win Point in 14.7 s |
+| [override_preload.json](examples/override_preload.json) | the preload into a Goal, with lift and claw actions at the start, after a distance and after a time |
+| [override_cup_to_goal.json](examples/override_cup_to_goal.json) | claw and lift steps: take the yellow Pin out of a Cup and drop it in a Goal, 40 points |
 
 ## Files
 
@@ -178,6 +294,8 @@ and what to change.
 | `project.py` | the routine format, its limits and its error messages |
 | `geometry.py` | where each step leaves the robot and the curve of each path |
 | `path_helpers.hpp`, `path_bridge.cpp` | path planning and following in C++, shared with the export |
+| `flex_helpers.hpp`, `flex_bridge.cpp`, `flex.py` | the Override lift and claw in C++, shared with the export, and the score |
+| `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
 | `export_cpp.py` | the C++ export |
 | `native_viewer.py` | serves vexsim's 3D view for recorded runs |
 | `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `planner.css` |
@@ -204,7 +322,11 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 
 ## Limits
 
-- Only the open floor is simulated: no field elements, walls or game objects.
+- Push Back has no game objects. On Override nothing starts in the Loaders
+  and there is no human player to load them.
+- The lift and claw draw no current from the simulated battery, and their
+  encoders are exact.
+- Pins and Cups do not touch the Toggles.
 - Every simulated drive has omni wheels on all corners.
 - The 3D view needs Three.js 0.160.0 in the vexsim checkout's
   `node_modules` (`npm install --prefix ../vexsim --no-save three@0.160.0`).
