@@ -148,7 +148,7 @@ Override robots teams have published:
   5 ms and uses no motor;
 - two fixed bars on the lift tower, sloping down and forward to tips 2 in
   ahead of the frame and 13.8 in up, 0.6 in over a Toggle's axle. Driven
-  into a Toggle at 10 in/s or faster, they turn its top toward the wall.
+  into a Toggle at 11.5 in/s or faster, they turn its top toward the wall.
   They replace the Toggle arm and its motor;
 - a drive of four 11 W blue motors on 3.25 in omnis at 450 rpm.
 
@@ -202,7 +202,7 @@ lift onto it and open the claw.
 this. Driving onto a stack along a curve can leave the claw an inch off
 its middle. Turn to face it first, then drive straight.
 
-To turn a Toggle, face the wall and drive into the Toggle at 10 in/s or
+To turn a Toggle, face the wall and drive into the Toggle at 11.5 in/s or
 faster: a chained drive that would end past the wall. A slower push jams
 it about 36° in, short of the corner. Each hit turns it one face. On red's
 side (the left and bottom Toggles) the first hit brings blue to face the
@@ -387,7 +387,7 @@ and what to change.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
-| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.9 s, with claw and lift actions during a drive |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.5 s, with claw and lift actions during a drive |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the turn and the drive away; 0 points, because the left Toggle is still yellow |
 | [override_toggle_bars.json](examples/override_toggle_bars.json) | turn to face red's wall and hit the left Toggle twice with the bars: blue, then red; 20 points |
 

@@ -2,7 +2,7 @@
   "format": "mclib-path-planner",
   "version": 1,
   "name": "Override: both red Toggles and a stack",
-  "description": "Starts facing red's wall with the Toggle bars over the left Toggle, not touching it. Hits the left Toggle twice (blue, then red), drives through the yellow stack at (23.5, -23.5) and closes the claw on it on the way, sets it on the neutral bottom Goal, then hits the bottom Toggle twice. Red has 50 points at 12.9 s and takes the Autonomous Bonus.",
+  "description": "Starts facing red's wall with the Toggle bars over the left Toggle, not touching it. Hits the left Toggle twice (blue, then red), drives through the yellow stack at (23.5, -23.5) and closes the claw on it on the way, sets it on the neutral bottom Goal, then hits the bottom Toggle twice. Red has 50 points at 12.5 s and takes the Autonomous Bonus.",
   "field": "override",
   "preload": "beside",
   "robot": {"preset": "four_motor_450"},
