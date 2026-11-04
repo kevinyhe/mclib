@@ -279,6 +279,7 @@ function telemetryRows(frame, target) {
       ["Claw valve", f.claw_closed ? "closed" : "open"],
       ["Gap between the jaws", num(f.claw_gap_in, " in", 2)],
       ["Squeeze on the object", num(f.grip_force_n, " N", 1)],
+      ...("air_psi" in f ? [["Air in the tank", num(f.air_psi, " psi", 1)]] : []),
       ["Holding", f.holding ?? "nothing"],
       ["Score red / blue", pair(f.score_red, f.score_blue, "", 0)],
     ]]] : []),

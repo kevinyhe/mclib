@@ -440,8 +440,14 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 
 - Push Back has no game objects. On Override nothing starts in the Loaders;
   a **Match load** step puts a stack there.
-- The lift draws no current from the simulated battery, and its encoders
-  are exact. The claw needs no air: the tank never runs out.
+- The lift's encoders are exact: the planner reads the simulated shaft with
+  no 10 ms delay.
+- The claw's 200 mL tank starts at 100 psi and loses air on each stroke
+  (100 strokes take it to 25 psi). It never leaks.
+- A motor voltage takes effect in the next 1 ms physics step. A V5 brain
+  sends motor commands every 5 ms ([PROS `DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)),
+  so a real robot can react up to 5 ms later. The 10 ms delay on the drive
+  encoders is modelled.
 - Pins and Cups do not touch the Toggles.
 - Every simulated drive has omni wheels on all corners.
 - The 3D view needs Three.js 0.160.0 in the vexsim checkout's
