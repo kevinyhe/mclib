@@ -319,6 +319,7 @@ The robot's sizes, masses and frictions that no source gives are in
 | Nesting | a Pin tip inside a Goal or Cup opening, lined up within 25°, drops in and is held | |
 | Hit force | averaged over 20 ms | how long a frame and bumper take to give |
 | Robot rocking | the drive is a solid box the frame's size; the lift's stages, its carriage and a held stack are weights at their heights | no robot's inertia has been published; vexsim's `dynamics.GUESSES` |
+| Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
 | Exported ports | lift on ports 7 and -8 with green cartridges, claw valve on ADI port A | placeholders: change them to your robot's |
 
 ## Checks
