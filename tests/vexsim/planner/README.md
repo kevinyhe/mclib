@@ -351,6 +351,12 @@ robot was more than 3 in to the side, `followTrajectory()` backs off and
 drives back in with `boomerang()`, which costs 2 to 5 s; the hint says so
 and what to change.
 
+Every step that moves the robot says how far odometry was from the
+simulated position when the step ended. Odometry trails a moving robot, so
+for a step that ended moving (0.5 in/s or faster) it also gives the gap the
+next time the robot stood still (under 0.5 in/s and 2°/s). A drive handed
+on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
+
 ## Saving and exporting
 
 - **Save** downloads the routine as JSON. **Open** loads one; files from the

@@ -503,6 +503,15 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(drive["end_time_s"], turn["start_time_s"])
         handoff = next(line for line in drive["info"] if line.startswith("Kept moving into step 2 at"))
         self.assertGreater(float(handoff.split(" at ")[1].split(" in/s")[0]), 5)
+        at_rest = [re.search(r"stood still, at ([\d.]+) s in step (\d+), odometry was ([\d.]+) in", line)
+                   for line in drive["info"]]
+        at_rest = [found for found in at_rest if found]
+        self.assertEqual(len(at_rest), 1, drive["info"])
+        still_s, still_step, still_gap = at_rest[0].groups()
+        self.assertGreater(float(still_s), drive["return_time_s"])
+        self.assertLessEqual(float(still_s), turn["end_time_s"])
+        self.assertEqual(still_step, "2")
+        self.assertLess(float(still_gap), drive["odometry_error_in"])
 
     def test_6_chained_paths_carry_their_speed_across_the_join(self):
         def routine(chain):

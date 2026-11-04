@@ -53,6 +53,9 @@ PLANNER_RAMSETE_B = 50
 RAMSETE_BACK_OFF_IN = (6.0, 18.0)
 #: Rocking up less than this onto the edge of the wheels is not reported
 ROCK_REPORT_DEG = 0.5
+#: Slower than both of these, the robot is standing still
+STILL_IPS = 0.5
+STILL_DPS = 2.0
 
 
 def write_json(path, value):
@@ -499,6 +502,38 @@ class TipWatch:
                 f"It falls over at {math.degrees(tilt.most_balance):.0f}°."]
 
 
+class OdometryAtRest:
+    """Odometry trails a moving robot, so a step that ends moving measures
+    that trail along with any drift. For such a step this adds the gap the
+    next time the robot stands still, unless a wall reset comes first."""
+
+    def __init__(self, trace):
+        self.trace = trace
+        self.scanned = 0
+        self.waiting = []
+
+    def watch(self, row, speed_ips):
+        if row["odometry_error_in"] is not None and speed_ips >= STILL_IPS:
+            self.waiting.append((row, speed_ips))
+
+    def report(self):
+        for frame in self.trace[self.scanned:]:
+            if frame.get("coordinate_reset"):
+                self.waiting.clear()
+            elif frame["speed_ips"] < STILL_IPS and abs(frame["yaw_rate_dps"]) < STILL_DPS:
+                resolved = [entry for entry in self.waiting if entry[0]["return_time_s"] < frame["t"]]
+                for row, speed_ips in resolved:
+                    self.waiting.remove((row, speed_ips))
+                    after = next(number for number, line in enumerate(row["info"])
+                                 if line.startswith("Odometry was")) + 1
+                    row["info"].insert(after, f"The step ended with the robot moving at {speed_ips:.1f} in/s, "
+                                              "and odometry trails a moving robot. The next time the robot "
+                                              f"stood still, at {frame['t']:.2f} s in step {frame['step'] + 1}, "
+                                              f"odometry was {frame['odometry_error_in']:.2f} in from the "
+                                              "simulated position.")
+        self.scanned = len(self.trace)
+
+
 def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading):
     kind = step["type"]
     preset = MECHANISMS[kind]["presets"][step[f"{kind}_preset"]]
@@ -738,6 +773,7 @@ def _execute(raw, destination, vexsim, cache, progress):
 
     autonomous = None
     tips = TipWatch(bridge.sim)
+    odometry_at_rest = OdometryAtRest(recorder.trace)
 
     def with_world(frame):
         nonlocal autonomous
@@ -890,6 +926,8 @@ def _execute(raw, destination, vexsim, cache, progress):
                          motion_result is not None else None,
                          motion_result=MOTION_RESULTS[motion_result] if step["type"] == "path" and
                          motion_result is not None else None))
+        odometry_at_rest.watch(rows[-1], handoff_speed_ips)
+        odometry_at_rest.report()
         if tips.fallen:
             halted = f"Skipped: the robot fell over in step {index + 1}."
         elif not passed and project["stop_on_failure"]:
