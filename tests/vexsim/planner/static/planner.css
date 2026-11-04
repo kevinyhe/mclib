@@ -192,6 +192,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .run-summary.fail { background: var(--bad-soft); color: var(--bad); }
 .run-summary.error { background: var(--bad-soft); color: var(--bad); }
 .run-summary span { display: block; font-weight: 400; color: var(--text); margin-top: 2px; }
+.run-summary span.auton { font-size: 12px; color: var(--muted); }
+.activity-details > summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
 .stage-list, .log { list-style: none; margin: 0; padding: 0; }
 .stage { display: grid; grid-template-columns: 18px 1fr auto; gap: 2px 6px; padding: 5px 0; border-bottom: 1px solid var(--panel-2); }
 .stage .icon { font-size: 12px; line-height: 18px; text-align: center; }
@@ -314,12 +316,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .field-label.invalid input { border-color: var(--bad); background: var(--bad-soft); }
 .check { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; }
 .check .help { display: block; color: var(--muted); font-size: 11.5px; }
+.help.tip { display: none; }
+.field-label:focus-within > .help.tip, .check:focus-within .help.tip, .check:has(input:disabled) .help.tip { display: block; }
 .card { border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--panel-2); margin: 10px 0; }
 .card.pass { background: var(--ok-soft); border-color: #bfe3cb; }
 .card.fail { background: var(--bad-soft); border-color: #f0c5c1; }
 .card.warn { background: var(--warn-soft); border-color: #f1dca6; }
 .card h3 { margin: 0 0 4px; }
 .card ul { margin: 4px 0 0; padding-left: 18px; }
+.card details.more { margin: 6px 0; }
+.card details.more > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .card li { margin: 2px 0; }
 .checks { list-style: none; padding: 0; margin: 6px 0 0; }
 .checks li { display: grid; grid-template-columns: 16px 1fr; gap: 6px; padding: 2px 0; }

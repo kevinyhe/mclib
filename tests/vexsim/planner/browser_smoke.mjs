@@ -62,7 +62,7 @@ try {
 
   await page.goto(url.href);
   await page.waitForFunction(() => document.querySelector("#step-list li"));
-  assert.match(await page.locator("#log").innerText(), /Click on the field/);
+  assert.match(await page.locator("#log").textContent(), /Click on the field/);
   assert.match(await page.locator("#field-hint").innerText(), /Click on the field to add points/);
   assert.match(await page.locator("#shortcut-strip").innerText(), /Ctrl\+Z/);
   pass("A new routine opens with one empty path and tells the user to click the field");
@@ -162,7 +162,7 @@ try {
   await keepMoving("#pane-step").locator("input").check();
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[0].chain === true);
   assert.match(await page.locator("#step-list li").first().innerText(), /Keeps moving into step 2/);
-  assert.match(await page.locator("#pane-step").innerText(), /planned time plus 0\.5 s/);
+  assert.match(await page.locator("#pane-step").textContent(), /planned time plus 0\.5 s/);
   await shot("03b-keep-moving");
   await page.keyboard.press("Control+z");
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[0].chain === false);
@@ -174,7 +174,7 @@ try {
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 300000 });
   const firstRun = await page.locator("#run-picker").inputValue();
-  const stages = await page.locator("#stage-list").innerText();
+  const stages = await page.locator("#stage-list").textContent();
   for (const label of ["Check the routine", "Compile mclib", "Measure the robot", "Plan path speeds", "Simulate in vexsim", "Score each step"]) assert.match(stages, new RegExp(label));
   assert.match(await page.locator("#run-summary").innerText(), /2 of 2 steps passed/);
   assert.equal(await page.locator("#step-list .badge.pass").count(), 2);
@@ -182,7 +182,7 @@ try {
   await shot("04-run-passed");
 
   await page.locator("#step-list li").first().click();
-  const result = await page.locator("#pane-step .card.pass").innerText();
+  const result = await page.locator("#pane-step .card.pass").textContent();
   assert.match(result, /Ended \d+\.\d+ in from the target \(limit 2\.5 in\)/);
   assert.match(result, /Largest gap from the planned path/);
   pass("The step pane shows each check with the measured value and its limit");
@@ -320,7 +320,8 @@ try {
   await page.waitForFunction(finished, null, { timeout: 600000 });
   assert.match(await page.locator("#run-summary").innerText(), /14 of 14 steps passed/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
-  const score = await page.locator("#score-panel").innerText();
+  assert.match(await page.locator("#score-panel").innerText(), /Red 50\s+Blue 0/);
+  const score = await page.locator("#run-summary").innerText();
   assert.match(score, /Autonomous ended at 1[23]\.\d\d s: red 50, blue 0/);
   assert.match(score, /Autonomous Bonus: red 12/);
   assert.match(score, /Win Point: red owns 5 of 6 Pin halves needed[\s\S]*Not earned/);
@@ -329,7 +330,7 @@ try {
 
   const turnedIn = async (index, pattern) => {
     await page.locator("#step-list li").nth(index).click();
-    assert.match(await page.locator("#pane-step").innerText(), pattern);
+    assert.match(await page.locator("#pane-step").textContent(), pattern);
   };
   await turnedIn(1, /Turned the left Toggle: blue now faces into the field/);
   await turnedIn(3, /Turned the left Toggle: red now faces into the field/);
@@ -410,9 +411,9 @@ try {
   assert.match(matchLoadScore, /Score at 2\d\.\d\d s/);
   assert.match(matchLoadScore, /Red 5/);
   assert.match(matchLoadScore, /Blue 0/);
-  assert.match(matchLoadScore, /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
+  assert.match(await page.locator("#run-summary").innerText(), /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
   await page.locator("#step-list li").nth(1).click();
-  assert.match(await page.locator("#pane-step").innerText(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
+  assert.match(await page.locator("#pane-step").textContent(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
   await shot("14-override-match-load");
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();

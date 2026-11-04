@@ -54,8 +54,11 @@
       <section class="panel activity-panel" aria-labelledby="activity-title">
         <div class="panel-head"><h2 id="activity-title">Activity</h2><span id="activity-clock" class="muted small"></span></div>
         <div id="run-summary" class="run-summary" hidden></div>
-        <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
-        <ol id="log" class="log" aria-label="Messages" aria-live="polite"></ol>
+        <details id="activity-details" class="activity-details">
+          <summary>Details: each stage and every message</summary>
+          <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
+          <ol id="log" class="log" aria-label="Messages" aria-live="polite"></ol>
+        </details>
       </section>
     </aside>
 

@@ -145,9 +145,7 @@ STILL_STEPS = {kind for kind, info in STEP_TYPES.items() if info.get("still")}
 
 ACTIONS = dict(
     label="Mechanisms during this step",
-    help="Moves the lift or the claw while the robot drives, without waiting for it. Runs at the start, once the "
-         "robot is a distance from where the step started (straight line), a time after the step started, or when the "
-         "motion ends. Anything that has not run when the motion ends runs then.",
+    help="Moves the lift or the claw while the robot drives. Anything not run by the end of the motion runs then.",
     times=ACTION_TIMES, units=ACTION_UNITS,
     mechanisms={key: dict(label=item["label"], presets=item["presets"]) for key, item in MECHANISMS.items()},
     max=6, max_distance_in=500, max_time_ms=20000,
