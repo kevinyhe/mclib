@@ -1328,9 +1328,9 @@
   }
 
   // The cascade robot seen from above, from vexsim's parts: the frame around
-  // the bite, the lift rails, the Toggle bars, the carriage, the plate behind
+  // the bite, the lift stages, the Toggle arms, the carriage, the plate behind
   // the jaws and the jaws, which close by `gapIn`.
-  const CASCADE_FILL = { drivetrain: "#d5d9df", lift: "#9aa1ab", "toggle bar": "#6f7783", claw: "#3a414c",
+  const CASCADE_FILL = { drivetrain: "#d5d9df", lift: "#9aa1ab", "toggle arm": "#6f7783", claw: "#3a414c",
     carriage: "rgba(179,38,46,.55)" };
 
   function drawCascade(ctx, pose, gapIn) {
@@ -1345,7 +1345,7 @@
     for (const part of robot.parts) {
       if (!(part.name in CASCADE_FILL)) throw new Error(`no colour for the robot's ${part.name}`);
       ctx.fillStyle = CASCADE_FILL[part.name];
-      const inward = part.moves === "jaw" ? (part.left > 0 ? -closing : closing) : 0;
+      const inward = -part.jaw_side * closing;
       ctx.beginPath();
       part.outline.forEach(([forward, left], index) => (index ? ctx.lineTo : ctx.moveTo).call(ctx, -(left + inward) * scale, -forward * scale));
       ctx.closePath();

@@ -491,8 +491,9 @@ def step_time_limit(step, plan):
     return int(math.ceil(planned_ms / 100) * 100)
 
 
-#: Back against the red Alliance Station wall, midway between the two stacks of Cups on it
-OVERRIDE_START = dict(x=0, y=-62.7, heading=0)
+#: Back to the red Alliance Station wall, midway between the two stacks of Cups on it, 1 in off it so the Toggle
+#: arms' tips are 0.5 in in front of the left Toggle and clear of it
+OVERRIDE_START = dict(x=0, y=-61.7, heading=0)
 
 
 def default_project():

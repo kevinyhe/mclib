@@ -1,0 +1,17 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: turn the left Toggle with the arms",
+  "description": "Drives out from red's wall and backs the arms on the back of the lift tower into the left Toggle twice. On red's side the first hit turns the blue face into the field and the second the red one. Each hit is a drive that ends just short of the wall still at full speed, so the arms reach the Toggle at about 55 in/s as the next step starts. Driving away, the arms slide up and off it.",
+  "field": "override",
+  "preload": "beside",
+  "robot": {"preset": "four_motor_450"},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
+  "steps": [
+    {"type": "drive", "note": "out from the wall for a run-up", "distance": 16},
+    {"type": "drive", "note": "back toward the Toggle, still at full speed at the end", "distance": -15.8, "chain": true},
+    {"type": "drive", "note": "the arms hit it: blue turns in; drive away for the next run-up", "distance": 10},
+    {"type": "drive", "note": "back toward it again", "distance": -9.2, "chain": true},
+    {"type": "drive", "note": "the arms hit it: red turns in; drive away so it counts", "distance": 8}
+  ]
+}

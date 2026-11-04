@@ -6,9 +6,9 @@
   "field": "override",
   "preload": "beside",
   "robot": {"preset": "four_motor_450"},
-  "start": {"x": 0, "y": -62.7, "heading": 0},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
   "steps": [
-    {"type": "drive", "note": "clear the wall before turning", "distance": 4},
+    {"type": "drive", "note": "clear the wall before turning", "distance": 3},
     {"type": "turn_to_point", "x": 23.55, "y": -23.55},
     {"type": "drive", "note": "the bite onto the stack until the Cup meets the plate", "distance": 36.93},
     {"type": "claw", "note": "close on the Cup's top rim", "claw_preset": "closed"},

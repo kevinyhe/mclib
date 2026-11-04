@@ -101,7 +101,7 @@ class ProjectTests(unittest.TestCase):
                 validate_project(raw)
 
     def test_a_file_made_for_the_flange_claw_says_what_replaced_it(self):
-        bars = r"no Toggle arm any more\. It turns a Toggle with the two bars on its lift tower"
+        bars = r"no Toggle arm to move any more\. It turns a Toggle with the two fixed arms on the back of its lift tower"
         rim = r"the lift preset \"pin_in_cup\" held a Pin by its flange, and the claw now holds a Cup by its top rim"
         cases = [
             (dict(field="override", steps=[dict(type="toggle_arm", toggle_arm_preset="stowed")]), bars),
@@ -319,7 +319,7 @@ class ExportTests(unittest.TestCase):
                                     for name, height in LIFT_HEIGHTS_IN.items()})
 
     def test_override_examples_export_and_compile(self):
-        for name in ("override_autonomous", "override_stack_to_goal", "override_toggle_bars", "override_match_load"):
+        for name in ("override_autonomous", "override_stack_to_goal", "override_toggle_arms", "override_match_load"):
             with self.subTest(name):
                 code = export(validate_project(example(name)))
                 self.assertIn("static pros::Task cascade_task", code)
@@ -350,17 +350,49 @@ class FieldDrawingTests(unittest.TestCase):
     def test_the_3d_robot_is_vexsims_cascade_robot(self):
         from fields import drawings
         sys.path.insert(0, str(VEXSIM))
-        from vexsim.cascade import GEOMETRY
         robot = drawings(VEXSIM)["override"]["robot"]
-        self.assertEqual(robot["stages"], GEOMETRY.stages)
-        self.assertEqual((robot["claw"]["lowest_in"], robot["claw"]["highest_in"]), (6.2, 42.2))
+        self.assertEqual((robot["claw"]["lowest_in"], robot["claw"]["highest_in"]), (6.2, 33.2))
         self.assertEqual((robot["claw"]["open_gap_in"], robot["claw"]["closed_gap_in"]), (4.4, 3.09))
-        moves = [part["moves"] for part in robot["parts"]]
-        self.assertEqual({kind: moves.count(kind) for kind in set(moves)}, dict(fixed=23, rails=2, jaw=2, lift=2))
-        bars = [part for part in robot["parts"] if part["name"] == "toggle bar"]
-        self.assertEqual((max(part["front"] for part in bars), min(part["bottom"] for part in bars)), (9.5, 13.8))
+        names = [part["name"] for part in robot["parts"]]
+        self.assertEqual({name: names.count(name) for name in set(names)},
+                         {"drivetrain": 11, "lift": 6, "carriage": 1, "claw": 3, "toggle arm": 2})
+        arms = [part for part in robot["parts"] if part["name"] == "toggle arm"]
+        self.assertEqual({(part["back"], part["bottom"], part["top"]) for part in arms}, {(-8.0, 13.3002, 14.35)})
+        frame = robot["frame"]
+        drivetrain = [part for part in robot["parts"] if part["name"] == "drivetrain"]
+        for axis, low, high in ((0, "back", "front"), (1, "right", "left")):
+            self.assertEqual(min(point[axis] for point in frame["outline"]), min(part[low] for part in drivetrain))
+            self.assertEqual(max(point[axis] for point in frame["outline"]), max(part[high] for part in drivetrain))
         self.assertLess(robot["preloads"]["behind"]["forward_in"], -7.5)
         self.assertLess(robot["preloads"]["beside"]["left_in"], -6.25)
+
+    def test_each_3d_piece_moves_onto_vexsims_piece_with_the_lift_down_and_up(self):
+        from fields import drawings
+        sys.path.insert(0, str(VEXSIM))
+        from vexsim.cascade import CascadeRobot
+        from vexsim.presets import four_motor_450
+        from vexsim.units import INCH
+        robot = drawings(VEXSIM)["override"]["robot"]
+        for lift_up, claw_closed in ((False, False), (True, False), (True, True)):
+            simulated = CascadeRobot()
+            if lift_up:
+                simulated.mechanism.lift.motors[0].position = simulated.mechanism.lift.full
+            simulated.mechanism.claw.command(claw_closed)
+            simulated.mechanism.claw.stroke = 1.0 if claw_closed else 0.0
+            rise = simulated.grip_height() / INCH - robot["claw"]["lowest_in"]
+            closing = (robot["claw"]["open_gap_in"] - simulated.claw_gap() / INCH) / 2
+            parts = simulated.parts(four_motor_450())
+            self.assertEqual(len(parts), len(robot["parts"]))
+            for drawn, part in zip(robot["parts"], parts):
+                with self.subTest(lift_up=lift_up, claw_closed=claw_closed, piece=drawn["key"]):
+                    up, left = drawn["rise_share"] * rise, -drawn["jaw_side"] * closing
+                    posed = dict(back=drawn["back"], front=drawn["front"], right=drawn["right"] + left,
+                                 left=drawn["left"] + left, bottom=drawn["bottom"] + up, top=drawn["top"] + up)
+                    for side, value in posed.items():
+                        self.assertAlmostEqual(value, getattr(part, side) / INCH, delta=1e-3)
+                    for (forward, height), (x, z) in zip(drawn["profile"], part.profile):
+                        self.assertAlmostEqual(forward, x / INCH, delta=1e-3)
+                        self.assertAlmostEqual(height + up, z / INCH, delta=1e-3)
 
 
 @unittest.skipUnless((VEXSIM / "vexsim/sim.py").is_file(), f"no vexsim checkout at {VEXSIM}")
@@ -623,7 +655,7 @@ class EngineTests(unittest.TestCase):
 
     def test_10_a_match_load_in_the_autonomous_period_breaks_sg11a(self):
         project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
-                       start=dict(x=0, y=-62.7, heading=0),
+                       start=dict(x=0, y=-61.7, heading=0),
                        steps=[dict(type="match_load", loader="red_left", match_load_pin="red_yellow_up")])
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 1, done.stderr[-3000:])
@@ -667,11 +699,11 @@ class EngineTests(unittest.TestCase):
         self.assertRegex(row["notes"][0], r"^The robot was stopped by the red left Goal: it moved \d\.\d in of the "
                                           r"30\.0 in asked for\. The controller was not at fault\.")
 
-    def test_12_the_toggle_bars_turn_a_toggle_top_toward_the_wall(self):
+    def test_12_the_toggle_arms_turn_a_toggle_top_toward_the_wall_and_slide_off_it(self):
         def hit(toggle, start):
             project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"), start=start,
-                           steps=[dict(type="drive", distance=13, chain=True),
-                                  dict(type="drive", distance=-1, timeout_ms=500)])
+                           steps=[dict(type="drive", distance=-12, chain=True),
+                                  dict(type="drive", distance=8)])
             done, output = self.run_routine(project)
             self.assertEqual(done.returncode, 0, done.stderr[-3000:])
             result = strict_json((output / "result.json").read_text())
@@ -679,9 +711,9 @@ class EngineTests(unittest.TestCase):
             turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the")]
             return angles, turned
 
-        for toggle, start, color in (("left", dict(x=0, y=-50, heading=180), "blue"),
-                                     ("bottom", dict(x=50, y=0, heading=90), "blue"),
-                                     ("right", dict(x=0, y=50, heading=0), "red")):
+        for toggle, start, color in (("left", dict(x=0, y=-50, heading=0), "blue"),
+                                     ("bottom", dict(x=50, y=0, heading=270), "blue"),
+                                     ("right", dict(x=0, y=50, heading=180), "red")):
             with self.subTest(toggle):
                 angles, turned = hit(toggle, start)
                 self.assertGreater(max(angles), 60)
@@ -692,7 +724,7 @@ class EngineTests(unittest.TestCase):
 
     def test_13_a_drive_over_55_w_breaks_r11_on_the_first_step(self):
         project = dict(field="override", preload="none", robot=dict(preset="six_motor_450"),
-                       start=dict(x=0, y=-62.7, heading=0), steps=[dict(type="drive", distance=5),
+                       start=dict(x=0, y=-61.7, heading=0), steps=[dict(type="drive", distance=5),
                                                                   dict(type="drive", distance=-5)])
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 1, done.stderr[-3000:])

@@ -57,7 +57,7 @@ inline Lift::Table liftPresets() {
   return {{LiftPreset::Down, kLowestClawIn},          {LiftPreset::OverNeutralGoal, 15.79},
           {LiftPreset::OnNeutralGoal, 12.61},         {LiftPreset::OverStackOnNeutralGoal, 22.91},
           {LiftPreset::OnStackOnNeutralGoal, 19.73},  {LiftPreset::OverCenterGoal, 18.79},
-          {LiftPreset::OnCenterGoal, 15.61},          {LiftPreset::Top, 42.2}};
+          {LiftPreset::OnCenterGoal, 15.61},          {LiftPreset::Top, 33.2}};
 }
 
 // What the lift motors need to hold the stages up against the rubber bands.

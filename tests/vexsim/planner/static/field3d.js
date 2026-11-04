@@ -7,7 +7,7 @@ const COLORS = {
   red: 0xc8323a, blue: 0x2a62c9, yellow: 0xf0c02a, gray: 0x8d929a, clear: 0xd8ecff,
   neutral: 0x5b6068, center: 0x41454c, tile: 0x5a5e66, seam: 0x4a4e55, tape: 0xf2f2f2,
   wall: 0xbfd0e0, rail: 0xa9afb8, flange: 0x30343a, chassis: 0x3a3e46, robot: 0xb3262e,
-  metal: 0xc4c9d0, wheel: 0x1c1e22, toggleEnd: 0x2b2e34, hole: 0x0e0f12,
+  metal: 0xc4c9d0, toggleEnd: 0x2b2e34, hole: 0x0e0f12,
 };
 const VIEWS = { "1": "operator", "2": "audience", "3": "overhead", "4": "free", "5": "robot" };
 
@@ -275,71 +275,85 @@ function partBox(group, color) {
   return mesh;
 }
 
-// A convex outline in the robot frame, extruded from `bottom` to `top`.
-function extruded(outline, bottom, top, color) {
-  const shape = new THREE.Shape(outline.map(([forward, left]) => new THREE.Vector2(-left, forward)));
+// An outline in the robot frame, with an optional hole, extruded from
+// `bottom` to `top`.
+function extruded(outline, bottom, top, color, hole = null) {
+  const toShape = (points, Kind) => new Kind(points.map(([forward, left]) => new THREE.Vector2(-left, forward)));
+  const shape = toShape(outline, THREE.Shape);
+  if (hole) shape.holes.push(toShape(hole, THREE.Path));
   const geometry = new THREE.ExtrudeGeometry(shape, { depth: top - bottom, bevelEnabled: false });
   geometry.rotateX(-Math.PI / 2);
-  const mesh = new THREE.Mesh(geometry, material(color, { side: THREE.DoubleSide }));
-  mesh.position.y = bottom;
-  return mesh;
+  geometry.translate(0, bottom, 0);
+  return new THREE.Mesh(geometry, material(color, { side: THREE.DoubleSide }));
 }
 
-// The parts come from vexsim with the lift down and the claw open (see
-// cascade_drawing() in fields.py): the bite's frame and the Toggle bars stay
-// put, the rails telescope, the carriage and the plate rise with the claw,
-// and the jaws also slide in as the claw closes.
+// A piece seen from the side, (forward, up), reaching from `right` to `left`.
+function sideProfile(part, color) {
+  const shape = new THREE.Shape(part.profile.map(([forward, up]) => new THREE.Vector2(forward, up)));
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: part.left - part.right, bevelEnabled: false });
+  geometry.rotateY(Math.PI / 2);
+  geometry.translate(-part.left, 0, 0);
+  return new THREE.Mesh(geometry, material(color, { side: THREE.DoubleSide }));
+}
+
+function restingBox(part, color) {
+  const geometry = new THREE.BoxGeometry(part.left - part.right, part.top - part.bottom, part.front - part.back);
+  geometry.translate(-(part.left + part.right) / 2, (part.top + part.bottom) / 2, -(part.front + part.back) / 2);
+  return new THREE.Mesh(geometry, material(color));
+}
+
+function pieceColor(part, stageShares) {
+  if (part.jaw_side || part.name === "carriage") return COLORS.robot;
+  if (part.name === "lift") return stageShares.indexOf(part.rise_share) % 2 ? COLORS.metal : COLORS.rail;
+  return COLORS.metal;
+}
+
+// The pieces come from vexsim with the lift down and the claw open (see
+// cascade_drawing() in fields.py), each drawn the size it collides at. The
+// frame is drawn as FRC-style bumpers around its outline, into the bite,
+// and the frame inside them; the wheels are hidden inside. Posing moves
+// each piece as vexsim moves it: up by its share of the claw's rise, and a
+// jaw toward the middle as the claw closes.
 function buildRobot(lengthIn, widthIn) {
   const shape = drawing.robot;
   const group = new THREE.Group();
-  const half = lengthIn / 2, side = widthIn / 2;
-  const rails = [], lift = [], jaws = [];
+  const frame = shape.frame;
+  const bumpers = extruded(frame.outline, frame.bottom, frame.top, COLORS.robot, frame.bumper_inside);
+  const inside = extruded(frame.bumper_inside, frame.bottom, frame.top, COLORS.chassis);
+  group.add(bumpers, inside);
+  const stageShares = [...new Set(shape.parts.filter((part) => part.name === "lift").map((part) => part.rise_share))].sort();
+  const pieces = [];
   for (const part of shape.parts) {
-    if (part.moves === "fixed" && part.name === "drivetrain") {
-      group.add(extruded(part.outline, part.bottom, part.top - 1.2, COLORS.chassis));
-      group.add(extruded(part.outline, part.top - 1.2, part.top, COLORS.robot));
-    } else if (part.moves === "fixed") {
-      placeBox(partBox(group, COLORS.metal), part.back, part.front, part.right, part.left, part.bottom, part.top);
-    } else if (part.moves === "rails") {
-      const width = (part.left - part.right) / shape.stages;
-      for (let stage = 0; stage < shape.stages; stage++) {
-        const outer = part.left > 0 ? part.left - stage * width : part.right + stage * width;
-        const inner = part.left > 0 ? outer - width : outer + width;
-        rails.push({ stage, part, right: Math.min(inner, outer), left: Math.max(inner, outer),
-          mesh: partBox(group, stage % 2 ? COLORS.metal : COLORS.rail) });
-      }
-    } else if (part.moves === "lift") {
-      lift.push({ part, mesh: partBox(group, part.name === "carriage" ? COLORS.robot : COLORS.metal) });
-    } else {
-      jaws.push({ part, mesh: partBox(group, COLORS.robot) });
-    }
-  }
-  for (const across of [-1, 1]) for (const end of [-1, 1]) {
-    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(1.625, 1.625, 1.0, 20), material(COLORS.wheel));
-    wheel.rotation.z = Math.PI / 2;
-    wheel.position.set(across * (side + 0.5), 1.625, end * (half - 2));
-    group.add(wheel);
+    if (part.name === "drivetrain") continue;
+    const color = pieceColor(part, stageShares);
+    const mesh = part.profile.length ? sideProfile(part, color) : restingBox(part, color);
+    group.add(mesh);
+    pieces.push({ part, mesh });
   }
   scene.add(group);
-  return { group, lengthIn, widthIn, rails, lift, jaws };
+  return { group, lengthIn, widthIn, frame: [bumpers, inside], pieces };
 }
 
 function poseRobot(frame) {
-  const shape = drawing.robot;
-  const rise = frame.lift_height_in - shape.claw.lowest_in;
-  const closing = (shape.claw.open_gap_in - frame.claw_gap_in) / 2;
-  for (const rail of robot.rails) {
-    const bottom = shape.rail_bottom_in + rise * rail.stage / shape.stages;
-    placeBox(rail.mesh, rail.part.back, rail.part.front, rail.right, rail.left, bottom, bottom + shape.rail_length_in);
-  }
-  for (const { part, mesh } of robot.lift) placeBox(mesh, part.back, part.front, part.right, part.left, part.bottom + rise, part.top + rise);
-  for (const { part, mesh } of robot.jaws) {
-    const inward = part.left > 0 ? -closing : closing;
-    placeBox(mesh, part.back, part.front, part.right + inward, part.left + inward, part.bottom + rise, part.top + rise);
-  }
+  const claw = drawing.robot.claw;
+  const rise = frame.lift_height_in - claw.lowest_in;
+  const closing = (claw.open_gap_in - frame.claw_gap_in) / 2;
+  for (const { part, mesh } of robot.pieces) mesh.position.set(part.jaw_side * closing, part.rise_share * rise, 0);
   robot.group.position.copy(at(frame.true_x, frame.true_y, 0));
   robot.group.rotation.y = -frame.true_heading * Math.PI / 180;
 }
+
+// Each drawn piece's box in the robot frame, inches, as posed now.
+function robotFrameBox(mesh) {
+  const box = new THREE.Box3().setFromBufferAttribute(mesh.geometry.attributes.position);
+  box.translate(mesh.position);
+  return { back: -box.max.z, front: -box.min.z, right: -box.max.x, left: -box.min.x, bottom: box.min.y, top: box.max.y };
+}
+
+window.drawnRobotPieces = () => robot && {
+  frame: robot.frame.map(robotFrameBox),
+  pieces: robot.pieces.map(({ part, mesh }) => ({ key: part.key, ...robotFrameBox(mesh) })),
+};
 
 function showToggles(frame) {
   for (const toggle of toggleMeshes) {

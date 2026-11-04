@@ -1,6 +1,6 @@
 // Drives the real planner page in headless Chromium against a running
 // server.py: place points, plan, run, play back, compare, export, mirror,
-// run the Override example with its lift, claw, Toggle bars, score and 3D field, and
+// run the Override example with its lift, claw, Toggle arms, score and 3D field, and
 // run the Match Load example past 15 s.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
@@ -309,8 +309,8 @@ try {
     await page.locator("#step-list li").nth(index).click();
     assert.match(await page.locator("#pane-step").innerText(), pattern);
   };
-  await turnedIn(1, /Turned the left Toggle: blue now faces into the field/);
-  await turnedIn(3, /Turned the left Toggle: red now faces into the field/);
+  await turnedIn(2, /Turned the left Toggle: blue now faces into the field/);
+  await turnedIn(4, /Turned the left Toggle: red now faces into the field/);
   await turnedIn(10, /Turned the bottom Toggle: blue now faces into the field/);
   await turnedIn(12, /Turned the bottom Toggle: red now faces into the field/);
   await page.locator("#timeline").evaluate((input) => { input.value = "6.5"; input.dispatchEvent(new Event("input")); });
@@ -329,7 +329,6 @@ try {
       const { robot, toggles } = JSON.parse(applied);
       const checks = {
         carryingTheStack: robot.lift_height_in > 12.0 && robot.claw_gap_in < 3.2,
-        leftTurnedBlue: toggles.left === "blue",
         bothTogglesTurned: toggles.left === "red" && toggles.bottom === "red",
       };
       return checks[name];
@@ -339,6 +338,43 @@ try {
   const scrub = (seconds) => page.locator("#timeline").evaluate((input, value) => {
     input.value = String(value); input.dispatchEvent(new Event("input"));
   }, seconds);
+  const shownAt = async (seconds) => {
+    await scrub(seconds);
+    await page.waitForFunction((t) => {
+      const applied = document.querySelector("#viewer3d").dataset.applied;
+      return applied && JSON.parse(applied).available && Math.abs(JSON.parse(applied).t - t) < 0.006;
+    }, seconds, { timeout: 30000 });
+    return JSON.parse(await page.locator("#viewer3d").getAttribute("data-applied"));
+  };
+  const robotDrawing = await page.evaluate(async () => (await (await fetch("/api/config")).json()).field_drawings.override.robot);
+  const outlineBox = (outline) => ({
+    back: Math.min(...outline.map(([forward]) => forward)), front: Math.max(...outline.map(([forward]) => forward)),
+    right: Math.min(...outline.map(([, left]) => left)), left: Math.max(...outline.map(([, left]) => left)),
+    bottom: robotDrawing.frame.bottom, top: robotDrawing.frame.top,
+  });
+  const assertSameBox = (label, drawn, expected) => {
+    for (const side of Object.keys(expected)) {
+      assert(Math.abs(drawn[side] - expected[side]) < 1e-3, `${label} ${side}: drawn at ${drawn[side]} in, vexsim ${expected[side]} in`);
+    }
+  };
+  const drawnPiecesMatchVexsim = async (applied) => {
+    const field3d = page.frames().find((frame) => frame.url().startsWith(`${url.origin}/field3d.html`));
+    assert(field3d, "The Override 3D view's frame is on the page");
+    const drawn = await field3d.evaluate(() => window.drawnRobotPieces());
+    const rise = applied.robot.lift_height_in - robotDrawing.claw.lowest_in;
+    const closing = (robotDrawing.claw.open_gap_in - applied.robot.claw_gap_in) / 2;
+    const solid = robotDrawing.parts.filter((part) => part.name !== "drivetrain");
+    assert.deepEqual(drawn.pieces.map((piece) => piece.key), solid.map((part) => part.key));
+    for (const [index, part] of solid.entries()) {
+      const up = part.rise_share * rise;
+      const left = -part.jaw_side * closing;
+      assertSameBox(part.key, drawn.pieces[index], { back: part.back, front: part.front, right: part.right + left,
+        left: part.left + left, bottom: part.bottom + up, top: part.top + up });
+    }
+    assertSameBox("bumpers", drawn.frame[0], outlineBox(robotDrawing.frame.outline));
+    assertSameBox("frame inside the bumpers", drawn.frame[1], outlineBox(robotDrawing.frame.bumper_inside));
+    return solid.length;
+  };
   await page.locator("#view-3d").click();
   let view = await shown3d("carryingTheStack");
   assert.deepEqual(view.toggles, { left: "red", bottom: "yellow", top: "yellow", right: "yellow" });
@@ -346,18 +382,43 @@ try {
   await shot("12-override-3d");
   pass(`At 6.5 s the 3D robot carries the stack with the claw ${view.robot.lift_height_in.toFixed(2)} in up and the ` +
        `jaws ${view.robot.claw_gap_in.toFixed(2)} in apart`);
+  let pieceCount = await drawnPiecesMatchVexsim(view);
+  pass(`With the claw ${view.robot.lift_height_in.toFixed(2)} in up and the jaws closed, the 3D view draws all ` +
+       `${pieceCount} pieces and the bumpers where vexsim has them, within 0.001 in`);
   await page.locator("#viewer3d").click({ position: { x: 400, y: 300 } });
   await page.keyboard.press("5");
   await page.waitForTimeout(1000);
-  await shot("13-override-claw");
-  await scrub(1.2);
-  view = await shown3d("leftTurnedBlue");
-  pass(`At ${view.t} s the 3D left Toggle shows blue after the first hit`);
+  await shot("13-override-lift-up");
+  view = await shownAt(1.58);
+  const atTheWall = view.robot;
+  assert.equal(view.robot.lift_height_in, robotDrawing.claw.lowest_in);
+  assert.equal(view.toggles.left, "blue");
+  pieceCount = await drawnPiecesMatchVexsim(view);
+  pass(`With the lift down, the 3D view draws all ${pieceCount} pieces and the bumpers where vexsim has them, within 0.001 in`);
+  await page.waitForTimeout(1000);
+  await shot("14-override-lift-down");
+  const viewerBox = await page.locator("#viewer3d").boundingBox();
+  const middle = { x: viewerBox.x + viewerBox.width / 2, y: viewerBox.y + viewerBox.height / 2 };
+  await page.mouse.move(middle.x, middle.y);
+  await page.mouse.down();
+  await page.mouse.move(middle.x + 200, middle.y + 100, { steps: 6 });
+  await page.mouse.up();
+  await page.mouse.wheel(0, -100);
+  await page.waitForTimeout(1000);
+  await shot("15-toggle-arms-hit");
+  view = await shownAt(1.8);
+  const backedOff = view.robot.y - atTheWall.y;
+  assert(backedOff > 1.5, `The robot moved ${backedOff} in off the wall by 1.8 s`);
+  assert.equal(view.toggles.left, "blue");
+  await page.waitForTimeout(1000);
+  await shot("16-toggle-arms-back-off");
+  pass(`At 1.58 s the 3D Toggle arms press the left Toggle at the wall, blue in; at 1.8 s the robot is ` +
+       `${backedOff.toFixed(2)} in off the wall and the Toggle still shows blue`);
   await scrub(15);
   view = await shown3d("bothTogglesTurned");
   assert.deepEqual(view.toggles, { left: "red", bottom: "red", top: "yellow", right: "yellow" });
   pass("The 3D Toggles turn the way the simulator turned them: red faces into the field on the left and bottom");
-  pass("The 3D view shows the Override field, the robot with its lift, claw and Toggle bars, and the Pins");
+  pass("The 3D view shows the Override field, the robot with its lift, claw and Toggle arms, and the Pins");
   await page.locator("#view-top").click();
 
   await page.locator("#export-cpp").click();
@@ -391,7 +452,7 @@ try {
   assert.match(matchLoadScore, /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
   await page.locator("#step-list li").nth(1).click();
   assert.match(await page.locator("#pane-step").innerText(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
-  await shot("14-override-match-load");
+  await shot("17-override-match-load");
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();
   assert.match(await page.locator("#cpp-code").inputValue(), /\n  pros::delay\(15000\);\n/);

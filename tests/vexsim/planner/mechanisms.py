@@ -18,11 +18,11 @@ LIFT_PRESETS = {
     "on_stack_on_neutral_goal": "On a stack on a Neutral Goal: claw 19.73 in up",
     "over_center_goal": "Over the Center Goal: claw 18.79 in up",
     "on_center_goal": "On the Center Goal: claw 15.61 in up",
-    "top": "Top: claw 42.2 in up",
+    "top": "Top: claw 33.2 in up",
 }
 #: The claw heights the presets name, inches: cascade_helpers.hpp holds the same numbers
 LIFT_HEIGHTS_IN = dict(down=6.2, over_neutral_goal=15.79, on_neutral_goal=12.61, over_stack_on_neutral_goal=22.91,
-                       on_stack_on_neutral_goal=19.73, over_center_goal=18.79, on_center_goal=15.61, top=42.2)
+                       on_stack_on_neutral_goal=19.73, over_center_goal=18.79, on_center_goal=15.61, top=33.2)
 CLAW_PRESETS = {"open": "Open: jaws 4.4 in apart", "closed": "Closed: jaws 3.09 in apart, on a Cup's top rim"}
 MECHANISMS = {
     "lift": dict(label="Lift", presets=LIFT_PRESETS, enum="cascade::LiftPreset"),
@@ -33,9 +33,9 @@ MECHANISM_ENUMS = {"lift": "cascade::Mechanism::Lift", "claw": "cascade::Mechani
 RETIRED_MECHANISMS = {
     "arm": "the arm was the Flex robot's inclined lift, which the planner no longer has. Use the lift instead "
            "(\"lift\", with lift_preset one of: " + ", ".join(LIFT_PRESETS) + ")",
-    "toggle_arm": "the cascade robot has no Toggle arm any more. It turns a Toggle with the two bars on its "
-                  "lift tower: drive forward into the Toggle at 10 in/s or faster. Remove this toggle_arm step or "
-                  "action",
+    "toggle_arm": "the cascade robot has no Toggle arm to move any more. It turns a Toggle with the two fixed "
+                  "arms on the back of its lift tower: back into the Toggle at 34 in/s or faster. Remove this "
+                  "toggle_arm step or action",
 }
 #: Lift presets of the cascade robot before its claw held Cups
 RETIRED_LIFT_PRESETS = ("pin_in_cup", "over_alliance_goal")

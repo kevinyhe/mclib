@@ -105,42 +105,40 @@ def override_drawing():
 
 
 def cascade_drawing():
-    """The cascade robot's parts with the lift down and the claw open, and
+    """The cascade robot's pieces with the lift down and the claw open, and
     where each preload lies, inches in the robot frame: forward and left of
     the middle of the drivetrain, and up from the floor. A preload's axis is
-    (forward, left, up), from its red half to its yellow half. `moves` says how a part moves: "lift" parts rise with
-    the claw, a "jaw" also slides across as the claw closes, and the "rails"
-    telescope in `stages`. The rest are fixed."""
+    (forward, left, up), from its red half to its yellow half. Each piece
+    rises `rise_share` of what the claw rises, and a jaw (`jaw_side` 1 on the
+    left, -1 on the right) also slides toward the middle as the claw closes.
+    A piece seen from the side has a `profile` (forward, up). `frame` is the
+    drivetrain's outline and the inside edge of the bumpers around it."""
     from vexsim import override_field as of
     from vexsim.cascade import GEOMETRY as g, CascadeRobot
     from vexsim.presets import four_motor_450
     from vexsim.units import INCH
     robot = CascadeRobot()
+    chassis = four_motor_450()
     inches = lambda value: round(value / INCH, 4)  # noqa: E731
+    pairs = lambda points: [[inches(a), inches(b)] for a, b in points]  # noqa: E731
     parts = []
-    for part in robot.parts(four_motor_450()):
-        parts.append(dict(name=part.name, moves=_how_it_moves(part), outline=[[inches(x), inches(y)] for x, y in part.corners()],
+    for component in robot.components(chassis):
+        part = component.part
+        parts.append(dict(key=component.key, name=part.name, parents=list(component.parents),
+                          rise_share=round(component.rise_share, 6), jaw_side=component.jaw_side,
+                          outline=pairs(part.corners()), profile=pairs(part.profile),
                           back=inches(part.back), front=inches(part.front), right=inches(part.right),
                           left=inches(part.left), bottom=inches(part.bottom), top=inches(part.top)))
     preloads = {}
     for where in ("behind", "beside"):
-        (forward, left, up), axis, _ = robot.preload_pose(four_motor_450(), where, of.PRELOAD_COLORS["red"])
+        (forward, left, up), axis, _ = robot.preload_pose(chassis, where, of.PRELOAD_COLORS["red"])
         preloads[where] = dict(forward_in=inches(forward), left_in=inches(left), up_in=inches(up),
                                axis=[round(value, 4) for value in axis])
-    return dict(parts=parts, stages=g.stages, rail_length_in=g.rail_length, rail_bottom_in=g.rail_bottom,
-                preloads=preloads,
+    frame = dict(outline=pairs(robot.frame_outline(chassis)), bumper_inside=pairs(robot.bumper_inside(chassis)),
+                 bottom=g.frame_bottom, top=g.frame_top)
+    return dict(parts=parts, frame=frame, preloads=preloads,
                 claw=dict(open_gap_in=g.jaw_open_gap, closed_gap_in=g.jaw_closed_gap, lowest_in=round(g.grip_lowest, 4),
-                          highest_in=round(g.grip_highest, 4), middle_ahead_in=inches(robot.claw_position(four_motor_450())[0])))
-
-
-def _how_it_moves(part):
-    if part.name == "lift":
-        return "rails"
-    if part.name == "claw" and (part.right > 0 or part.left < 0):
-        return "jaw"
-    if part.name in ("claw", "carriage"):
-        return "lift"
-    return "fixed"
+                          highest_in=round(g.grip_highest, 4), middle_ahead_in=inches(robot.claw_position(chassis)[0])))
 
 
 def _planner_direction(x, y):
