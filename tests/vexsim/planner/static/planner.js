@@ -8,10 +8,13 @@
   const HANDLE_RADIUS_PX = 6;
   const ANCHOR_RADIUS_PX = 8;
   const HEADING_KNOB_IN = 14;
+  const PATH_PROBE_REACH_PX = 9;
+  const STEP_TAG_MERGE_PX = 22;
   const SPEED_STOPS = [[0, [44, 95, 214]], [0.35, [20, 163, 163]], [0.7, [230, 180, 0]], [1, [216, 67, 47]]];
   const SHORTCUTS = [
     ["Click the field", "Add a point to the end of the selected path, or place the selected step's target"],
     ["Click the selected path's line", "Insert a point there"],
+    ["Hover over a planned path", "Show how far along the path that point is, how long the robot takes to reach it, and its planned speed"],
     ["Drag a point, handle or target", "Move it. Hold Shift to snap to a 6 in grid and headings to 15°"],
     ["Drag empty space · scroll", "Pan · zoom"],
     ["Double-click a point", "Put its heading and curve handles back on automatic"],
@@ -61,6 +64,8 @@
     layers: { plan: true, truth: true, odometry: true, compare: true },
     drag: null,
     hover: null,
+    probe: null,
+    detailsOpen: false,
     tab: "step",
     mode: "top",
     viewer: { ready: false, error: "" },
@@ -698,6 +703,16 @@
     $("cancel-run").hidden = !state.activeRun;
   }
 
+  function autonomousLines(auton) {
+    if (!auton) return [];
+    const point = auton.win_point;
+    return [
+      `Autonomous ended at ${fmt(auton.t, 2)} s: red ${auton.red}, blue ${auton.blue}. Autonomous Bonus: red ${auton.bonus.red}, blue ${auton.bonus.blue}.`,
+      `Win Point: red owns ${point.pins} of ${point.pins_needed} Pin halves needed and has ${point.goals_with_two} of ${point.goals_needed} Goals with two${point.touching_perimeter ? ", and touches the wall" : ""}. ${point.earned ? "Earned." : "Not earned."}`,
+      auton.robot_in_midfield ? "The robot ended in the Midfield. That counts only at the end of a match." : `The robot ended ${fmt(auton.robot_inches_from_midfield)} in outside the Midfield.`,
+    ];
+  }
+
   function renderActivity() {
     const job = state.shown;
     const summary = $("run-summary");
@@ -710,7 +725,8 @@
       if (status === "passed" || status === "failed") {
         summary.className = `run-summary ${status === "passed" ? "pass" : "fail"}`;
         summary.replaceChildren(`Run ${job.number}: ${result.passed_steps} of ${result.steps} steps passed`,
-          element("span", { text: `${fmt(result.simulated_s, 2)} s of robot time${result.skipped_steps ? `, ${result.skipped_steps} skipped after a failure` : ""}.` }));
+          element("span", { text: `${fmt(result.simulated_s, 2)} s of robot time${result.skipped_steps ? `, ${result.skipped_steps} skipped after a failure` : ""}.` }),
+          ...autonomousLines(job.result.autonomous).map((text) => element("span", { class: "auton", text })));
       } else if (status === "error") {
         summary.className = "run-summary error";
         summary.replaceChildren(`Run ${job.number} stopped with an error`, element("span", { text: job.error }));
@@ -794,6 +810,7 @@
     else if (state.mode === "3d") hint = state.shown ? "vexsim's 3D view of the simulated robot. Click it, then press 1 to 4 to change the camera." : "";
     else if (state.drag?.kind === "pan") hint = "";
     else if (state.hover?.hint) hint = state.hover.hint;
+    else if (state.probe) hint = "";
     else if (step.type === "path" && !step.points.length) hint = `Click on the field to add points to step ${state.selected + 1}. The path starts where the robot is.`;
     else if (step.type === "path") hint = `Click to add a point to the end of step ${state.selected + 1}. Click its line to insert one. Drag points and handles to shape it.`;
     else if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
@@ -802,11 +819,15 @@
     $("field-hint").textContent = hint;
   }
 
+  function helpTip(text) {
+    return element("span", { class: "help tip", text });
+  }
+
   function numberInput({ label, unit = "", value, min, max, step = 1, help, onCommit, disabled = false, placeholder }) {
     const input = element("input", { type: "number", min, max, step, value: Number.isFinite(value) ? String(value) : "", disabled, placeholder });
-    const wrapper = element("label", { class: "field-label" },
+    const wrapper = element("label", { class: "field-label", title: help },
       element("span", {}, label, unit ? element("span", { class: "unit", text: ` (${unit})` }) : null),
-      input, help ? element("span", { class: "help", text: help }) : null);
+      input, help ? helpTip(help) : null);
     const message = element("span", { class: "help" });
     input.addEventListener("change", () => {
       const parsed = Number(input.value);
@@ -840,14 +861,14 @@
     const select = element("select", {}, ...choices.map(([key, text]) => element("option", { value: key, text })));
     select.value = value;
     select.addEventListener("change", () => onChange(select.value));
-    return element("label", { class: "field-label" }, label, select, help ? element("span", { class: "help", text: help }) : null);
+    return element("label", { class: "field-label", title: help }, label, select, help ? helpTip(help) : null);
   }
 
   function checkInput(label, checked, help, onChange) {
     const input = element("input", { type: "checkbox" });
     input.checked = checked;
     input.addEventListener("change", () => onChange(input.checked));
-    return element("label", { class: "check" }, input, element("span", {}, label, help ? element("span", { class: "help", text: help }) : null));
+    return element("label", { class: "check", title: help }, input, element("span", {}, label, help ? helpTip(help) : null));
   }
 
   function chainReason(step, index) {
@@ -883,6 +904,13 @@
     if (state.tab === "telemetry") renderTelemetry();
   }
 
+  function foldedList(title, items) {
+    const box = element("details", { class: "more", open: state.detailsOpen },
+      element("summary", { text: title }), element("ul", {}, ...items.map((text) => element("li", { text }))));
+    box.addEventListener("toggle", () => { state.detailsOpen = box.open; });
+    return box;
+  }
+
   function resultCard(index) {
     const row = stepRows().find((item) => item.index === index);
     if (!row || typeof row.passed !== "boolean") return null;
@@ -893,8 +921,8 @@
       row.executed === false ? element("p", { text: row.reason }) : null,
       row.checks?.length ? element("ul", { class: "checks" }, ...row.checks.map((check) =>
         element("li", { class: check.passed ? "pass" : "fail" }, element("span", { class: "mark", text: check.passed ? "✓" : "✗" }), element("span", { text: check.message })))) : null,
-      row.info?.length ? element("ul", {}, ...row.info.map((text) => element("li", { text }))) : null,
       row.notes?.length ? element("ul", {}, ...row.notes.map((text) => element("li", { text: `Hint: ${text}` }))) : null,
+      row.info?.length ? foldedList(`Details (${row.info.length})`, row.info) : null,
       Number.isFinite(row.start_time_s) ? element("button", { class: "small", onclick: () => { play(false); setTime(row.start_time_s); } }, `Jump playback to step ${index + 1}`) : null);
   }
 
@@ -937,7 +965,8 @@
     ];
     const note = element("input", { type: "text", maxlength: 80, value: step.note || "", placeholder: "e.g. grab the goal" });
     note.addEventListener("change", () => edit(() => { step.note = note.value; }, { replan: false }));
-    children.push(element("label", { class: "field-label" }, "Label (optional)", note, element("span", { class: "help", text: "Shown in the step list and as a comment in the exported C++." })));
+    const noteHelp = "Shown in the step list and as a comment in the exported C++.";
+    children.push(element("label", { class: "field-label", title: noteHelp }, "Label (optional)", note, helpTip(noteHelp)));
     const result = resultCard(index);
     if (result) children.push(result);
     if (step.type === "path") children.push(...pathPane(step, index));
@@ -1366,18 +1395,6 @@
         element("span", { class: "score-red", text: `Red ${frame.score_red}` }),
         element("span", { class: "score-blue", text: `Blue ${frame.score_blue}` })),
     ];
-    if (frame.toggles) {
-      const toggles = Object.entries(frame.toggles).map(([quadrant, toggle]) => `${quadrant} ${toggle.set}`).join(", ");
-      lines.push(element("div", { class: "score-detail", text: `Toggles set: ${toggles}.` }));
-    }
-    const auton = state.shown?.result?.autonomous;
-    if (auton && frame.t >= auton.t) {
-      const point = auton.win_point;
-      lines.push(
-        element("div", { class: "score-detail", text: `Autonomous ended at ${fmt(auton.t, 2)} s: red ${auton.red}, blue ${auton.blue}. Autonomous Bonus: red ${auton.bonus.red}, blue ${auton.bonus.blue}.` }),
-        element("div", { class: "score-detail", text: `Win Point: red owns ${point.pins} of ${point.pins_needed} Pin halves needed and has ${point.goals_with_two} of ${point.goals_needed} Goals with two${point.touching_perimeter ? ", and touches the wall" : ""}. ${point.earned ? "Earned." : "Not earned."}` }),
-        element("div", { class: "score-detail", text: auton.robot_in_midfield ? "The robot ended in the Midfield. That counts only at the end of a match." : `The robot ended ${fmt(auton.robot_inches_from_midfield)} in outside the Midfield.` }));
-    }
     panel.replaceChildren(...lines);
   }
 
@@ -1531,9 +1548,34 @@
     ctx.restore();
   }
 
-  function stepTag(ctx, point, number, selected, placed) {
+  function stepNumbers(numbers) {
+    const runs = [];
+    for (const number of numbers) {
+      const last = runs.at(-1);
+      if (last && number === last[1] + 1) last[1] = number;
+      else runs.push([number, number]);
+    }
+    return runs.map(([first, last]) => (first === last ? `${first}` : last === first + 1 ? `${first}, ${last}` : `${first}–${last}`)).join(", ");
+  }
+
+  function drawStepTags(ctx, all) {
+    const groups = [];
+    state.project.steps.forEach((step, index) => {
+      if (stepInfo(step).still || (step.type === "path" && !step.points.length)) return;
+      const at = toScreen(all[index].end);
+      const group = groups.find((other) => Math.hypot(other.at.x - at.x, other.at.y - at.y) < STEP_TAG_MERGE_PX);
+      if (group) group.numbers.push(index + 1);
+      else groups.push({ at, point: all[index].end, numbers: [index + 1] });
+    });
+    const placed = [];
+    for (const group of groups) {
+      const text = `${group.numbers.length > 1 ? "Steps" : "Step"} ${stepNumbers(group.numbers)}`;
+      stepTag(ctx, group.point, text, group.numbers.includes(state.selected + 1), placed);
+    }
+  }
+
+  function stepTag(ctx, point, text, selected, placed) {
     const p = toScreen(point);
-    const text = `Step ${number}`;
     ctx.save();
     ctx.font = "600 10.5px system-ui, sans-serif";
     const width = ctx.measureText(text).width + 10;
@@ -1750,13 +1792,7 @@
     const step = selectedStep();
     if (step.type === "path") drawPath(ctx, step, state.selected, all[state.selected].start, true);
     else drawOtherStep(ctx, step, state.selected, all[state.selected].start, all[state.selected].end, true);
-    if (state.project.steps.length > 1) {
-      const placed = [];
-      state.project.steps.forEach((item, index) => {
-        if (stepInfo(item).still) return;
-        if (item.type !== "path" || item.points.length) stepTag(ctx, all[index].end, index + 1, index === state.selected, placed);
-      });
-    }
+    if (state.project.steps.length > 1) drawStepTags(ctx, all);
     const start = state.project.start;
     drawRobot(ctx, start, { stroke: "#2563eb", dash: [5, 3], width: 1.6, fill: "rgba(37,99,235,.06)" });
     if (!state.shown && state.project.field === "override") {
@@ -1774,6 +1810,11 @@
     if (state.hover?.kind === "curve") {
       drawKnob(ctx, state.hover.at, "#2563eb", false, 6);
       drawLabel(ctx, state.hover.at, "+", "#2563eb");
+    }
+    if (state.probe) {
+      const [, , , x, y, heading] = state.probe.state;
+      drawRobot(ctx, { x, y, heading }, { fill: "rgba(255,255,255,.55)", stroke: "#18202c", dash: [4, 3], width: 1.4 });
+      drawKnob(ctx, { x, y }, "#18202c", true, 3);
     }
     renderScore();
     const plan = currentPlan();
@@ -1983,6 +2024,45 @@
     return names[hit.kind];
   }
 
+  function pathProbeAt(field) {
+    if (!state.layers.plan) return null;
+    let best = null;
+    state.project.steps.forEach((step, index) => {
+      const plan = step.type === "path" ? planFor(index) : null;
+      if (!plan?.states?.length) return;
+      const near = planStateNearest(plan.states, field);
+      if (near.gap_in * state.view.scale > PATH_PROBE_REACH_PX) return;
+      if (!best || near.gap_in < best.gap_in) best = { ...near, index, step, plan };
+    });
+    return best;
+  }
+
+  function pathProbeLines(probe) {
+    const [, time, distance, , , , speed] = probe.state;
+    const title = `Step ${probe.index + 1} · ${stepInfo(probe.step).label}${probe.step.note ? `: ${probe.step.note}` : ""}`;
+    return [
+      title,
+      `${fmt(distance)} in of ${fmt(probe.plan.states.at(-1)[2])} in along the path`,
+      `${fmt(time, 2)} s of ${fmt(probe.plan.duration_s, 2)} s into the path`,
+      `Planned speed ${fmt(Math.abs(speed))} in/s${speed < -1e-9 ? ", backward" : ""}`,
+    ];
+  }
+
+  function renderPathProbe(at) {
+    const box = $("path-probe");
+    if (!state.probe) {
+      box.hidden = true;
+      return;
+    }
+    box.replaceChildren(...pathProbeLines(state.probe).map((text, i) => element("div", i ? { text } : { class: "path-probe-title", text })));
+    box.hidden = false;
+    const gap = 14;
+    const left = at.x + gap + box.offsetWidth > state.size.width ? at.x - gap - box.offsetWidth : at.x + gap;
+    const top = at.y + gap + box.offsetHeight > state.size.height ? at.y - gap - box.offsetHeight : at.y + gap;
+    box.style.left = `${Math.max(0, left)}px`;
+    box.style.top = `${Math.max(0, top)}px`;
+  }
+
   function applyDrag(drag, position, shift) {
     const project = state.project;
     const step = project.steps[state.selected];
@@ -2059,10 +2139,16 @@
       if (!drag) {
         const hit = hitTest(at.x, at.y);
         state.hover = hit ? { ...hit, hint: hoverHint(hit) } : null;
+        state.probe = pathProbeAt(field);
         canvas.className = hit ? (hit.kind === "curve" || hit.kind === "other-anchor" ? "pointer" : "grab") : "";
         renderHint();
+        renderPathProbe(at);
         drawField();
         return;
+      }
+      if (state.probe) {
+        state.probe = null;
+        renderPathProbe(at);
       }
       if (!drag.moved && Math.hypot(at.x - drag.start.x, at.y - drag.start.y) < 4) return;
       drag.moved = true;
@@ -2094,7 +2180,14 @@
     };
     canvas.addEventListener("pointerup", release);
     canvas.addEventListener("pointercancel", () => { state.drag = null; drawField(); });
-    canvas.addEventListener("pointerleave", () => { $("cursor-readout").textContent = ""; state.hover = null; renderHint(); });
+    canvas.addEventListener("pointerleave", () => {
+      $("cursor-readout").textContent = "";
+      state.hover = null;
+      state.probe = null;
+      $("path-probe").hidden = true;
+      renderHint();
+      drawField();
+    });
     canvas.addEventListener("dblclick", (event) => {
       const at = canvasPoint(event);
       const hit = hitTest(at.x, at.y);
@@ -2357,10 +2450,8 @@
     menu.replaceChildren(...Object.entries(state.config.step_types).map(([type, info]) =>
       element("button", { onclick: () => addStep(type), "data-type": type }, `${info.label}`, element("span", { text: `${info.call} · ${info.description.split(". ")[0]}.` }))));
     $("shortcut-strip").replaceChildren(
-      element("kbd", { text: "Click" }), " add point · ", element("kbd", { text: "Drag" }), " move · ",
-      element("kbd", { text: "Del" }), " delete · ", element("kbd", { text: "Ctrl+Z" }), " undo · ",
-      element("kbd", { text: "Ctrl+Enter" }), " run · ", element("kbd", { text: "Space" }), " play · ",
-      element("kbd", { text: "F" }), " fit · ", element("kbd", { text: "?" }), " all shortcuts");
+      element("kbd", { text: "Click" }), " add point · ", element("kbd", { text: "Ctrl+Z" }), " undo · ",
+      element("kbd", { text: "?" }), " all shortcuts");
     $("shortcut-table").replaceChildren(...SHORTCUTS.map(([keys, action]) => element("tr", {}, element("td", {}, element("kbd", { text: keys })), element("td", { text: action }))));
   }
 

@@ -62,7 +62,7 @@ try {
 
   await page.goto(url.href);
   await page.waitForFunction(() => document.querySelector("#step-list li"));
-  assert.match(await page.locator("#log").innerText(), /Click on the field/);
+  assert.match(await page.locator("#log").textContent(), /Click on the field/);
   assert.match(await page.locator("#field-hint").innerText(), /Click on the field to add points/);
   assert.match(await page.locator("#shortcut-strip").innerText(), /Ctrl\+Z/);
   pass("A new routine opens with one empty path and tells the user to click the field");
@@ -98,6 +98,28 @@ try {
   assert.match(await page.locator("#graph-caption").innerText(), /Planned speed/);
   pass("The graph shows the planned speed before any run");
   await shot("02-planned");
+
+  const probeAt = async (x, y) => {
+    const at = await fieldPoint(x, y);
+    await page.mouse.move(at.x, at.y);
+    return (await page.locator("#path-probe").isVisible()) ? page.locator("#path-probe").innerText() : null;
+  };
+  const probeReading = (text) => {
+    const [, along, length] = text.match(/(\d+\.\d) in of (\d+\.\d) in along the path/);
+    const [, into, total] = text.match(/(\d+\.\d\d) s of (\d+\.\d\d) s into the path/);
+    return { along: Number(along), length: Number(length), into: Number(into), total: Number(total) };
+  };
+  const nearStart = await probeAt(24, -12);
+  const nearEnd = await probeAt(0, 24);
+  await shot("02b-path-probe");
+  assert.match(nearStart, /^Step 1 · /);
+  assert.match(nearStart, /Planned speed \d+\.\d in\/s/);
+  const early = probeReading(nearStart), late = probeReading(nearEnd);
+  assert(0 < early.along && early.along < late.along && late.along < late.length, JSON.stringify({ early, late }));
+  assert(0 < early.into && early.into < late.into && late.into < late.total, JSON.stringify({ early, late }));
+  assert.equal(late.total.toFixed(2), summary.match(/(\d+\.\d+) s/)[1]);
+  assert.equal(await probeAt(60, -60), null);
+  pass(`Hovering over the path shows how far and how long along it: ${nearStart.split("\n").slice(1, 3).join(" · ")}`);
 
   await dragField({ x: 0, y: 24 }, { x: 6, y: 30 });
   project = await draft();
@@ -140,7 +162,7 @@ try {
   await keepMoving("#pane-step").locator("input").check();
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[0].chain === true);
   assert.match(await page.locator("#step-list li").first().innerText(), /Keeps moving into step 2/);
-  assert.match(await page.locator("#pane-step").innerText(), /planned time plus 0\.5 s/);
+  assert.match(await page.locator("#pane-step").textContent(), /planned time plus 0\.5 s/);
   await shot("03b-keep-moving");
   await page.keyboard.press("Control+z");
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[0].chain === false);
@@ -152,7 +174,7 @@ try {
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 300000 });
   const firstRun = await page.locator("#run-picker").inputValue();
-  const stages = await page.locator("#stage-list").innerText();
+  const stages = await page.locator("#stage-list").textContent();
   for (const label of ["Check the routine", "Compile mclib", "Measure the robot", "Plan path speeds", "Simulate in vexsim", "Score each step"]) assert.match(stages, new RegExp(label));
   assert.match(await page.locator("#run-summary").innerText(), /2 of 2 steps passed/);
   assert.equal(await page.locator("#step-list .badge.pass").count(), 2);
@@ -160,7 +182,7 @@ try {
   await shot("04-run-passed");
 
   await page.locator("#step-list li").first().click();
-  const result = await page.locator("#pane-step .card.pass").innerText();
+  const result = await page.locator("#pane-step .card.pass").textContent();
   assert.match(result, /Ended \d+\.\d+ in from the target \(limit 2\.5 in\)/);
   assert.match(result, /Largest gap from the planned path/);
   pass("The step pane shows each check with the measured value and its limit");
@@ -298,7 +320,8 @@ try {
   await page.waitForFunction(finished, null, { timeout: 600000 });
   assert.match(await page.locator("#run-summary").innerText(), /14 of 14 steps passed/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
-  const score = await page.locator("#score-panel").innerText();
+  assert.match(await page.locator("#score-panel").innerText(), /Red 50\s+Blue 0/);
+  const score = await page.locator("#run-summary").innerText();
   assert.match(score, /Autonomous ended at 1[23]\.\d\d s: red 50, blue 0/);
   assert.match(score, /Autonomous Bonus: red 12/);
   assert.match(score, /Win Point: red owns 5 of 6 Pin halves needed[\s\S]*Not earned/);
@@ -307,7 +330,7 @@ try {
 
   const turnedIn = async (index, pattern) => {
     await page.locator("#step-list li").nth(index).click();
-    assert.match(await page.locator("#pane-step").innerText(), pattern);
+    assert.match(await page.locator("#pane-step").textContent(), pattern);
   };
   await turnedIn(2, /Turned the left Toggle: blue now faces into the field/);
   await turnedIn(4, /Turned the left Toggle: red now faces into the field/);
@@ -449,9 +472,9 @@ try {
   assert.match(matchLoadScore, /Score at 2\d\.\d\d s/);
   assert.match(matchLoadScore, /Red 5/);
   assert.match(matchLoadScore, /Blue 0/);
-  assert.match(matchLoadScore, /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
+  assert.match(await page.locator("#run-summary").innerText(), /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
   await page.locator("#step-list li").nth(1).click();
-  assert.match(await page.locator("#pane-step").innerText(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
+  assert.match(await page.locator("#pane-step").textContent(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
   await shot("17-override-match-load");
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();

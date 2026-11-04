@@ -226,9 +226,28 @@ function planStateAt(states, t) {
     if (states[mid][1] <= t) low = mid; else high = mid;
   }
   const a = states[low], b = states[high];
-  const f = b[1] > a[1] ? (t - a[1]) / (b[1] - a[1]) : 0;
-  return [a[0], t, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f, a[4] + (b[4] - a[4]) * f,
-    a[5] + wrapDegrees(b[5] - a[5]) * f, a[6] + (b[6] - a[6]) * f, a[7]];
+  return betweenStates(a, b, b[1] > a[1] ? (t - a[1]) / (b[1] - a[1]) : 0);
+}
+
+function betweenStates(a, b, f) {
+  return [a[0], a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f,
+    a[4] + (b[4] - a[4]) * f, a[5] + wrapDegrees(b[5] - a[5]) * f, a[6] + (b[6] - a[6]) * f, a[7]];
+}
+
+// The planned state along one plan closest to field point @p point, and how
+// far the point is from the plan, in inches.
+function planStateNearest(states, point) {
+  let best = { state: states[0], gap_in: Math.hypot(point.x - states[0][3], point.y - states[0][4]) };
+  for (let i = 1; i < states.length; i++) {
+    const a = states[i - 1], b = states[i];
+    const dx = b[3] - a[3], dy = b[4] - a[4];
+    const span = dx * dx + dy * dy;
+    const f = span > 0 ? Math.min(1, Math.max(0, ((point.x - a[3]) * dx + (point.y - a[4]) * dy) / span)) : 0;
+    const state = betweenStates(a, b, f);
+    const gap = Math.hypot(point.x - state[3], point.y - state[4]);
+    if (gap < best.gap_in) best = { state, gap_in: gap };
+  }
+  return best;
 }
 
 function unwrapSeries(values) {
@@ -311,6 +330,7 @@ function telemetryRows(frame, target) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     wrapDegrees, bearing, along, pathLayout, bezierPoint, sectionSamples, pathSpacingProblem, arcPoints,
-    stepEndPose, designedPoses, stepPreview, mirrorProject, frameIndexAt, planStateAt, unwrapSeries, telemetryRows,
+    stepEndPose, designedPoses, stepPreview, mirrorProject, frameIndexAt, planStateAt, planStateNearest, unwrapSeries,
+    telemetryRows,
   };
 }

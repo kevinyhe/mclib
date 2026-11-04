@@ -54,8 +54,11 @@
       <section class="panel activity-panel" aria-labelledby="activity-title">
         <div class="panel-head"><h2 id="activity-title">Activity</h2><span id="activity-clock" class="muted small"></span></div>
         <div id="run-summary" class="run-summary" hidden></div>
-        <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
-        <ol id="log" class="log" aria-label="Messages" aria-live="polite"></ol>
+        <details id="activity-details" class="activity-details">
+          <summary>Details: each stage and every message</summary>
+          <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
+          <ol id="log" class="log" aria-label="Messages" aria-live="polite"></ol>
+        </details>
       </section>
     </aside>
 
@@ -79,6 +82,7 @@
         <div id="viewer3d-status" class="overlay-status" hidden></div>
         <div id="field-hint" class="field-hint"></div>
         <div id="cursor-readout" class="cursor-readout mono"></div>
+        <div id="path-probe" class="path-probe" role="status" hidden></div>
         <div id="speed-legend" class="speed-legend" hidden><span>0</span><i></i><span id="speed-legend-max"></span></div>
         <div id="stale-badge" class="stale-badge" hidden>The routine changed after this run</div>
         <div id="score-panel" class="score-panel" hidden></div>

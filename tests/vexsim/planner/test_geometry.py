@@ -116,5 +116,50 @@ class SameGeometryTests(unittest.TestCase):
         self.assertIn("point 2 is 0.22 in from point 1", problem)
 
 
+NEAREST_SCRIPT = """
+const geometry = require(process.argv[1]);
+const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(input.points.map((point) => geometry.planStateNearest(input.states, point))))
+"""
+
+
+def nearest_plan_states(states, points):
+    done = subprocess.run(["node", "-e", NEAREST_SCRIPT, str(GEOMETRY_JS)],
+                          input=json.dumps(dict(states=states, points=points)), capture_output=True, text=True,
+                          check=True)
+    return json.loads(done.stdout)
+
+
+class PathProbeTests(unittest.TestCase):
+    FORWARD_THEN_BACK = [[0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                         [0, 1.0, 20.0, 0.0, 20.0, 0.0, 40.0, 0.0],
+                         [0, 2.0, 40.0, 0.0, 40.0, 0.0, 0.0, 0.0],
+                         [1, 2.0, 40.0, 0.0, 40.0, 180.0, 0.0, 0.0],
+                         [1, 3.0, 50.0, 10.0, 40.0, 270.0, -20.0, 0.0]]
+
+    def test_a_point_beside_the_path_reads_the_distance_time_and_speed_there(self):
+        near = nearest_plan_states(self.FORWARD_THEN_BACK, [dict(x=3, y=10)])[0]
+        self.assertAlmostEqual(near["gap_in"], 3.0)
+        part, time, distance, x, y, _, speed, _ = near["state"]
+        self.assertEqual((part, x, y), (0, 0.0, 10.0))
+        self.assertAlmostEqual(time, 0.5)
+        self.assertAlmostEqual(distance, 10.0)
+        self.assertAlmostEqual(speed, 20.0)
+
+    def test_a_reversed_part_reads_its_distance_from_the_path_start_and_a_backward_speed(self):
+        near = nearest_plan_states(self.FORWARD_THEN_BACK, [dict(x=5, y=41)])[0]
+        _, time, distance, _, _, _, speed, _ = near["state"]
+        self.assertAlmostEqual(time, 2.5)
+        self.assertAlmostEqual(distance, 45.0)
+        self.assertAlmostEqual(speed, -10.0)
+
+    def test_points_past_either_end_read_the_end(self):
+        before, after = nearest_plan_states(self.FORWARD_THEN_BACK, [dict(x=0, y=-6), dict(x=16, y=40)])
+        self.assertEqual(before["state"][1:3], [0.0, 0.0])
+        self.assertAlmostEqual(before["gap_in"], 6.0)
+        self.assertEqual(after["state"][1:3], [3.0, 50.0])
+        self.assertAlmostEqual(after["gap_in"], 6.0)
+
+
 if __name__ == "__main__":
     unittest.main()
