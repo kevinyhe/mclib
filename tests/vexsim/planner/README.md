@@ -319,6 +319,7 @@ The robot's sizes, masses and frictions that no source gives are in
 | Nesting | a Pin tip inside a Goal or Cup opening, lined up within 25°, drops in and is held | |
 | Hit force | averaged over 20 ms | how long a frame and bumper take to give |
 | Robot rocking | the drive is a solid box the frame's size; the lift's stages, its carriage and a held stack are weights at their heights | no robot's inertia has been published; vexsim's `dynamics.GUESSES` |
+| Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
 | Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
 | Exported ports | lift on ports 7 and -8 with green cartridges, claw valve on ADI port A | placeholders: change them to your robot's |
 
@@ -404,7 +405,7 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
-| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.4 s, with claw and lift actions during a drive |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.5 s, with claw and lift actions during a drive |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the turn and the drive away; 0 points, because the left Toggle is still yellow |
 | [override_toggle_bars.json](examples/override_toggle_bars.json) | turn to face red's wall and hit the left Toggle twice with the bars: blue, then red; 20 points |
 
@@ -452,10 +453,6 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
   no 10 ms delay.
 - The claw's 200 mL tank starts at 100 psi and loses air on each stroke
   (100 strokes take it to 25 psi). It never leaks.
-- A motor voltage takes effect in the next 1 ms physics step. A V5 brain
-  sends motor commands every 5 ms ([PROS `DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)),
-  so a real robot can react up to 5 ms later. The 10 ms delay on the drive
-  encoders is modelled.
 - Pins and Cups do not touch the Toggles.
 - Every simulated drive has omni wheels on all corners.
 - The 3D view needs Three.js 0.160.0 in the vexsim checkout's
