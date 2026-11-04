@@ -2,7 +2,7 @@
   "format": "mclib-path-planner",
   "version": 1,
   "name": "Override: both red Toggles and a stack",
-  "description": "Starts facing red's wall with the Toggle bars over the left Toggle, not touching it. Hits the left Toggle twice (blue, then red), drives through the yellow stack at (23.5, -23.5) and closes the claw on it on the way, sets it on the neutral bottom Goal, then hits the bottom Toggle twice. Red has 50 points at 12.5 s and takes the Autonomous Bonus.",
+  "description": "Starts facing red's wall with the Toggle bars over the left Toggle, not touching it. Hits the left Toggle twice (blue, then red), drives through the yellow stack at (23.5, -23.5) and closes the claw on it on the way, sets it on the neutral bottom Goal, then hits the bottom Toggle twice. Red has 50 points at 12.4 s and takes the Autonomous Bonus.",
   "field": "override",
   "preload": "beside",
   "robot": {"preset": "four_motor_450"},
@@ -18,7 +18,7 @@
     {"type": "lift", "lift_preset": "on_neutral_goal", "timeout_ms": 800},
     {"type": "drive", "note": "let go and back out of the bite", "distance": -8, "chain": true, "actions": [{"when": "start", "mechanism": "claw", "preset": "open"}, {"when": "distance", "value": 3, "mechanism": "lift", "preset": "down"}]},
     {"type": "path", "note": "line up on the bottom Toggle", "points": [{"x": 28, "y": 2, "heading": 90, "handle_in": 16}], "sections": [{"speed_percent": null, "reverse": true}], "chain": true},
-    {"type": "drive", "note": "hit 1: blue, at 8 V so the Toggle does not spin past red", "distance": 35.2, "volts": 8, "timeout_ms": 1100, "chain": true},
+    {"type": "drive", "note": "hit 1: blue, at 8 V so the Toggle does not spin past red", "distance": 34.6, "volts": 8, "timeout_ms": 1100, "chain": true},
     {"type": "drive", "distance": -4, "chain": true},
     {"type": "drive", "note": "hit 2: red", "distance": 4.5, "timeout_ms": 1100, "chain": true},
     {"type": "drive", "note": "let go of the Toggle", "distance": -4}

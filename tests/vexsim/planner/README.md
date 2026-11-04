@@ -318,6 +318,7 @@ The robot's sizes, masses and frictions that no source gives are in
 | Rest | a piece slower than 0.02 m/s and 0.4 rad/s for 0.2 s sleeps | |
 | Nesting | a Pin tip inside a Goal or Cup opening, lined up within 25°, drops in and is held | |
 | Hit force | averaged over 20 ms | how long a frame and bumper take to give |
+| Robot rocking | the drive is a solid box the frame's size; the lift's stages, its carriage and a held stack are weights at their heights | no robot's inertia has been published; vexsim's `dynamics.GUESSES` |
 | Exported ports | lift on ports 7 and -8 with green cartridges, claw valve on ADI port A | placeholders: change them to your robot's |
 
 ## Checks
@@ -334,6 +335,14 @@ Each step that stops is checked after a 0.3 s pause:
 A failed check says what was measured and the limit, for example
 "Ended 3.10 in from the target. The limit is 2.5 in." With **Stop at the
 first failed step** on, later steps are skipped, as in the exported C++.
+
+Any step fails if the robot falls over, and the run stops there. vexsim rocks
+the robot up onto one edge of its wheels when it brakes, speeds up or turns
+harder than the height of its centre of mass allows. A step where it rocked
+0.5° or more says how far, and at what angle it would have fallen. On the
+Override robot the centre of mass rises from 5.0 in with the lift down to
+8.75 in fully up. Braking from full speed with the lift fully up rocks it
+less than 0.1°: the motors cannot brake hard enough to tip it.
 
 A path step also reports the largest gap between the robot and the plan, and
 how long it took against the planned time. When it ends, it reports how far
@@ -387,7 +396,7 @@ and what to change.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
-| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.5 s, with claw and lift actions during a drive |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.4 s, with claw and lift actions during a drive |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the turn and the drive away; 0 points, because the left Toggle is still yellow |
 | [override_toggle_bars.json](examples/override_toggle_bars.json) | turn to face red's wall and hit the left Toggle twice with the bars: blue, then red; 20 points |
 

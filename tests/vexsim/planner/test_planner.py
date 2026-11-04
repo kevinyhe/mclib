@@ -375,6 +375,42 @@ class MatchesVexsimTests(unittest.TestCase):
                          (GEOMETRY.sprocket_teeth, GEOMETRY.chain_pitch, GEOMETRY.stages))
         self.assertAlmostEqual(lowest, GEOMETRY.grip_lowest, places=9)
 
+    def test_a_robot_that_falls_over_fails_the_step_and_one_that_rocks_says_how_far(self):
+        from engine import TipWatch
+        from vexsim import Simulator, presets
+        from vexsim.sim import SimConfig
+        from vexsim.units import INCH
+
+        def brake_from_full_speed(cg_height_in):
+            chassis = presets.four_motor_450()
+            chassis.cg_height = cg_height_in * INCH
+            sim = Simulator(chassis, config=SimConfig(log_every=0))
+            tips = TipWatch(sim)
+            for volts, ms in ((12.0, 1500), (-12.0, 600)):
+                for motor in sim.motors:
+                    motor.set_voltage(volts)
+                if volts < 0:
+                    tips.begin_step()
+                for t in range(ms):
+                    sim.step(0.001)
+                    if t % 10 == 0:
+                        tips.watch()
+            return tips
+
+        fell = brake_from_full_speed(15.0)
+        self.assertTrue(fell.fallen)
+        [upright] = fell.fall_checks()
+        self.assertFalse(upright["passed"])
+        self.assertRegex(upright["message"], r"^The robot fell over at 2\.\d\d s\. It rocked onto its front wheels "
+                                             r"past 19°, where its centre of mass, 15\.0 in up, was over them\.$")
+        self.assertEqual(fell.rock_lines(), [])
+        rocked = brake_from_full_speed(13.0)
+        self.assertEqual(rocked.fall_checks(), [])
+        self.assertRegex(rocked.rock_lines()[0], r"^The robot rocked 7\.\d° onto its front wheels\. "
+                                                 r"It falls over at 22°\.$")
+        level = brake_from_full_speed(5.0)
+        self.assertEqual((level.fall_checks(), level.rock_lines()), ([], []))
+
     def test_drive_watts_are_the_motors_vexsim_puts_on_each_base(self):
         from project import PRESETS
         from vexsim import presets

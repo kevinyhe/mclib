@@ -264,6 +264,10 @@ function telemetryRows(frame, target) {
     ["Motion", [
       ["Forward / sideways speed", pair(f.forward_speed_ips, f.lateral_speed_ips, " in/s")],
       ["Turn rate", num(f.yaw_rate_dps, " °/s")],
+      ...("tilt_deg" in f ? [
+        ["Centre of mass height", num(f.cg_height_in, " in", 2)],
+        ["Rocked up off its wheels", f.fallen ? "fell over" : num(f.tilt_deg, "°", 1)],
+      ] : []),
     ]],
     ...("contact" in f ? [["Field contact", [
       ["Touching", f.contact ?? "nothing"],

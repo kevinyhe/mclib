@@ -51,6 +51,8 @@ HEADING_GOALS = {"turn", "swing", "arc", "reverse_arc"}
 RAMSETE_SIDE_TOLERANCE_IN = 3.0
 PLANNER_RAMSETE_B = 50
 RAMSETE_BACK_OFF_IN = (6.0, 18.0)
+#: Rocking up less than this onto the edge of the wheels is not reported
+ROCK_REPORT_DEG = 0.5
 
 
 def write_json(path, value):
@@ -450,6 +452,53 @@ def check(key, label, passed, message, measured=None, limit=None, unit=""):
                 unit=unit)
 
 
+def wheel_side(edge):
+    """Which wheels a footprint edge of vexsim's chassis is: front, back, left or right."""
+    if abs(edge.nx) >= abs(edge.ny):
+        return "front" if edge.nx > 0 else "back"
+    return "left" if edge.ny > 0 else "right"
+
+
+class TipWatch:
+    """How far the robot rocks up onto one edge of its wheels in each step,
+    and when it falls over."""
+
+    def __init__(self, sim):
+        self.sim = sim
+        self.fell_at = None
+
+    def watch(self):
+        if self.fell_at is None and self.sim.dynamics.tilt.fallen:
+            self.fell_at = self.sim.t
+
+    def begin_step(self):
+        self.sim.dynamics.tilt.clear_most()
+
+    @property
+    def fallen(self):
+        return self.sim.dynamics.tilt.fallen
+
+    def fall_checks(self):
+        """A failed check once the robot has fallen over, else none."""
+        from vexsim.units import INCH
+        tilt = self.sim.dynamics.tilt
+        if not tilt.fallen:
+            return []
+        return [check("upright", "Upright", False,
+                      f"The robot fell over at {self.fell_at:.2f} s. It rocked onto its {wheel_side(tilt.edge)} "
+                      f"wheels past {math.degrees(tilt.balance):.0f}°, where its centre of mass, "
+                      f"{self.sim.chassis.cg_height / INCH:.1f} in up, was over them.")]
+
+    def rock_lines(self):
+        """How far the robot rocked onto the edge of its wheels this step,
+        when it rocked enough to say and did not fall."""
+        tilt = self.sim.dynamics.tilt
+        if tilt.fallen or math.degrees(tilt.most) < ROCK_REPORT_DEG:
+            return []
+        return [f"The robot rocked {math.degrees(tilt.most):.1f}° onto its {wheel_side(tilt.most_edge)} wheels. "
+                f"It falls over at {math.degrees(tilt.most_balance):.0f}°."]
+
+
 def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading):
     kind = step["type"]
     preset = MECHANISMS[kind]["presets"][step[f"{kind}_preset"]]
@@ -688,9 +737,11 @@ def _execute(raw, destination, vexsim, cache, progress):
         bridge.step_world = world.step
 
     autonomous = None
+    tips = TipWatch(bridge.sim)
 
     def with_world(frame):
         nonlocal autonomous
+        tips.watch()
         if world is None:
             return frame
         if rig:
@@ -708,7 +759,7 @@ def _execute(raw, destination, vexsim, cache, progress):
     write_json(destination / "live.json", dict(steps=[], pieces=pieces))
     progress.begin("simulate", "Running each step with the real mclib motion calls against vexsim physics.")
     rows = []
-    halted = False
+    halted = None
     total = len(project["steps"])
     wall_start = time.monotonic()
     for index, step in enumerate(project["steps"]):
@@ -717,8 +768,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         progress.note("simulate", f"Step {index + 1} of {total}: {label}.")
         timeout_ms = time_limits[index]
         if halted:
-            rows.append(dict(index=index, type=step["type"], executed=False, passed=False,
-                             reason="Skipped: an earlier step failed and Stop at the first failed step is on.",
+            rows.append(dict(index=index, type=step["type"], executed=False, passed=False, reason=halted,
                              checks=[], notes=[], target=None, timeout_ms=timeout_ms,
                              start_time_s=bridge.sim.t, end_time_s=bridge.sim.t))
             continue
@@ -732,6 +782,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         faces_before = toggle_faces(world) if rig else None
         if rig:
             rig.begin_actions(step["actions"])
+        tips.begin_step()
         try:
             if step["type"] == "match_load":
                 motion_result = load_match(world, step)
@@ -769,6 +820,7 @@ def _execute(raw, destination, vexsim, cache, progress):
             checks = rule_checks(rules.report()) + checks
         checks += [check("rules", "Rules", False, message) for t, message in rule_breaks
                    if started <= t <= bridge.sim.t]
+        checks += tips.fall_checks()
         passed = all(item["passed"] for item in checks)
         odometry_error = None if coordinate_reset else math.dist(estimate_at_exit[:2], truth_at_exit[:2])
         finished = duration_ms < timeout_ms - .5
@@ -786,7 +838,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         else:
             notes = advice(checks, position_error, odometry_error, finished, chained_path,
                            project["path_defaults"]["ramsete_b"])
-        info = []
+        info = tips.rock_lines()
         if odometry_error is not None:
             info.append(f"Odometry was {odometry_error:.2f} in from the simulated position when the step ended.")
         if coordinate_reset:
@@ -838,7 +890,10 @@ def _execute(raw, destination, vexsim, cache, progress):
                          motion_result is not None else None,
                          motion_result=MOTION_RESULTS[motion_result] if step["type"] == "path" and
                          motion_result is not None else None))
-        halted = not passed and project["stop_on_failure"]
+        if tips.fallen:
+            halted = f"Skipped: the robot fell over in step {index + 1}."
+        elif not passed and project["stop_on_failure"]:
+            halted = "Skipped: an earlier step failed and Stop at the first failed step is on."
         write_json(destination / "live.json", dict(steps=rows, pieces=pieces))
     bridge.on_capture = None
     recorder.close()
