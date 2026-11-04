@@ -513,6 +513,16 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(still_step, "2")
         self.assertLess(float(still_gap), drive["odometry_error_in"])
 
+    def test_5b_the_gap_at_rest_is_left_out_when_the_robot_only_stops_two_steps_later(self):
+        project = dict(steps=[dict(type="drive", distance=24, chain=True), dict(type="drive", distance=12, chain=True),
+                              dict(type="turn", heading=90)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        first, second, turn = strict_json((output / "result.json").read_text())["steps"]
+        self.assertFalse(any("stood still" in line for line in first["info"]), first["info"])
+        self.assertTrue(any("stood still, at" in line and "in step 3" in line for line in second["info"]),
+                        second["info"])
+
     def test_6_chained_paths_carry_their_speed_across_the_join(self):
         def routine(chain):
             return dict(steps=[dict(path_step([(0, -12)]), chain=chain), path_step([(0, 24)]),

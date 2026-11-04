@@ -505,7 +505,8 @@ class TipWatch:
 class OdometryAtRest:
     """Odometry trails a moving robot, so a step that ends moving measures
     that trail along with any drift. For such a step this adds the gap the
-    next time the robot stands still, unless a wall reset comes first."""
+    next time the robot stands still, if that is before the next step ends
+    and no wall reset comes first."""
 
     def __init__(self, trace):
         self.trace = trace
@@ -524,6 +525,8 @@ class OdometryAtRest:
                 resolved = [entry for entry in self.waiting if entry[0]["return_time_s"] < frame["t"]]
                 for row, speed_ips in resolved:
                     self.waiting.remove((row, speed_ips))
+                    if frame["step"] > row["index"] + 1:
+                        continue
                     after = next(number for number, line in enumerate(row["info"])
                                  if line.startswith("Odometry was")) + 1
                     row["info"].insert(after, f"The step ended with the robot moving at {speed_ips:.1f} in/s, "
