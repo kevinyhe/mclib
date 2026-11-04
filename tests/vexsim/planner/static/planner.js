@@ -866,6 +866,12 @@
       }) });
   }
 
+  function minVoltsInput(step) {
+    const info = state.config.fields.min_volts;
+    return autoNumber({ label: info.label, unit: info.unit, value: step.min_volts, automatic: info.automatic, min: info.low, max: step.volts, step: info.step,
+      help: info.help_by_step[step.type], autoLabel: "Automatic", onCommit: (value) => edit(() => { step.min_volts = value; }) });
+  }
+
   function selectInput(label, value, choices, help, onChange) {
     const select = element("select", {}, ...choices.map(([key, text]) => element("option", { value: key, text })));
     select.value = value;
@@ -985,6 +991,7 @@
       children.push(element("div", { class: "form two" }, ...fields));
       const limits = "fixed_ms" in info || info.timed_by ? [] : [fieldInput(step, "timeout_ms")];
       if (!info.still && step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
+      if ("min_volts" in info.defaults) limits.push(minVoltsInput(step));
       if (limits.length) children.push(element("h3", { text: "Limits" }), element("div", { class: "form two" }, ...limits));
       if (!info.still) {
         children.push(...actionsPane(step));

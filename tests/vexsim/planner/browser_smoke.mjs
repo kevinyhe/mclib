@@ -191,6 +191,15 @@ try {
   assert.doesNotMatch(result, /limit 2\.5 in|[✓✗]|Passed|Failed/);
   pass("The step pane shows what the step did, with no pass or fail");
 
+  await page.locator("#step-list li").nth(1).click();
+  const minVolts = page.locator("#pane-step .auto-row", { hasText: "Min voltage" });
+  assert.equal(await minVolts.locator("input[type=checkbox]").isChecked(), true);
+  await minVolts.locator("input[type=checkbox]").uncheck();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[1].min_volts === 1.5);
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[1].min_volts === null);
+  pass("A turn has Min voltage on Automatic; unticking it sets mclib's 1.5 V and Ctrl+Z puts Automatic back");
+
   await page.locator("#timeline").evaluate((input) => { input.value = String(Number(input.max) / 2); input.dispatchEvent(new Event("input")); });
   const clock = await page.locator("#clock").innerText();
   assert.match(clock, /^\d+\.\d\d \/ \d+\.\d\d s$/);

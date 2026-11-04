@@ -342,6 +342,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .point-body { padding: 4px 10px 10px; display: grid; gap: 9px; border-top: 1px solid var(--panel-2); }
 .point-body .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .auto-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
+.form.two > .auto-row { grid-column: 1 / -1; }
 .section-box { border-left: 3px solid var(--border-strong); padding-left: 9px; display: grid; gap: 8px; }
 .section-box.reverse { border-left-color: var(--warn); }
 .telemetry-group { margin-bottom: 12px; }

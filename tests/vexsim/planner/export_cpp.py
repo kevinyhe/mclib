@@ -114,27 +114,33 @@ def exit_flag(step):
 
 
 def motion_call(step):
+    """The mclib call for a drive step. A Min voltage left on automatic is
+    left out, so the call uses mclib's default."""
     kind, t, v = step["type"], step["timeout_ms"], step["volts"]
     direction = step.get("direction", 1)
     stop = exit_flag(step)
+    floor = "" if step["min_volts"] is None else f", {volts(step['min_volts'])}"
+    overturned_floor = "" if step["min_volts"] is None else f", true{floor}"
     if kind == "drive":
-        return f"driveTo({inches(step['distance'])}, {millis(t)}, {stop}, {volts(v)})"
+        return f"driveTo({inches(step['distance'])}, {millis(t)}, {stop}, {volts(v)}{floor})"
     if kind == "turn":
-        return f"turnToAngle({degrees(step['heading'])}, {millis(t)}, {stop}, {volts(v)})"
+        return f"turnToAngle({degrees(step['heading'])}, {millis(t)}, {stop}, {volts(v)}{floor})"
     if kind == "point":
-        return f"moveToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)}, {stop}, {volts(v)})"
+        return (f"moveToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)}, {stop}, "
+                f"{volts(v)}{overturned_floor})")
     if kind == "turn_to_point":
-        return f"turnToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)})"
+        return f"turnToPoint({inches(step['x'])}, {inches(step['y'])}, {direction}, {millis(t)}{floor})"
     if kind == "boomerang":
         return (f"boomerang({inches(step['x'])}, {inches(step['y'])}, {direction}, {degrees(step['heading'])}, "
-                f"{number(step['lead'])}, {millis(t)}, {stop}, {volts(v)})")
+                f"{number(step['lead'])}, {millis(t)}, {stop}, {volts(v)}{overturned_floor})")
     if kind == "arc":
-        return f"curveCircle({degrees(step['heading'])}, {inches(step['radius'])}, {millis(t)}, {stop}, {volts(v)})"
+        return (f"curveCircle({degrees(step['heading'])}, {inches(step['radius'])}, {millis(t)}, {stop}, "
+                f"{volts(v)}{floor})")
     if kind == "reverse_arc":
         return (f"curveCircleReverse({degrees(step['heading'])}, {inches(step['radius'])}, {millis(t)}, "
-                f"{stop}, {volts(v)})")
+                f"{stop}, {volts(v)}{floor})")
     if kind == "swing":
-        return f"swing({degrees(step['heading'])}, {direction}, {millis(t)}, {stop}, {volts(v)})"
+        return f"swing({degrees(step['heading'])}, {direction}, {millis(t)}, {stop}, {volts(v)}{floor})"
     raise ValueError(f"no motion call for {kind}")
 
 

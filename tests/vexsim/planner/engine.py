@@ -41,6 +41,8 @@ EXTRA_SOURCES = [PATH_BRIDGE, CASCADE_BRIDGE, ROOT / "src/mclib/command/subsyste
 STATE_VALUES = 8
 MAX_STATES = 40000
 MOTION_RESULTS = ("Reached", "TimedOut", "Cancelled", "Disabled", "InvalidValue", "NoDrive")
+#: The min_speed that makes an mclib motion use its own min_output floor
+MCLIB_DEFAULT_MIN_SPEED = -1.0
 ACTIONS = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4, turn_to_point=5, point=6, boomerang=7,
                wall_reset=8)
 #: A step that ends further than this from its target, or further off its
@@ -433,9 +435,10 @@ def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan
         bridge.sim.dynamics.locked = True
     first = step.get("distance", step.get("x", step.get("heading", 0)))
     second = step.get("y", step.get("radius", 0))
+    min_volts = step.get("min_volts")
     return bridge.run(ACTIONS[kind], a=first, b=second, heading=step.get("heading", 0),
                       timeout=timeout_ms, direction=step.get("direction", 1), stop=not step["chain"],
-                      volts=step["volts"],
+                      volts=step["volts"], min_volts=MCLIB_DEFAULT_MIN_SPEED if min_volts is None else min_volts,
                       current=step.get("current_ma", 2500), lead=step.get("lead", .5))
 
 
@@ -605,7 +608,7 @@ def step_readings(step, target, timeout_ms, duration_ms, actual, estimate_at_exi
     finished = duration_ms < timeout_ms - .5
     readings.append(reading("time", "Time",
                             f"Finished in {seconds:.2f} s of its {limit_s:.2f} s time limit." if finished else
-                            f"Used the whole {limit_s:.2f} s time limit without finishing.",
+                            f"The {limit_s:.2f} s time limit ended the motion.",
                             measured=round(seconds, 3), unit="s"))
     position_error = heading_error = None
     if target["x"] is not None:
@@ -618,6 +621,27 @@ def step_readings(step, target, timeout_ms, duration_ms, actual, estimate_at_exi
         readings.append(reading("heading", "Heading", f"{ended} {heading_error:.1f}° off the target heading.",
                                 measured=round(heading_error, 3), unit="°"))
     return readings, position_error, heading_error
+
+
+def stopping_readings(hold_frames, last_step):
+    """How long and how far the robot slid once a stopping step's motion
+    ended, when it was still moving then. The slide ends when the robot is
+    still or starts back the other way, as the motors' hold pulls it back."""
+    first = hold_frames[0]
+    if first["speed_ips"] < STILL_IPS:
+        return []
+    ended = f"The motion ended with the robot at {first['speed_ips']:.1f} in/s."
+    heading_on = math.copysign(1, first["forward_speed_ips"])
+    still = next((frame for frame in hold_frames
+                  if frame["speed_ips"] < STILL_IPS or frame["forward_speed_ips"] * heading_on <= 0), None)
+    if still is None:
+        last = hold_frames[-1]
+        after = "the run ended" if last_step else "the next step started"
+        return [reading("stopping", "Stopping", f"{ended} It was still moving at {last['speed_ips']:.1f} in/s "
+                                                f"{last['t'] - first['t']:.2f} s later, when {after}.")]
+    slid = math.dist((first["true_x"], first["true_y"]), (still["true_x"], still["true_y"]))
+    return [reading("stopping", "Stopping", f"{ended} It braked to a stop {still['t'] - first['t']:.2f} s and "
+                                            f"{slid:.1f} in later.", measured=round(slid, 2), unit="in")]
 
 
 def fell_short(step, position_error, heading_error, finished):
@@ -665,18 +689,23 @@ def chained_path_hint(position_error, ramsete_b):
             f"{position_error:.1f} in from where it was planned to. {staying_on_the_plan(ramsete_b)}")
 
 
-def advice(kind, position_error, odometry_error, finished, chained_path, ramsete_b):
+def advice(step, position_error, odometry_error, finished, chained_path, ramsete_b):
+    kind = step["type"]
     notes = []
     if odometry_error is not None and odometry_error > ODOMETRY_DRIFT_IN:
         notes.append(f"Odometry and the simulated robot were {odometry_error:.1f} in apart when the step ended. "
                      "Wheel slip fools drive encoders; check the tracking setup before changing gains.")
-    if not finished:
-        notes.append("The step ran out of time. Look at the voltage and heading graphs for oscillation or "
-                     "too little output, or raise the time limit.")
+    if not finished and step.get("min_volts") and not step["chain"]:
+        notes.append(f"The {step['min_volts']:g} V Min voltage kept the drive from slowing enough to settle, so "
+                     "it rocked across the target until the time limit. Lower it, or leave it on Automatic.")
+    elif not finished:
+        short = f" {position_error:.1f} in from its target" if position_error is not None else ""
+        notes.append(f"The time limit ended the motion{short}. If the step should reach its target, raise the "
+                     "time limit, or look at the voltage and heading graphs for oscillation or too little output.")
     missed = position_error is not None and position_error > MISS_HINT_IN.get(kind, DEFAULT_MISS_HINT_IN)
     if missed and chained_path:
         notes.append(chained_path_hint(position_error, ramsete_b))
-    elif missed and odometry_error is not None and odometry_error <= ODOMETRY_DRIFT_IN:
+    elif missed and finished and odometry_error is not None and odometry_error <= ODOMETRY_DRIFT_IN:
         notes.append("Odometry agreed with the real position, so the controller itself stopped short. "
                      "Check its exit conditions and gains.")
     return notes
@@ -831,6 +860,7 @@ def _execute(raw, destination, vexsim, cache, progress):
             motion_result = None
         late_actions = rig.finish_actions() if rig else 0
         returned = bridge.sim.t
+        mechanism_at_return = mechanism_reading(world, step["type"])[0] if step["type"] in MECHANISMS else None
         truth_at_exit, estimate_at_exit = bridge.truth(), bridge.pose()
         coordinate_reset = step["type"] == "wall_reset" and bool(motion_result)
         recorder.reset_frame = coordinate_reset
@@ -844,8 +874,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         duration_ms = (returned - started) * 1000
         step_breaks = []
         if step["type"] in MECHANISMS:
-            pose_text, _ = mechanism_reading(world, step["type"])
-            readings = mechanism_readings(step, timeout_ms, duration_ms, motion_result, pose_text)
+            readings = mechanism_readings(step, timeout_ms, duration_ms, motion_result, mechanism_at_return)
             position_error = heading_error = None
         elif step["type"] == "match_load":
             readings, step_breaks = match_load_report(step, started, configuration_error)
@@ -858,6 +887,9 @@ def _execute(raw, destination, vexsim, cache, progress):
             readings, position_error, heading_error = step_readings(
                 step, target, timeout_ms, duration_ms, actual, estimate_at_exit, bridge.stopped(), motion_result,
                 configuration_error)
+            if not step["chain"]:
+                hold = [frame for frame in recorder.trace if frame["step"] == index and frame["phase"] == "hold"]
+                readings += stopping_readings(hold, index == total - 1)
         info = []
         if rig and index == 0:
             legal_lines, broken_lines = start_rules(rules.report())
@@ -880,7 +912,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         elif hit_hint:
             notes = [hit_hint]
         else:
-            notes = advice(step["type"], position_error, odometry_error, finished, chained_path,
+            notes = advice(step, position_error, odometry_error, finished, chained_path,
                            project["path_defaults"]["ramsete_b"])
         info += tips.rock_lines()
         if odometry_error is not None:

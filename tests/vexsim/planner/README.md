@@ -84,6 +84,25 @@ the motors to make them stall.
 `pros::delay()`. The drive stays as the last step left it. Use it to wait
 for the Driver Controlled Period before a Match Load.
 
+## Time limit, Max voltage and Min voltage
+
+Every drive step has these under **Limits**:
+
+- **Time limit** ends the motion when it runs out, even short of the
+  target, and the next step starts. The robot is often still moving then:
+  a 30 in drive cut off at 0.30 s on the six-motor drive says "The motion
+  ended with the robot at 50.3 in/s. It braked to a stop 0.21 s and 5.4 in
+  later."
+- **Max voltage** caps the drive voltage. 12 V is full power.
+- **Min voltage** is the motion's `min_speed`, the least voltage the drive
+  gets so it does not stall short of the target. Automatic leaves it to
+  mclib, which uses 1.5 V and only while a step keeps moving into the next
+  one, except in `turnToPoint()`, which always uses it. A number applies it
+  for the whole motion, except in `turnToAngle()` and `swing()`, which only
+  use a floor while they keep moving. 0 turns it off. On a step that stops,
+  too high a floor keeps the robot from settling: with 6 V a 24 in drive
+  rocked about 3 in either way across its target until its time limit.
+
 ## Keep moving into the next step
 
 By default every step stops and settles, then the planner waits 0.3 s
@@ -352,8 +371,9 @@ Steps are not graded. Each step that stops is measured after a 0.3 s pause:
 | --- | --- |
 | Position | "Ended 3.10 in from the target." |
 | Heading | "Ended 1.2° off the target heading." |
-| Time | "Finished in 1.42 s of its 2.50 s time limit." or "Used the whole 2.50 s time limit without finishing." |
+| Time | "Finished in 1.42 s of its 2.50 s time limit." or "The 2.50 s time limit ended the motion." |
 | Stopped | "The drive was stopped at the end." |
+| Stopping | "The motion ended with the robot at 4.2 in/s. It braked to a stop 0.05 s and 0.1 in later." |
 
 A step that misses by more than 2.5 in (1.5 in for drive to a pose, 5.5 in
 for arcs), ends more than 5° off its heading, or runs out of time gets a

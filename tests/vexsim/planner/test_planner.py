@@ -200,6 +200,15 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not a path planner project"):
             validate_project(dict(format="something-else"))
 
+    def test_min_voltage_is_automatic_unless_set_and_never_above_the_max(self):
+        project = validate_project(dict(steps=[dict(type="drive", distance=12), dict(type="turn", heading=90, min_volts=2)]))
+        self.assertEqual([step["min_volts"] for step in project["steps"]], [None, 2])
+        with self.assertRaisesRegex(ValueError, r"Step 1 \(Drive straight\): Min voltage \(7 V\) must not be more than "
+                                                r"Max voltage \(6 V\)"):
+            validate_project(dict(steps=[dict(type="drive", distance=12, volts=6, min_volts=7)]))
+        with self.assertRaisesRegex(ValueError, "fields the planner does not know: min_volts"):
+            validate_project(dict(field="override", steps=[dict(type="lift", lift_preset="top", min_volts=2)]))
+
     def test_automatic_path_time_limit_is_planned_time_plus_settle(self):
         step = validate_project(dict(steps=[path_step([(0, 0)])]))["steps"][0]
         self.assertIsNone(step["timeout_ms"])
@@ -271,6 +280,21 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(code.count(", 12_V, false)"), 1)
         self.assertEqual(code.count(", 12_V, true)"), 1)
         self.assertEqual(code.count("Keeps moving into the next step"), 2)
+        self.compile(code)
+
+    def test_export_passes_a_set_min_voltage_and_leaves_automatic_to_mclib(self):
+        project = validate_project(dict(steps=[
+            dict(type="drive", distance=12), dict(type="drive", distance=6, min_volts=2.5),
+            dict(type="point", x=10, y=10, min_volts=3), dict(type="turn_to_point", x=0, y=40, min_volts=4),
+            dict(type="boomerang", x=-10, y=20, heading=0, min_volts=1),
+            dict(type="swing", heading=45, chain=True, min_volts=2), dict(type="turn", heading=0)]))
+        code = export(project)
+        for text in ("driveTo(12_in, 4000_ms, true, 12_V);", "driveTo(6_in, 4000_ms, true, 12_V, 2.5_V);",
+                     "moveToPoint(10_in, 10_in, 1, 4000_ms, true, 12_V, true, 3_V);",
+                     "turnToPoint(0_in, 40_in, 1, 4000_ms, 4_V);",
+                     "boomerang(-10_in, 20_in, 1, 0_deg, 0.5, 4000_ms, true, 12_V, true, 1_V);",
+                     "swing(45_deg, 1, 4000_ms, false, 12_V, 2_V);", "turnToAngle(0_deg, 4000_ms, true, 12_V);"):
+            self.assertIn(text, code)
         self.compile(code)
 
     def test_export_of_the_lift_claw_match_load_and_actions_compiles(self):
@@ -542,9 +566,15 @@ class EngineTests(unittest.TestCase):
         result = strict_json((output / "result.json").read_text())
         short, turn = result["steps"]
         messages = [item["message"] for item in short["readings"]]
-        self.assertIn("Used the whole 0.30 s time limit without finishing.", messages)
+        self.assertIn("The 0.30 s time limit ended the motion.", messages)
         self.assertTrue(any(re.fullmatch(r"Ended \d+\.\d\d in from the target\.", message) for message in messages))
-        self.assertTrue(any(note.startswith("The step ran out of time.") for note in short["notes"]))
+        slide = next(item for item in short["readings"] if item["id"] == "stopping")
+        self.assertRegex(slide["message"], r"^The motion ended with the robot at \d\d\.\d in/s\. It braked to a stop "
+                                           r"0\.\d\d s and \d+\.\d in later\.$")
+        self.assertGreater(slide["measured"], 2)
+        self.assertEqual(len(short["notes"]), 1, short["notes"])
+        self.assertRegex(short["notes"][0], r"^The time limit ended the motion \d+\.\d in from its target\. If the step "
+                                            r"should reach its target, raise the time limit")
         self.assertTrue(turn["executed"])
         self.assertEqual(result["summary"], dict(steps=2, ran_steps=2, skipped_steps=0, broke_rule_in_step=None,
                                                  simulated_s=result["summary"]["simulated_s"]))
@@ -738,6 +768,35 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(len(turned), 1, turned)
                 self.assertTrue(turned[0].startswith(f"Turned the {toggle} Toggle: {color} now faces into the field "
                                                      "(yellow before)."), turned)
+
+    def test_14_min_voltage_holds_up_a_chained_turn_and_too_much_keeps_a_drive_from_settling(self):
+        project = dict(steps=[dict(type="turn", heading=90, chain=True, min_volts=4),
+                              dict(type="drive", distance=24, timeout_ms=2000, min_volts=6)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        turn, drive = result["steps"]
+        turning = [frame for frame in result["trace"] if frame["step"] == 0 and frame["phase"] == "motion"
+                   and frame["t"] - turn["start_time_s"] > 0.25]
+        self.assertGreater(len(turning), 5)
+        self.assertGreaterEqual(min(abs(frame["left_volts"]) for frame in turning), 4 - 1e-9)
+        self.assertIn("The 2.00 s time limit ended the motion.", [item["message"] for item in drive["readings"]])
+        self.assertTrue(drive["notes"][0].startswith("The 6 V Min voltage kept the drive from slowing enough to "
+                                                     "settle"), drive["notes"])
+
+    def test_15_a_lift_cut_off_by_its_time_limit_reports_the_claw_where_it_was_then(self):
+        project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
+                       start=dict(x=0, y=-50, heading=0), steps=[dict(type="lift", lift_preset="top", timeout_ms=200)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        row = result["steps"][0]
+        found = re.fullmatch(r"The lift had not reached Top: .* when its 0\.20 s time limit ran out: the claw is "
+                             r"(\d+\.\d\d) in up\.", row["readings"][0]["message"])
+        self.assertIsNotNone(found, row["readings"])
+        at_limit = next(frame for frame in result["trace"] if frame["t"] >= row["return_time_s"])
+        self.assertAlmostEqual(float(found.group(1)), at_limit["lift_height_in"], delta=0.05)
+        self.assertLess(at_limit["lift_height_in"], result["trace"][-1]["lift_height_in"])
 
     def test_13_a_drive_over_55_w_breaks_r11_on_the_first_step_and_stops_the_run(self):
         project = dict(field="override", preload="none", robot=dict(preset="six_motor_450"),
