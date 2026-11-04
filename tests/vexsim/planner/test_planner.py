@@ -145,6 +145,20 @@ class ProjectTests(unittest.TestCase):
                 self.assertEqual(str(caught.exception), message)
                 self.assertEqual(caught.exception.step, 0)
 
+    def test_a_wait_takes_exactly_its_time(self):
+        step = validate_project(dict(steps=[dict(type="wait", wait_ms=15000)]))["steps"][0]
+        self.assertEqual((step["wait_ms"], step["timeout_ms"]), (15000, 15000))
+        cases = [
+            (dict(type="wait", wait_ms=1500.5), "Step 1 (Wait): Wait must be a whole number"),
+            (dict(type="wait", wait_ms=5), "Step 1 (Wait): Wait must be between 10 and 120000 ms, not 5"),
+            (dict(type="wait", wait_ms=2000, timeout_ms=4000),
+             "Step 1 (Wait): a wait always takes its 2000 ms, so it has no time limit of its own. Remove timeout_ms"),
+        ]
+        for step, message in cases:
+            with self.subTest(message), self.assertRaises(ProjectError) as caught:
+                validate_project(dict(steps=[step]))
+            self.assertEqual(str(caught.exception), message)
+
     def test_wall_reset_must_be_last(self):
         with self.assertRaises(ProjectError) as caught:
             validate_project(dict(steps=[dict(type="wall_reset", x=0, y=63, heading=0), dict(type="turn", heading=0)]))
@@ -267,6 +281,7 @@ class ExportTests(unittest.TestCase):
                                                  dict(when="end", mechanism="claw", preset="closed")]),
             dict(type="lift", lift_preset="on_stack_on_neutral_goal"),
             dict(type="claw", claw_preset="closed"),
+            dict(type="wait", wait_ms=15000),
             dict(type="match_load", loader="red_right", match_load_pin="yellow"),
             dict(type="wall_reset", x=0, y=-63, heading=180,
                  actions=[dict(when="start", mechanism="lift", preset="top")])]))
@@ -286,6 +301,7 @@ class ExportTests(unittest.TestCase):
                      "static_cast<int>(cascade::LiftPreset::Down)}",
                      "{cascade::Action::When::End, 0, cascade::Mechanism::Claw, "
                      "static_cast<int>(cascade::ClawPreset::Closed)}",
+                     "  pros::delay(15000);\n",
                      "const bool result = wallReset("):
             self.assertIn(text, code)
         for gone in ("claw_motor", "toggle_arm", "ToggleArm"):
@@ -303,7 +319,7 @@ class ExportTests(unittest.TestCase):
                                     for name, height in LIFT_HEIGHTS_IN.items()})
 
     def test_override_examples_export_and_compile(self):
-        for name in ("override_autonomous", "override_stack_to_goal", "override_toggle_bars"):
+        for name in ("override_autonomous", "override_stack_to_goal", "override_toggle_bars", "override_match_load"):
             with self.subTest(name):
                 code = export(validate_project(example(name)))
                 self.assertIn("static pros::Task cascade_task", code)
@@ -616,6 +632,28 @@ class EngineTests(unittest.TestCase):
         self.assertIn("Match Loads may only be loaded in the Driver Controlled Period (SG11a).", row["reason"])
         self.assertIn("The Drive Team stood a Cup under the red left Loader with a red/yellow Pin in it, yellow half up.",
                       [check["message"] for check in row["checks"]])
+
+    def test_10b_a_wait_past_15_s_lets_a_match_load_score_in_driver_control(self):
+        done, output = self.run_routine(example("override_match_load"))
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        self.assertEqual(result["summary"]["failed_steps"], 0)
+        self.assertGreater(result["summary"]["simulated_s"], 20.0)
+        wait, match_load = result["steps"][:2]
+        self.assertIn("Waited 15.00 s, to 15.00 s into the match.", [check["message"] for check in wait["checks"]])
+        self.assertAlmostEqual(match_load["start_time_s"], 15.0, places=3)
+        self.assertIn("Loaded 15.00 s into the match, after the 15 s autonomous period (SG11a).",
+                      [check["message"] for check in match_load["checks"]])
+        info = [line for row in result["steps"] for line in row["info"]]
+        grips = [line for line in info if line.startswith("Gripped")]
+        drops = [line for line in info if line.startswith("Dropped")]
+        self.assertEqual(len(grips), 1, grips)
+        self.assertEqual(len(drops), 1, drops)
+        self.assertRegex(grips[0], r"^Gripped a Cup with a red/yellow Pin at \(59, -6[78]\)")
+        self.assertRegex(drops[0], r"^Dropped a Cup with a red/yellow Pin at \(4[67], 2[34]\).*: the claw opened\.")
+        self.assertEqual((result["autonomous"]["red"], result["autonomous"]["blue"]), (0, 0))
+        self.assertEqual(result["score"]["red"], dict(alliance_pins=1, yellow_pins=0, total=5))
+        self.assertEqual(result["score"]["blue"]["total"], 0)
 
     def test_11_a_step_stopped_by_a_goal_names_the_goal_not_the_controller(self):
         project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),

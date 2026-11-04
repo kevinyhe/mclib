@@ -554,8 +554,10 @@ def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading):
 
 
 def score_match_load(step, started_s, error):
-    """<SG11a>: Match Loads only in the Driver Controlled Period."""
-    if started_s < AUTONOMOUS_S:
+    """<SG11a>: Match Loads only in the Driver Controlled Period. The
+    simulator keeps time in 1 ms steps, so the start is compared in whole
+    milliseconds, clear of the sum's rounding."""
+    if round(started_s * 1000) < round(AUTONOMOUS_S * 1000):
         rules = check("rules", "Rules", False,
                       f"Match Loads may only be loaded in the Driver Controlled Period (SG11a). This step starts "
                       f"{started_s:.2f} s into the match, inside the {AUTONOMOUS_S:g} s autonomous period.",
@@ -825,6 +827,9 @@ def _execute(raw, destination, vexsim, cache, progress):
         try:
             if step["type"] == "match_load":
                 motion_result = load_match(world, step)
+            elif step["type"] == "wait":
+                bridge.advance_idle(step["wait_ms"])
+                motion_result = None
             else:
                 motion_result = invoke(lib, bridge, rig, project, step, designed_start, feedforward, timeout_ms,
                                        plans[index] if plans else None)
@@ -838,7 +843,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         recorder.reset_frame = coordinate_reset
         recorder.record(capture())
         handoff_speed_ips = recorder.trace[-1]["speed_ips"]
-        if not step["chain"]:
+        if not step["chain"] and step["type"] != "wait":
             recorder.phase = "hold"
             bridge.advance_idle(LIMITS["hold_ms"])
             recorder.record(capture())
@@ -850,6 +855,11 @@ def _execute(raw, destination, vexsim, cache, progress):
             position_error = heading_error = None
         elif step["type"] == "match_load":
             checks = score_match_load(step, started, configuration_error)
+            position_error = heading_error = None
+        elif step["type"] == "wait":
+            checks = [check("time", "Time", True, f"Waited {duration_ms / 1000:.2f} s, to {returned:.2f} s into "
+                                                  "the match.", measured=round(duration_ms / 1000, 3),
+                            limit=timeout_ms / 1000, unit="s")]
             position_error = heading_error = None
         else:
             checks, position_error, heading_error = score_step(

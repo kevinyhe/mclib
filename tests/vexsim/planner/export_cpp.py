@@ -243,6 +243,8 @@ def export(project, settings=None, plans=None):
             lines.append(f"  {claw_call(step)};")
         elif step["type"] == "match_load":
             lines.append(match_load_comment(step))
+        elif step["type"] == "wait":
+            lines.append(f"  pros::delay({step['wait_ms']});")
         elif step["actions"]:
             lines += with_actions(step, motion_call(step), stop)
         else:

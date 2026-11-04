@@ -1,0 +1,22 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: take a Match Load and score it",
+  "description": "Waits 15 s, to the start of the Driver Controlled Period, when Match Loads are first allowed (SG11a). The Drive Team stands a Cup with a red/yellow Pin in it, red half up, under the red right Loader. The robot drives the front of its frame onto the wall, closes the claw on the Cup's rim, backs 60 in along the right wall with the lift rising, and sets the stack on the Pin in the neutral bottom Goal. The red half scores 5 points for red. The run ends 24.0 s into the match.",
+  "field": "override",
+  "preload": "none",
+  "robot": {"preset": "four_motor_450"},
+  "start": {"x": 58.77, "y": -54.7, "heading": 180},
+  "steps": [
+    {"type": "wait", "note": "wait for the Driver Controlled Period", "wait_ms": 15000},
+    {"type": "match_load", "loader": "red_right", "match_load_pin": "red_red_up"},
+    {"type": "drive", "note": "the front of the frame onto the wall, the claw under the Loader", "distance": 8, "volts": 6, "timeout_ms": 1500},
+    {"type": "claw", "note": "close on the Cup's top rim", "claw_preset": "closed"},
+    {"type": "drive", "note": "back out along the wall, past the red bottom Goal", "distance": -60, "actions": [{"when": "distance", "value": 3, "mechanism": "lift", "preset": "over_neutral_goal"}]},
+    {"type": "turn_to_point", "x": 47.09, "y": 23.55},
+    {"type": "drive", "note": "the bite onto the Goal: the stack is over its Pin", "distance": 23.1},
+    {"type": "lift", "note": "set the Cup's rim on the Goal's Pin", "lift_preset": "on_neutral_goal"},
+    {"type": "claw", "claw_preset": "open"},
+    {"type": "drive", "note": "back away, then lower the lift", "distance": -8, "actions": [{"when": "time", "value": 300, "mechanism": "lift", "preset": "down"}]}
+  ]
+}

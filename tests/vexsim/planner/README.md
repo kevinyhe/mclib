@@ -79,6 +79,10 @@ or its round heading knob on the field, or type the values. A wall reset
 must be the last step. On the open floor there are no walls, so it locks
 the motors to make them stall.
 
+**Wait** does nothing for its time, 10 ms to 120 s, and exports as
+`pros::delay()`. The drive stays as the last step left it. Use it to wait
+for the Driver Controlled Period before a Match Load.
+
 ## Keep moving into the next step
 
 By default every step stops and settles, then the planner waits 0.3 s
@@ -230,7 +234,7 @@ stops it. The rules:
 
 - Match Loads go through the alliance's own Loaders, and only in the Driver
   Controlled Period (<SG11a>). The step fails if it starts in the first
-  15 s.
+  15 s. Put a 15000 ms **Wait** before it.
 - In a Robot Skills Match they can go in at any time, through red's
   Loaders (<RSC2d>).
 - A Drive Team Member may push down on the Loader's handle so the Loader
@@ -408,6 +412,7 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.5 s, with claw and lift actions during a drive |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the turn and the drive away; 0 points, because the left Toggle is still yellow |
 | [override_toggle_bars.json](examples/override_toggle_bars.json) | turn to face red's wall and hit the left Toggle twice with the bars: blue, then red; 20 points |
+| [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 24.0 s |
 
 ## Files
 

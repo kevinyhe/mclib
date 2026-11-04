@@ -214,7 +214,7 @@
 
   function newStep(type, after) {
     const info = state.config.step_types[type];
-    const timeout = "fixed_ms" in info ? info.fixed_ms : 4000;
+    const timeout = "fixed_ms" in info ? info.fixed_ms : info.timed_by ? info.defaults[info.timed_by] : 4000;
     const step = { type, note: "", timeout_ms: timeout, volts: type === "wall_reset" ? 6 : 12, chain: false, actions: [], ...clone(info.defaults) };
     const pose = poses()[after]?.end ?? state.project.start;
     const ahead = along(pose.heading, 24);
@@ -603,6 +603,7 @@
       case "lift": return `to ${state.config.fields.lift_preset.choices[step.lift_preset]}`;
       case "claw": return state.config.fields.claw_preset.choices[step.claw_preset];
       case "match_load": return `${state.config.fields.loader.choices[step.loader]}: ${state.config.fields.match_load_pin.choices[step.match_load_pin]}`;
+      case "wait": return `${fmt(step.wait_ms / 1000, 2)} s`;
       default: return "";
     }
   }
@@ -829,7 +830,10 @@
         (value) => edit(() => { step[key] = key === "direction" ? Number(value) : value; }));
     }
     return numberInput({ label: info.label, unit: info.unit, value: step[key], min: info.low, max: info.high, step: info.step,
-      help: info.help, onCommit: (value) => edit(() => { step[key] = key === "timeout_ms" ? Math.round(value) : value; }) });
+      help: info.help, onCommit: (value) => edit(() => {
+        step[key] = ["timeout_ms", "wait_ms"].includes(key) ? Math.round(value) : value;
+        if (stepInfo(step).timed_by === key) step.timeout_ms = step[key];
+      }) });
   }
 
   function selectInput(label, value, choices, help, onChange) {
@@ -940,7 +944,7 @@
     else {
       const fields = info.fields.map((key) => fieldInput(step, key));
       children.push(element("div", { class: "form two" }, ...fields));
-      const limits = "fixed_ms" in info ? [] : [fieldInput(step, "timeout_ms")];
+      const limits = "fixed_ms" in info || info.timed_by ? [] : [fieldInput(step, "timeout_ms")];
       if (!info.still && step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
       if (limits.length) children.push(element("h3", { text: "Limits" }), element("div", { class: "form two" }, ...limits));
       if (!info.still) {

@@ -57,6 +57,8 @@ FIELDS = {
                       "Larger swings wider to arrive straighter."),
     "current_ma": dict(label="Stall current", unit="mA", low=0, high=10000, step=50,
                        help="Motor current that counts as pushing against the wall."),
+    "wait_ms": dict(label="Wait", unit="ms", low=10, high=120000, step=10,
+                    help="How long to wait. The step always takes exactly this long."),
     "timeout_ms": dict(label="Time limit", unit="ms", low=50, high=20000, step=50,
                        help="The step fails if it has not finished by then."),
     "volts": dict(label="Max voltage", unit="V", low=.1, high=12, step=.1,
@@ -125,6 +127,10 @@ STEP_TYPES = {
                              "To pick up a stack, open the claw with the lift Down and drive the bite onto a Cup "
                              "with a Pin in it until the Cup stops against the plate behind the jaws, then close.",
                  fields=["claw_preset"], defaults=dict(claw_preset="closed")),
+    "wait": dict(label="Wait", call="pros::delay()", still=True, timed_by="wait_ms",
+                 description="Wait with the drive as the last step left it, then go on. Use it to wait for the "
+                             "Driver Controlled Period, 15 s into the match, before a Match Load.",
+                 fields=["wait_ms"], defaults=dict(wait_ms=1000)),
     "match_load": dict(label="Match load", call="Drive Team", still=True, fixed_ms=0,
                        description="The Drive Team lifts a red Loader by its handle and stands a Cup with a Pin in "
                                    "it on the floor under it, through the Loader's back. The Loader stays up. The "
@@ -163,6 +169,7 @@ CHAIN = dict(
         "lift": "The drive is not moving during a lift step.",
         "claw": "The drive is not moving during a claw step.",
         "match_load": "The drive is not moving during a Match Load.",
+        "wait": "The drive is not moving during a wait.",
     },
     last_step="The last step has to stop: there is no next step to keep moving into.",
 )
@@ -264,7 +271,7 @@ def _field(step, key, where):
             raise ValueError(f"{where}: {info['label']} must be one of: {', '.join(info['choices'])}")
         return value
     _number(value, info["low"], info["high"], f"{where}: {info['label']}", info["unit"],
-            integer=key == "timeout_ms")
+            integer=key in ("timeout_ms", "wait_ms"))
     if key == "radius" and abs(value) < 1:
         raise ValueError(f"{where}: Radius must be at least 1 in either way, not {value:g}")
     if key == "lead" and value >= 1:
@@ -427,12 +434,18 @@ def _validate_step(index, value, count, field):
             raise ValueError(f"{where}: this step always takes {info['fixed_ms']} ms, so it has no time limit. "
                              "Remove timeout_ms")
         step["timeout_ms"] = info["fixed_ms"]
+    if "timed_by" in info:
+        wait_ms = _field(step, info["timed_by"], where)
+        if value.get("timeout_ms", wait_ms) != wait_ms:
+            raise ValueError(f"{where}: a wait always takes its {wait_ms:g} ms, so it has no time limit of its "
+                             "own. Remove timeout_ms")
+        step["timeout_ms"] = wait_ms
     if kind == "path":
         _validate_path(value, step, where)
     else:
         for key in info["fields"]:
             _field(step, key, where)
-        if "fixed_ms" not in info:
+        if "fixed_ms" not in info and "timed_by" not in info:
             _field(step, "timeout_ms", where)
     _field(step, "volts", where)
     if kind == "turn_to_point" and step["volts"] != 12:

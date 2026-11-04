@@ -115,6 +115,7 @@ function stepEndPose(step, pose, trackWidth) {
     case "lift":
     case "claw":
     case "match_load":
+    case "wait":
       return { ...pose };
     case "turn_to_point":
       return { x: pose.x, y: pose.y, heading: wrapDegrees(bearing(pose, step) + (step.direction === -1 ? 180 : 0)) };

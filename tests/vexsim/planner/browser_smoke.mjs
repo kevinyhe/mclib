@@ -1,6 +1,7 @@
 // Drives the real planner page in headless Chromium against a running
 // server.py: place points, plan, run, play back, compare, export, mirror,
-// and run the Override example with its lift, claw, Toggle bars, score and 3D field.
+// run the Override example with its lift, claw, Toggle bars, score and 3D field, and
+// run the Match Load example past 15 s.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -369,6 +370,34 @@ try {
   assert.match(cascadeCode, /cascade::Action::When::AfterDistance/);
   await page.locator("#cpp-dialog .dialog-foot button.primary").click();
   pass("Export C++ writes the lift, claw and actions with the same helpers the simulator ran");
+
+  await page.locator("#example-picker").selectOption("override_match_load");
+  await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
+    /take a Match Load/.test(document.querySelector("#routine-name").value));
+  await page.locator("#step-list li").first().click();
+  assert.match(await page.locator("#step-list li").first().innerText(), /Wait[\s\S]*15\.00 s/);
+  const waitPane = await page.locator("#pane-step").innerText();
+  assert.match(waitPane, /Step 1 · Wait/);
+  assert.doesNotMatch(waitPane, /Time limit/);
+  await page.locator("#run").click();
+  await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
+  await page.waitForFunction(finished, null, { timeout: 600000 });
+  assert.match(await page.locator("#run-summary").innerText(), /10 of 10 steps passed/);
+  await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
+  const matchLoadScore = await page.locator("#score-panel").innerText();
+  assert.match(matchLoadScore, /Score at 2\d\.\d\d s/);
+  assert.match(matchLoadScore, /Red 5/);
+  assert.match(matchLoadScore, /Blue 0/);
+  assert.match(matchLoadScore, /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
+  await page.locator("#step-list li").nth(1).click();
+  assert.match(await page.locator("#pane-step").innerText(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
+  await shot("14-override-match-load");
+  await page.locator("#export-cpp").click();
+  await page.locator("#cpp-dialog[open]").waitFor();
+  assert.match(await page.locator("#cpp-code").inputValue(), /\n  pros::delay\(15000\);\n/);
+  await page.locator("#cpp-dialog .dialog-foot button.primary").click();
+  pass(`The Match Load example waits 15 s, loads at 15.00 s, runs to ${matchLoadScore.match(/Score at (\S+ s)/)[1]} ` +
+       "and scores red 5; Export C++ writes the wait as pros::delay(15000)");
 
   const offsite = requests.filter((value) => /^https?:/.test(value) && new URL(value).origin !== url.origin);
   assert.deepEqual(offsite, [], "The page must not load anything from the internet");
