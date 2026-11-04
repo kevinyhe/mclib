@@ -383,6 +383,7 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | --- | --- |
 | Click the field | add a point to the selected path, or place the selected step's target |
 | Click the selected path's line | insert a point |
+| Hover over a planned path | show the distance and time from the path's start to that point, out of the path's total, and the planned speed there |
 | Drag a point, handle or target | move it (Shift: 6 in grid and 15° headings) |
 | Drag empty space, scroll | pan, zoom |
 | Double-click a point | heading and handles back to automatic |

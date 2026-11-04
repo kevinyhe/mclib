@@ -8,10 +8,12 @@
   const HANDLE_RADIUS_PX = 6;
   const ANCHOR_RADIUS_PX = 8;
   const HEADING_KNOB_IN = 14;
+  const PATH_PROBE_REACH_PX = 9;
   const SPEED_STOPS = [[0, [44, 95, 214]], [0.35, [20, 163, 163]], [0.7, [230, 180, 0]], [1, [216, 67, 47]]];
   const SHORTCUTS = [
     ["Click the field", "Add a point to the end of the selected path, or place the selected step's target"],
     ["Click the selected path's line", "Insert a point there"],
+    ["Hover over a planned path", "Show how far along the path that point is, how long the robot takes to reach it, and its planned speed"],
     ["Drag a point, handle or target", "Move it. Hold Shift to snap to a 6 in grid and headings to 15°"],
     ["Drag empty space · scroll", "Pan · zoom"],
     ["Double-click a point", "Put its heading and curve handles back on automatic"],
@@ -61,6 +63,7 @@
     layers: { plan: true, truth: true, odometry: true, compare: true },
     drag: null,
     hover: null,
+    probe: null,
     tab: "step",
     mode: "top",
     viewer: { ready: false, error: "" },
@@ -1775,6 +1778,7 @@
       drawKnob(ctx, state.hover.at, "#2563eb", false, 6);
       drawLabel(ctx, state.hover.at, "+", "#2563eb");
     }
+    if (state.probe) drawKnob(ctx, { x: state.probe.state[3], y: state.probe.state[4] }, "#18202c", true, 4);
     renderScore();
     const plan = currentPlan();
     $("speed-legend").hidden = !plan || !pathSteps().length;
@@ -1983,6 +1987,45 @@
     return names[hit.kind];
   }
 
+  function pathProbeAt(field) {
+    if (!state.layers.plan) return null;
+    let best = null;
+    state.project.steps.forEach((step, index) => {
+      const plan = step.type === "path" ? planFor(index) : null;
+      if (!plan?.states?.length) return;
+      const near = planStateNearest(plan.states, field);
+      if (near.gap_in * state.view.scale > PATH_PROBE_REACH_PX) return;
+      if (!best || near.gap_in < best.gap_in) best = { ...near, index, step, plan };
+    });
+    return best;
+  }
+
+  function pathProbeLines(probe) {
+    const [, time, distance, , , , speed] = probe.state;
+    const title = `Step ${probe.index + 1} · ${stepInfo(probe.step).label}${probe.step.note ? `: ${probe.step.note}` : ""}`;
+    return [
+      title,
+      `${fmt(distance)} in of ${fmt(probe.plan.states.at(-1)[2])} in along the path`,
+      `${fmt(time, 2)} s of ${fmt(probe.plan.duration_s, 2)} s into the path`,
+      `Planned speed ${fmt(Math.abs(speed))} in/s${speed < -1e-9 ? ", backward" : ""}`,
+    ];
+  }
+
+  function renderPathProbe(at) {
+    const box = $("path-probe");
+    if (!state.probe) {
+      box.hidden = true;
+      return;
+    }
+    box.replaceChildren(...pathProbeLines(state.probe).map((text, i) => element("div", i ? { text } : { class: "path-probe-title", text })));
+    box.hidden = false;
+    const gap = 14;
+    const left = at.x + gap + box.offsetWidth > state.size.width ? at.x - gap - box.offsetWidth : at.x + gap;
+    const top = at.y + gap + box.offsetHeight > state.size.height ? at.y - gap - box.offsetHeight : at.y + gap;
+    box.style.left = `${Math.max(0, left)}px`;
+    box.style.top = `${Math.max(0, top)}px`;
+  }
+
   function applyDrag(drag, position, shift) {
     const project = state.project;
     const step = project.steps[state.selected];
@@ -2059,10 +2102,16 @@
       if (!drag) {
         const hit = hitTest(at.x, at.y);
         state.hover = hit ? { ...hit, hint: hoverHint(hit) } : null;
+        state.probe = pathProbeAt(field);
         canvas.className = hit ? (hit.kind === "curve" || hit.kind === "other-anchor" ? "pointer" : "grab") : "";
         renderHint();
+        renderPathProbe(at);
         drawField();
         return;
+      }
+      if (state.probe) {
+        state.probe = null;
+        renderPathProbe(at);
       }
       if (!drag.moved && Math.hypot(at.x - drag.start.x, at.y - drag.start.y) < 4) return;
       drag.moved = true;
@@ -2094,7 +2143,14 @@
     };
     canvas.addEventListener("pointerup", release);
     canvas.addEventListener("pointercancel", () => { state.drag = null; drawField(); });
-    canvas.addEventListener("pointerleave", () => { $("cursor-readout").textContent = ""; state.hover = null; renderHint(); });
+    canvas.addEventListener("pointerleave", () => {
+      $("cursor-readout").textContent = "";
+      state.hover = null;
+      state.probe = null;
+      $("path-probe").hidden = true;
+      renderHint();
+      drawField();
+    });
     canvas.addEventListener("dblclick", (event) => {
       const at = canvasPoint(event);
       const hit = hitTest(at.x, at.y);

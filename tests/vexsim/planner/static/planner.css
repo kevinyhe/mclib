@@ -238,7 +238,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 #field.grab { cursor: grab; }
 #field.grabbing { cursor: grabbing; }
 #field.pointer { cursor: pointer; }
-.field-hint, .cursor-readout, .speed-legend, .stale-badge, .overlay-status, .score-panel {
+.field-hint, .cursor-readout, .path-probe, .speed-legend, .stale-badge, .overlay-status, .score-panel {
   position: absolute;
   background: rgba(255, 255, 255, .92);
   border: 1px solid var(--border);
@@ -251,6 +251,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .field-hint:empty { display: none; }
 .cursor-readout { left: 10px; bottom: 10px; color: var(--muted); }
 .cursor-readout:empty { display: none; }
+.path-probe { line-height: 1.45; white-space: nowrap; color: var(--text); box-shadow: 0 2px 8px rgba(15, 23, 42, .12); }
+.path-probe-title { font-weight: 600; }
 .speed-legend { right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .speed-legend i { width: 90px; height: 6px; border-radius: 3px; background: linear-gradient(90deg, #2c5fd6, #14a3a3, #e6b400, #d8432f); }
 .score-panel { right: 10px; top: 10px; padding: 6px 10px; }

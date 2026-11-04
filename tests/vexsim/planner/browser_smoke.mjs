@@ -99,6 +99,28 @@ try {
   pass("The graph shows the planned speed before any run");
   await shot("02-planned");
 
+  const probeAt = async (x, y) => {
+    const at = await fieldPoint(x, y);
+    await page.mouse.move(at.x, at.y);
+    return (await page.locator("#path-probe").isVisible()) ? page.locator("#path-probe").innerText() : null;
+  };
+  const probeReading = (text) => {
+    const [, along, length] = text.match(/(\d+\.\d) in of (\d+\.\d) in along the path/);
+    const [, into, total] = text.match(/(\d+\.\d\d) s of (\d+\.\d\d) s into the path/);
+    return { along: Number(along), length: Number(length), into: Number(into), total: Number(total) };
+  };
+  const nearStart = await probeAt(24, -12);
+  const nearEnd = await probeAt(0, 24);
+  await shot("02b-path-probe");
+  assert.match(nearStart, /^Step 1 · /);
+  assert.match(nearStart, /Planned speed \d+\.\d in\/s/);
+  const early = probeReading(nearStart), late = probeReading(nearEnd);
+  assert(0 < early.along && early.along < late.along && late.along < late.length, JSON.stringify({ early, late }));
+  assert(0 < early.into && early.into < late.into && late.into < late.total, JSON.stringify({ early, late }));
+  assert.equal(late.total.toFixed(2), summary.match(/(\d+\.\d+) s/)[1]);
+  assert.equal(await probeAt(60, -60), null);
+  pass(`Hovering over the path shows how far and how long along it: ${nearStart.split("\n").slice(1, 3).join(" · ")}`);
+
   await dragField({ x: 0, y: 24 }, { x: 6, y: 30 });
   project = await draft();
   assert(near(project.steps[0].points[1].x, 6) && near(project.steps[0].points[1].y, 30), JSON.stringify(project.steps[0].points[1]));
