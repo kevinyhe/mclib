@@ -74,21 +74,20 @@ def action_literal(action):
     return f"{{{when}, {number(action['value'])}, {MECHANISM_ENUMS[action['mechanism']]}, {preset}}}"
 
 
-def with_actions(step, call, stop, result_type="MotionResult", reached="MotionResult::Reached"):
+def with_actions(step, call):
     """A motion call wrapped so the step's mechanism actions run during it."""
     literals = ", ".join(action_literal(action) for action in step["actions"])
+    amounts = {"distance": "in from the step start", "time": "ms"}
     when = "; ".join(f"{MECHANISMS[action['mechanism']]['label']} to "
                      f"{MECHANISMS[action['mechanism']]['presets'][action['preset']]} "
                      f"{ACTION_TIMES[action['when']].lower()}"
-                     + (f" {number(action['value'])} {'in' if action['when'] == 'distance' else 'ms'}"
-                        if action["when"] in ("distance", "time") else "")
+                     + (f" {number(action['value'])} {amounts[action['when']]}" if action["when"] in amounts else "")
                      for action in step["actions"])
-    check = (f"    if (result != {reached}) return;" if stop else "    (void)result;")
     return ["  {", f"    // During this motion: {when}.",
             "    const auto pose = mclib::control::robotState().pose();",
             f"    cascade_rig.beginActions({{{literals}}}, pose.x, pose.y, mclib::time::millis());",
-            f"    const {result_type} result = {call};",
-            "    cascade_rig.finishActions();", check, "  }"]
+            f"    {call};",
+            "    cascade_rig.finishActions();", "  }"]
 
 
 def lift_call(step):
@@ -149,7 +148,6 @@ def export(project, settings=None, plans=None):
     poses = designed_poses(project)
     has_path = any(step["type"] == "path" for step in project["steps"])
     cascade = uses_cascade(project)
-    stop = project["stop_on_failure"]
     name = project["name"].replace("\"", "'")
     lines = [f"// \"{name}\", exported from the mclib path planner.",
              f"// Simulated on: {PRESETS[robot['preset']]['label']}; {TRACKING[robot['tracking']].lower()}.",
@@ -166,7 +164,7 @@ def export(project, settings=None, plans=None):
                   "// the lift presets, the claw, and the actions run during a motion, as the",
                   "// simulator ran them.",
                   exported_helpers("cascade_helpers.hpp"), CASCADE_SETUP]
-    lines += ["using namespace mclib::units::literals;", "using mclib::control::MotionResult;", "",
+    lines += ["using namespace mclib::units::literals;", "",
               "void autonomous() {",
               "  mclib::control::DriveHardware* drive = mclib::control::requireDrive(\"autonomous\");",
               "  if (drive == nullptr) return;",
@@ -190,9 +188,6 @@ def export(project, settings=None, plans=None):
                   f"  follow.gains.zeta = {number(defaults['ramsete_zeta'])};",
                   f"  const path_planner::Limits limits{{{number(defaults['accel_ips2'])}, "
                   f"{number(defaults['cornering_ips2'])}, {number(feedforward['track_in'])}}};"]
-
-    def guarded(call):
-        return f"  if ({call} != MotionResult::Reached) return;" if stop else f"  {call};"
 
     for index, step in enumerate(project["steps"]):
         lines += ["", "  " + describe(step, index)]
@@ -224,21 +219,21 @@ def export(project, settings=None, plans=None):
                            f"{volts(step['volts'])}, {exit_flag(step)})")
             lines.append(f"    }}, limits{join});")
             if step["actions"]:
-                lines += ["  " + line for line in with_actions(step, follow_call, stop)]
+                lines += ["  " + line for line in with_actions(step, follow_call)]
             else:
-                lines.append("  " + guarded(follow_call))
+                lines.append(f"    {follow_call};")
             lines.append("  }")
         elif step["type"] == "wall_reset":
             call = (f"wallReset({inches(step['x'])}, {inches(step['y'])}, {degrees(step['heading'])}, "
                     f"{volts(step['volts'])}, {millis(step['timeout_ms'])}, "
                     f"{number(step['current_ma'])} * mclib::units::milliampere)")
             if step["actions"]:
-                lines += with_actions(step, call, stop, result_type="bool", reached="true")
+                lines += with_actions(step, call)
             else:
-                lines.append(f"  if (!{call}) return;" if stop else f"  {call};")
+                lines.append(f"  {call};")
         elif step["type"] == "lift":
             call = lift_call(step)
-            lines.append(f"  if ({call} == cascade::MoveResult::TimedOut) return;" if stop else f"  {call};")
+            lines.append(f"  {call};")
         elif step["type"] == "claw":
             lines.append(f"  {claw_call(step)};")
         elif step["type"] == "match_load":
@@ -246,8 +241,8 @@ def export(project, settings=None, plans=None):
         elif step["type"] == "wait":
             lines.append(f"  pros::delay({step['wait_ms']});")
         elif step["actions"]:
-            lines += with_actions(step, motion_call(step), stop)
+            lines += with_actions(step, motion_call(step))
         else:
-            lines.append(guarded(motion_call(step)))
+            lines.append(f"  {motion_call(step)};")
     lines += ["}", ""]
     return "\n".join(lines)

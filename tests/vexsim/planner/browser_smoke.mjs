@@ -76,6 +76,7 @@ try {
   assert.equal(await fieldSelect.inputValue(), "override");
   await fieldSelect.selectOption("open");
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).field === "open");
+  assert.doesNotMatch(await page.locator("#pane-robot").textContent(), /failed step/);
   await page.locator("#tab-step").click();
   pass("A new routine starts on the Override field; these first checks switch it to the open floor");
 
@@ -169,23 +170,26 @@ try {
   pass("Keep moving is refused on the last step with the reason, ticks on the path, and Ctrl+Z unticks it");
   await page.locator("#step-list li").nth(1).click();
 
-  const finished = () => /Run \d+: \d+ of \d+ steps passed/.test(document.querySelector("#run-summary").textContent);
+  const finished = () => /Run \d+: (ran all \d+ steps|stopped after step \d+)/.test(document.querySelector("#run-summary").textContent);
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 300000 });
   const firstRun = await page.locator("#run-picker").inputValue();
   const stages = await page.locator("#stage-list").textContent();
-  for (const label of ["Check the routine", "Compile mclib", "Measure the robot", "Plan path speeds", "Simulate in vexsim", "Score each step"]) assert.match(stages, new RegExp(label));
-  assert.match(await page.locator("#run-summary").innerText(), /2 of 2 steps passed/);
-  assert.equal(await page.locator("#step-list .badge.pass").count(), 2);
+  for (const label of ["Check the routine", "Compile mclib", "Measure the robot", "Plan path speeds", "Simulate in vexsim", "Report each step"]) assert.match(stages, new RegExp(label));
+  assert.match(await page.locator("#run-summary").innerText(), /ran all 2 steps/);
+  assert.equal(await page.locator("#step-list .badge.fail").count(), 0);
+  assert.match(await page.locator("#step-list .badge.done").first().innerText(), /^\d+\.\d in off$/);
+  assert.doesNotMatch(await page.locator("#step-list").innerText(), /[✓✗]/);
   pass(`Run simulation ran both steps in vexsim: ${(await page.locator("#run-summary").innerText()).replace(/\n/g, " ")}`);
-  await shot("04-run-passed");
+  await shot("04-run-done");
 
   await page.locator("#step-list li").first().click();
-  const result = await page.locator("#pane-step .card.pass").textContent();
-  assert.match(result, /Ended \d+\.\d+ in from the target \(limit 2\.5 in\)/);
+  const result = await page.locator("#pane-step .card.result").textContent();
+  assert.match(result, /Ended \d+\.\d+ in from the target\./);
   assert.match(result, /Largest gap from the planned path/);
-  pass("The step pane shows each check with the measured value and its limit");
+  assert.doesNotMatch(result, /limit 2\.5 in|[✓✗]|Passed|Failed/);
+  pass("The step pane shows what the step did, with no pass or fail");
 
   await page.locator("#timeline").evaluate((input) => { input.value = String(Number(input.max) / 2); input.dispatchEvent(new Event("input")); });
   const clock = await page.locator("#clock").innerText();
@@ -318,7 +322,7 @@ try {
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 600000 });
-  assert.match(await page.locator("#run-summary").innerText(), /14 of 14 steps passed/);
+  assert.match(await page.locator("#run-summary").innerText(), /ran all 14 steps/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
   assert.match(await page.locator("#score-panel").innerText(), /Red 50\s+Blue 0/);
   const score = await page.locator("#run-summary").innerText();
@@ -466,7 +470,7 @@ try {
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 600000 });
-  assert.match(await page.locator("#run-summary").innerText(), /10 of 10 steps passed/);
+  assert.match(await page.locator("#run-summary").innerText(), /ran all 10 steps/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
   const matchLoadScore = await page.locator("#score-panel").innerText();
   assert.match(matchLoadScore, /Score at 2\d\.\d\d s/);
@@ -474,7 +478,7 @@ try {
   assert.match(matchLoadScore, /Blue 0/);
   assert.match(await page.locator("#run-summary").innerText(), /Autonomous ended at 15\.\d\d s: red 0, blue 0/);
   await page.locator("#step-list li").nth(1).click();
-  assert.match(await page.locator("#pane-step").textContent(), /Loaded 15\.00 s into the match, after the 15 s autonomous period \(SG11a\)/);
+  assert.match(await page.locator("#pane-step .card.result").textContent(), /The Drive Team stood a Cup under the red right Loader with a red\/yellow Pin in it, red half up, 15\.00 s into the match\./);
   await shot("17-override-match-load");
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();

@@ -11,6 +11,9 @@ from mechanisms import (ACTION_TIMES, ACTION_UNITS, CLAW_PRESETS, LIFT_PRESETS, 
 
 FORMAT = "mclib-path-planner"
 VERSION = 1
+#: Fields older files may have that the planner no longer uses: every run
+#: now goes on to the next step unless a step breaks a rule
+RETIRED_PROJECT_FIELDS = {"stop_on_failure"}
 
 PRESETS = {
     "six_motor_450": dict(label="6 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
@@ -60,7 +63,7 @@ FIELDS = {
     "wait_ms": dict(label="Wait", unit="ms", low=10, high=120000, step=10,
                     help="How long to wait. The step always takes exactly this long."),
     "timeout_ms": dict(label="Time limit", unit="ms", low=50, high=20000, step=50,
-                       help="The step fails if it has not finished by then."),
+                       help="The motion gives up here and the next step starts."),
     "volts": dict(label="Max voltage", unit="V", low=.1, high=12, step=.1,
                   help="Caps the drive voltage. 12 V is full power."),
     "lift_preset": dict(label="Lift position", choices=LIFT_PRESETS,
@@ -135,8 +138,9 @@ STEP_TYPES = {
                        description="The Drive Team lifts a red Loader by its handle and stands a Cup with a Pin in "
                                    "it on the floor under it, through the Loader's back. The Loader stays up. The "
                                    "robot does nothing in this step. Match Loads may only be loaded in the Driver "
-                                   "Controlled Period (SG11a), so this step fails in the first 15 s. In Skills "
-                                   "they may be loaded at any time (RSC2d), which the planner does not model.",
+                                   "Controlled Period (SG11a): in the first 15 s this step breaks that rule and "
+                                   "the run stops after it. In Skills they may be loaded at any time (RSC2d), "
+                                   "which the planner does not model.",
                        fields=["loader", "match_load_pin"],
                        defaults=dict(loader="red_left", match_load_pin="red_yellow_up")),
 }
@@ -204,7 +208,6 @@ DEFAULT_PROJECT = dict(
     gains={key: item["default"] for key, item in GAINS.items()},
     path_defaults={key: item["default"] for key, item in PATH_DEFAULTS.items()},
     start=dict(x=0, y=-48, heading=0),
-    stop_on_failure=True,
     steps=[dict(type="path", chain=False, **copy.deepcopy(STEP_TYPES["path"]["defaults"]))],
 )
 
@@ -322,20 +325,17 @@ def validate_project(raw):
     """A complete, checked copy of @p raw with every default filled in.
 
     Raises ValueError with a message that names the step and field."""
-    _object(raw, set(DEFAULT_PROJECT), "The project")
+    _object(raw, set(DEFAULT_PROJECT) | RETIRED_PROJECT_FIELDS, "The project")
     if raw.get("format", FORMAT) != FORMAT:
         raise ValueError(f"This is not a path planner project (format is \"{raw.get('format')}\")")
     if raw.get("version", VERSION) != VERSION:
         raise ValueError(f"This project is version {raw.get('version')}; this planner reads version {VERSION}")
     project = copy.deepcopy(DEFAULT_PROJECT)
-    for key in ("name", "stop_on_failure"):
-        if key in raw:
-            project[key] = raw[key]
+    if "name" in raw:
+        project["name"] = raw["name"]
     if not isinstance(project["name"], str) or not 1 <= len(project["name"]) <= 80 or \
             any(ord(c) < 32 for c in project["name"]):
         raise ValueError("The routine name must be 1 to 80 characters on one line")
-    if not isinstance(project["stop_on_failure"], bool):
-        raise ValueError("Stop at the first failed step must be true or false")
     project["field"] = raw.get("field", OLD_FILE_FIELD)
     if project["field"] not in GAME_FIELDS:
         raise ValueError(f"Field must be one of: {', '.join(GAME_FIELDS)}")

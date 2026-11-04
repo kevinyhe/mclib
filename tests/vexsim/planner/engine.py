@@ -43,9 +43,11 @@ MAX_STATES = 40000
 MOTION_RESULTS = ("Reached", "TimedOut", "Cancelled", "Disabled", "InvalidValue", "NoDrive")
 ACTIONS = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4, turn_to_point=5, point=6, boomerang=7,
                wall_reset=8)
-POSITION_LIMIT_IN = dict(boomerang=1.5, arc=5.5, reverse_arc=5.5)
-DEFAULT_POSITION_LIMIT_IN = 2.5
-HEADING_LIMIT_DEG = 5.0
+#: A step that ends further than this from its target, or further off its
+#: heading, gets a hint on why
+MISS_HINT_IN = dict(boomerang=1.5, arc=5.5, reverse_arc=5.5)
+DEFAULT_MISS_HINT_IN = 2.5
+HEADING_HINT_DEG = 5.0
 ODOMETRY_DRIFT_IN = 2.5
 HEADING_GOALS = {"turn", "swing", "arc", "reverse_arc"}
 RAMSETE_SIDE_TOLERANCE_IN = 3.0
@@ -450,9 +452,8 @@ def path_gap(frames, states):
     return worst, when
 
 
-def check(key, label, passed, message, measured=None, limit=None, unit=""):
-    return dict(id=key, label=label, passed=bool(passed), message=message, measured=measured, limit=limit,
-                unit=unit)
+def reading(key, label, message, measured=None, unit=""):
+    return dict(id=key, label=label, message=message, measured=measured, unit=unit)
 
 
 def wheel_side(edge):
@@ -477,20 +478,17 @@ class TipWatch:
     def begin_step(self):
         self.sim.dynamics.tilt.clear_most()
 
-    @property
-    def fallen(self):
-        return self.sim.dynamics.tilt.fallen
-
-    def fall_checks(self):
-        """A failed check once the robot has fallen over, else none."""
+    def fall_readings(self, started):
+        """How the robot fell over, for the step it fell in, else none."""
         from vexsim.units import INCH
         tilt = self.sim.dynamics.tilt
-        if not tilt.fallen:
+        if not tilt.fallen or self.fell_at < started:
             return []
-        return [check("upright", "Upright", False,
-                      f"The robot fell over at {self.fell_at:.2f} s. It rocked onto its {wheel_side(tilt.edge)} "
-                      f"wheels past {math.degrees(tilt.balance):.0f}°, where its centre of mass, "
-                      f"{self.sim.chassis.cg_height / INCH:.1f} in up, was over them.")]
+        return [reading("fell", "Fell over",
+                        f"The robot fell over at {self.fell_at:.2f} s. It rocked onto its {wheel_side(tilt.edge)} "
+                        f"wheels past {math.degrees(tilt.balance):.0f}°, where its centre of mass, "
+                        f"{self.sim.chassis.cg_height / INCH:.1f} in up, was over them. It lies there for the "
+                        "rest of the run.")]
 
     def rock_lines(self):
         """How far the robot rocked onto the edge of its wheels this step,
@@ -537,105 +535,99 @@ class OdometryAtRest:
         self.scanned = len(self.trace)
 
 
-def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading):
+def mechanism_readings(step, timeout_ms, duration_ms, motion_result, pose_text):
     kind = step["type"]
     preset = MECHANISMS[kind]["presets"][step[f"{kind}_preset"]]
     seconds, limit_s = duration_ms / 1000, timeout_ms / 1000
-    reached = motion_result == MOVE_RESULTS.index("Reached the preset")
     if kind == "claw":
         verb = "closed" if step["claw_preset"] == "closed" else "opened"
-        return [check("time", "Time", reached, f"The claw {verb} in {seconds:.2f} s: {reading}.",
-                      measured=round(seconds, 3), limit=limit_s, unit="s")]
-    if reached:
-        message = f"The lift reached {preset} in {seconds:.2f} s (limit {limit_s:.2f} s): {reading}."
+        return [reading("time", "Time", f"The claw {verb} in {seconds:.2f} s: {pose_text}.",
+                        measured=round(seconds, 3), unit="s")]
+    if motion_result == MOVE_RESULTS.index("Reached the preset"):
+        message = f"The lift reached {preset} in {seconds:.2f} s: {pose_text}."
     else:
-        message = f"The lift did not reach {preset} in the {limit_s:.2f} s time limit: {reading}."
-    return [check("time", "Time", reached, message, measured=round(seconds, 3), limit=limit_s, unit="s")]
+        message = f"The lift had not reached {preset} when its {limit_s:.2f} s time limit ran out: {pose_text}."
+    return [reading("time", "Time", message, measured=round(seconds, 3), unit="s")]
 
 
-def score_match_load(step, started_s, error):
-    """<SG11a>: Match Loads only in the Driver Controlled Period. The
-    simulator keeps time in 1 ms steps, so the start is compared in whole
-    milliseconds, clear of the sum's rounding."""
-    if round(started_s * 1000) < round(AUTONOMOUS_S * 1000):
-        rules = check("rules", "Rules", False,
-                      f"Match Loads may only be loaded in the Driver Controlled Period (SG11a). This step starts "
-                      f"{started_s:.2f} s into the match, inside the {AUTONOMOUS_S:g} s autonomous period.",
-                      measured=round(started_s, 2), limit=AUTONOMOUS_S, unit="s")
-    else:
-        rules = check("rules", "Rules", True,
-                      f"Loaded {started_s:.2f} s into the match, after the {AUTONOMOUS_S:g} s autonomous period "
-                      "(SG11a).", measured=round(started_s, 2), limit=AUTONOMOUS_S, unit="s")
+def match_load_report(step, started_s, error):
+    """What the Drive Team loaded, and the rule it broke if it loaded in
+    the autonomous period (<SG11a>). The simulator keeps time in 1 ms steps,
+    so the start is compared in whole milliseconds, clear of the sum's
+    rounding."""
     load = describe_match_load(step)
-    if error is None:
-        loaded = check("loaded", "Loaded", True, f"The Drive Team stood {load}.")
-    else:
-        loaded = check("loaded", "Loaded", False, f"The Drive Team could not stand {load}: {error}.")
-    return [rules, loaded]
+    loaded = (f"The Drive Team stood {load}, {started_s:.2f} s into the match." if error is None else
+              f"The Drive Team could not stand {load}: {error}.")
+    breaks = []
+    if round(started_s * 1000) < round(AUTONOMOUS_S * 1000):
+        breaks.append(f"Match Loads may only be loaded in the Driver Controlled Period (SG11a). This step starts "
+                      f"{started_s:.2f} s into the match, inside the {AUTONOMOUS_S:g} s autonomous period.")
+    return [reading("loaded", "Loaded", loaded, measured=round(started_s, 2), unit="s")], breaks
 
 
-def rule_checks(report):
-    """Checks for the first step: the robot's size at the start and its motors against the rules."""
+def start_rules(report):
+    """The first step's lines on the robot's size at the start and its
+    motors: (the lines within the rules, the rules broken)."""
     start, motors = report["start_in"], report["motors_w"]
     size = f"{start['length']:.2f} in long, {start['width']:.2f} in wide and {start['height']:.2f} in tall"
-    return [check("start_size", "Size at the start", start["passed"],
-                  f"The robot starts {size}. Each must be at most {start['limit']:g} in (SG1).",
-                  measured=max(start["length"], start["width"], start["height"]), limit=start["limit"], unit="in"),
-            check("motors", "Motors", motors["passed"],
-                  f"The drive motors are rated {motors['drive']:g} W and all the motors {motors['total']:g} W. "
-                  f"The limits are {motors['drive_limit']:g} W for the drive (R11) and {motors['total_limit']:g} W "
-                  "in all (R10).", measured=motors["total"], limit=motors["total_limit"], unit="W")]
+    lines = [(f"The robot starts {size}. Each must be at most {start['limit']:g} in (SG1).", start["passed"]),
+             (f"The drive motors are rated {motors['drive']:g} W and all the motors {motors['total']:g} W. "
+              f"The limits are {motors['drive_limit']:g} W for the drive (R11) and {motors['total_limit']:g} W "
+              "in all (R10).", motors["passed"])]
+    return [line for line, legal in lines if legal], [line for line, legal in lines if not legal]
 
 
-def score_step(step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, stopped,
-               motion_result, configuration_error):
-    """The pass/fail checks for one step, each with the measured number and
-    its limit in words."""
+def step_readings(step, target, timeout_ms, duration_ms, actual, estimate_at_exit, stopped, motion_result,
+                  configuration_error):
+    """What one step did, each with its number: (readings, how far it
+    ended from its target in inches, how far off its heading in degrees)."""
     kind = step["type"]
     chained = step["chain"]
     ended = "Handed off" if chained else "Ended"
-    checks = []
+    readings = []
     if configuration_error:
-        checks.append(check("setup", "Setup", False, f"Not run: {configuration_error}."))
+        readings.append(reading("setup", "Setup", f"Not run: {configuration_error}."))
     if not chained:
-        checks.append(check("stopped", "Stopped", stopped, "The drive was stopped at the end." if stopped else
-                            "The drive was still powered when the step ended."))
+        readings.append(reading("stopped", "Stopped", "The drive was stopped at the end." if stopped else
+                                "The drive was still powered when the step ended."))
     if kind == "wall_reset":
         touched = bool(motion_result)
-        checks.append(check("wall", "Wall contact", touched, "Detected the wall (motor stall)." if touched else
-                            f"Did not detect the wall: the motor current never stayed above {step['current_ma']:g} mA."))
+        readings.append(reading("wall", "Wall contact", "Detected the wall (motor stall)." if touched else
+                                f"Did not detect the wall: the motor current never stayed above "
+                                f"{step['current_ma']:g} mA."))
         miss = max(math.dist(estimate_at_exit[:2], (step["x"], step["y"])),
                    abs(math.remainder(estimate_at_exit[2] - step["heading"], 360)))
-        checks.append(check("reset", "Odometry reset", touched and miss < 1e-6,
-                            f"Odometry was set to ({step['x']:g}, {step['y']:g}) facing {step['heading']:g}°."
-                            if touched and miss < 1e-6 else "Odometry was not set to the requested pose.",
-                            measured=miss, limit=1e-6))
-        return checks, None, None
+        readings.append(reading("reset", "Odometry reset",
+                                f"Odometry was set to ({step['x']:g}, {step['y']:g}) facing {step['heading']:g}°."
+                                if touched and miss < 1e-6 else "Odometry was not set to the requested pose."))
+        return readings, None, None
     seconds, limit_s = duration_ms / 1000, timeout_ms / 1000
     finished = duration_ms < timeout_ms - .5
-    checks.append(check("time", "Time", finished,
-                        f"Finished in {seconds:.2f} s (limit {limit_s:.2f} s)." if finished else
-                        f"Used the whole {limit_s:.2f} s time limit without finishing.",
-                        measured=round(seconds, 3), limit=limit_s, unit="s"))
+    readings.append(reading("time", "Time",
+                            f"Finished in {seconds:.2f} s of its {limit_s:.2f} s time limit." if finished else
+                            f"Used the whole {limit_s:.2f} s time limit without finishing.",
+                            measured=round(seconds, 3), unit="s"))
     position_error = heading_error = None
     if target["x"] is not None:
         position_error = math.hypot(actual[0] - target["x"], actual[1] - target["y"])
-        limit = POSITION_LIMIT_IN.get(kind, DEFAULT_POSITION_LIMIT_IN)
-        passed = position_error <= limit
-        checks.append(check("position", "Position", passed,
-                            f"{ended} {position_error:.2f} in from the target (limit {limit:g} in)." if passed else
-                            f"{ended} {position_error:.2f} in from the target. The limit is {limit:g} in.",
-                            measured=round(position_error, 3), limit=limit, unit="in"))
+        readings.append(reading("position", "Position", f"{ended} {position_error:.2f} in from the target.",
+                                measured=round(position_error, 3), unit="in"))
     if target["heading"] is not None:
         heading_error = abs(math.remainder(actual[2] - target["heading"], 360))
     if heading_error is not None and (not chained or kind in HEADING_GOALS):
-        passed = heading_error <= HEADING_LIMIT_DEG
-        checks.append(check("heading", "Heading", passed,
-                            f"{ended} {heading_error:.1f}° off the target heading (limit {HEADING_LIMIT_DEG:g}°)."
-                            if passed else f"{ended} {heading_error:.1f}° off the target heading. "
-                                           f"The limit is {HEADING_LIMIT_DEG:g}°.",
-                            measured=round(heading_error, 3), limit=HEADING_LIMIT_DEG, unit="°"))
-    return checks, position_error, heading_error
+        readings.append(reading("heading", "Heading", f"{ended} {heading_error:.1f}° off the target heading.",
+                                measured=round(heading_error, 3), unit="°"))
+    return readings, position_error, heading_error
+
+
+def fell_short(step, position_error, heading_error, finished):
+    """Whether the step ended far enough from its target, or late enough,
+    to need a hint on why."""
+    kind = step["type"]
+    missed_position = position_error is not None and position_error > MISS_HINT_IN.get(kind, DEFAULT_MISS_HINT_IN)
+    missed_heading = (heading_error is not None and (not step["chain"] or kind in HEADING_GOALS)
+                      and heading_error > HEADING_HINT_DEG)
+    return not finished or missed_position or missed_heading
 
 
 def settle_report(plan, frames, started, returned, ramsete_b):
@@ -673,7 +665,7 @@ def chained_path_hint(position_error, ramsete_b):
             f"{position_error:.1f} in from where it was planned to. {staying_on_the_plan(ramsete_b)}")
 
 
-def advice(checks, position_error, odometry_error, finished, chained_path, ramsete_b):
+def advice(kind, position_error, odometry_error, finished, chained_path, ramsete_b):
     notes = []
     if odometry_error is not None and odometry_error > ODOMETRY_DRIFT_IN:
         notes.append(f"Odometry and the simulated robot were {odometry_error:.1f} in apart when the step ended. "
@@ -681,17 +673,17 @@ def advice(checks, position_error, odometry_error, finished, chained_path, ramse
     if not finished:
         notes.append("The step ran out of time. Look at the voltage and heading graphs for oscillation or "
                      "too little output, or raise the time limit.")
-    position = next((c for c in checks if c["id"] == "position"), None)
-    if position and not position["passed"] and chained_path:
+    missed = position_error is not None and position_error > MISS_HINT_IN.get(kind, DEFAULT_MISS_HINT_IN)
+    if missed and chained_path:
         notes.append(chained_path_hint(position_error, ramsete_b))
-    elif position and not position["passed"] and odometry_error is not None and odometry_error <= ODOMETRY_DRIFT_IN:
+    elif missed and odometry_error is not None and odometry_error <= ODOMETRY_DRIFT_IN:
         notes.append("Odometry agreed with the real position, so the controller itself stopped short. "
                      "Check its exit conditions and gains.")
     return notes
 
 
 def stopped_by_hit(contacts, entry, end, target):
-    """The one hint for a step that failed after the robot hit something:
+    """The one hint for a step that fell short after the robot hit something:
     what stopped it and how much of the move it made."""
     hardest = max(contacts, key=lambda contact: contact.peak_force)
     if target["x"] is not None:
@@ -705,13 +697,14 @@ def stopped_by_hit(contacts, entry, end, target):
 
 
 def execute(raw, destination, vexsim, cache):
-    """Runs the whole routine in vexsim with mclib's C++ and scores each step."""
+    """Runs the whole routine in vexsim with mclib's C++ and reports what
+    each step did. A step that breaks a rule is the last one run."""
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     progress = Progress(destination / "progress.json",
                         [("check", "Check the routine"), ("compile", "Compile mclib"),
                          ("measure", "Measure the robot"), ("plan", "Plan path speeds"),
-                         ("simulate", "Simulate in vexsim"), ("score", "Score each step")])
+                         ("simulate", "Simulate in vexsim"), ("report", "Report each step")])
     try:
         return _execute(raw, destination, vexsim, cache, progress)
     except Exception as error:
@@ -809,8 +802,8 @@ def _execute(raw, destination, vexsim, cache, progress):
         progress.note("simulate", f"Step {index + 1} of {total}: {label}.")
         timeout_ms = time_limits[index]
         if halted:
-            rows.append(dict(index=index, type=step["type"], executed=False, passed=False, reason=halted,
-                             checks=[], notes=[], target=None, timeout_ms=timeout_ms,
+            rows.append(dict(index=index, type=step["type"], executed=False, skipped_because=halted,
+                             readings=[], rule_breaks=[], notes=[], target=None, timeout_ms=timeout_ms,
                              start_time_s=bridge.sim.t, end_time_s=bridge.sim.t))
             continue
         designed_start, designed_end = poses[index]
@@ -849,34 +842,36 @@ def _execute(raw, destination, vexsim, cache, progress):
             recorder.record(capture())
         actual = bridge.truth()
         duration_ms = (returned - started) * 1000
+        step_breaks = []
         if step["type"] in MECHANISMS:
-            reading, _ = mechanism_reading(world, step["type"])
-            checks = score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading)
+            pose_text, _ = mechanism_reading(world, step["type"])
+            readings = mechanism_readings(step, timeout_ms, duration_ms, motion_result, pose_text)
             position_error = heading_error = None
         elif step["type"] == "match_load":
-            checks = score_match_load(step, started, configuration_error)
+            readings, step_breaks = match_load_report(step, started, configuration_error)
             position_error = heading_error = None
         elif step["type"] == "wait":
-            checks = [check("time", "Time", True, f"Waited {duration_ms / 1000:.2f} s, to {returned:.2f} s into "
-                                                  "the match.", measured=round(duration_ms / 1000, 3),
-                            limit=timeout_ms / 1000, unit="s")]
+            readings = [reading("time", "Time", f"Waited {duration_ms / 1000:.2f} s, to {returned:.2f} s into "
+                                                "the match.", measured=round(duration_ms / 1000, 3), unit="s")]
             position_error = heading_error = None
         else:
-            checks, position_error, heading_error = score_step(
-                step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, bridge.stopped(),
-                motion_result, configuration_error)
+            readings, position_error, heading_error = step_readings(
+                step, target, timeout_ms, duration_ms, actual, estimate_at_exit, bridge.stopped(), motion_result,
+                configuration_error)
+        info = []
         if rig and index == 0:
-            checks = rule_checks(rules.report()) + checks
-        checks += [check("rules", "Rules", False, message) for t, message in rule_breaks
-                   if started <= t <= bridge.sim.t]
-        checks += tips.fall_checks()
-        passed = all(item["passed"] for item in checks)
+            legal_lines, broken_lines = start_rules(rules.report())
+            info += legal_lines
+            step_breaks = broken_lines + step_breaks
+        step_breaks += [message for t, message in rule_breaks if started <= t <= bridge.sim.t]
+        readings += tips.fall_readings(started)
         odometry_error = None if coordinate_reset else math.dist(estimate_at_exit[:2], truth_at_exit[:2])
         finished = duration_ms < timeout_ms - .5
         chained_path = step["chain"] and step["type"] == "path"
         contacts = contacts_between(world, started, bridge.sim.t)
         hit_hint = (stopped_by_hit(contacts, entry_truth, actual, target)
-                    if contacts and not passed and step["type"] not in STILL_STEPS else None)
+                    if contacts and step["type"] not in STILL_STEPS and
+                    fell_short(step, position_error, heading_error, finished) else None)
         if step["type"] == "lift":
             notes = [] if finished else ["The lift ran out of time. Check the lift current in the telemetry: high "
                                          "current means it was pushing against something."]
@@ -885,9 +880,9 @@ def _execute(raw, destination, vexsim, cache, progress):
         elif hit_hint:
             notes = [hit_hint]
         else:
-            notes = advice(checks, position_error, odometry_error, finished, chained_path,
+            notes = advice(step["type"], position_error, odometry_error, finished, chained_path,
                            project["path_defaults"]["ramsete_b"])
-        info = tips.rock_lines()
+        info += tips.rock_lines()
         if odometry_error is not None:
             info.append(f"Odometry was {odometry_error:.2f} in from the simulated position when the step ended.")
         if coordinate_reset:
@@ -924,11 +919,10 @@ def _execute(raw, destination, vexsim, cache, progress):
         if rig:
             info.extend(claw_events(world, started, bridge.sim.t))
             info.extend(toggle_events(world, faces_before))
-        failed = [item["message"] for item in checks if not item["passed"]]
-        rows.append(dict(index=index, type=step["type"], executed=True, passed=passed,
+        rows.append(dict(index=index, type=step["type"], executed=True,
                          contacts=[contact_dict(contact, started) for contact in contacts],
-                         reason="All checks passed." if passed else " ".join(failed),
-                         checks=checks, notes=notes, info=info, target=target, timeout_ms=timeout_ms,
+                         readings=readings, rule_breaks=step_breaks, notes=notes, info=info, target=target,
+                         timeout_ms=timeout_ms,
                          position_error_in=position_error, heading_error_deg=heading_error,
                          odometry_error_in=odometry_error, duration_s=round(duration_ms / 1000, 3),
                          start_time_s=started, return_time_s=returned, end_time_s=bridge.sim.t,
@@ -941,10 +935,8 @@ def _execute(raw, destination, vexsim, cache, progress):
                          motion_result is not None else None))
         odometry_at_rest.watch(rows[-1], handoff_speed_ips)
         odometry_at_rest.report()
-        if tips.fallen:
-            halted = f"Skipped: the robot fell over in step {index + 1}."
-        elif not passed and project["stop_on_failure"]:
-            halted = "Skipped: an earlier step failed and Stop at the first failed step is on."
+        if step_breaks:
+            halted = f"Not run: step {index + 1} broke a rule, so the run stopped there."
         write_json(destination / "live.json", dict(steps=rows, pieces=pieces))
     bridge.on_capture = None
     recorder.close()
@@ -953,15 +945,14 @@ def _execute(raw, destination, vexsim, cache, progress):
     progress.step = None
     progress.finish("simulate", f"Simulated {bridge.sim.t:.2f} s of robot time in "
                                 f"{time.monotonic() - wall_start:.1f} s.")
-    progress.begin("score", "Collecting the checks of every step.")
+    progress.begin("report", "Collecting what every step did.")
     if source_fingerprint(vexsim) != fingerprint:
         raise StageError("The C++ or the simulator changed while this ran. Run again before trusting the result.")
-    passed_steps = sum(row["passed"] for row in rows)
-    summary = dict(steps=len(rows), passed_steps=passed_steps,
-                   failed_steps=sum(row["executed"] and not row["passed"] for row in rows),
-                   skipped_steps=sum(not row["executed"] for row in rows),
-                   simulated_s=round(bridge.sim.t, 3))
-    result = dict(passed=passed_steps == len(rows), summary=summary, steps=rows, trace=recorder.trace,
+    ran_steps = sum(row["executed"] for row in rows)
+    broke_rule = next((row["index"] for row in rows if row["rule_breaks"]), None)
+    summary = dict(steps=len(rows), ran_steps=ran_steps, skipped_steps=len(rows) - ran_steps,
+                   broke_rule_in_step=broke_rule, simulated_s=round(bridge.sim.t, 3))
+    result = dict(legal=broke_rule is None, summary=summary, steps=rows, trace=recorder.trace,
                   plans=plans or [None] * len(rows), settings=path_settings(project, feedforward) if feedforward else None,
                   designed_poses=poses, project=project, source_fingerprint=fingerprint,
                   stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None,
@@ -972,7 +963,8 @@ def _execute(raw, destination, vexsim, cache, progress):
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(recorder.trace)
-    progress.finish("score", f"{passed_steps} of {len(rows)} steps passed.")
+    progress.finish("report", f"Ran all {len(rows)} steps." if broke_rule is None else
+                    f"Ran {ran_steps} of {len(rows)} steps: step {broke_rule + 1} broke a rule.")
     result["stages"] = progress.stages
     write_json(destination / "result.json", result)
     return result
@@ -1018,7 +1010,7 @@ def main():
         print(f"Run failed: {error}", file=sys.stderr)
         return 2
     print(json.dumps(result["summary"]))
-    return 0 if result["passed"] else 1
+    return 0 if result["legal"] else 1
 
 
 if __name__ == "__main__":

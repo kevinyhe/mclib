@@ -449,7 +449,7 @@
       state.frames.push(...job.live.frames);
       job.live.frames = state.frames;
     }
-    const finished = ["passed", "failed", "cancelled", "error"].includes(job.status);
+    const finished = ["finished", "broke_rule", "cancelled", "error"].includes(job.status);
     if (state.shown?.id === id) {
       state.shown = job;
       if (!finished) state.time = state.frames.at(-1)?.t ?? 0;
@@ -475,10 +475,15 @@
     }
     if (job.status === "cancelled") return log(`Run ${job.number} was cancelled.`);
     const wall = (job.finished_at - job.started_at).toFixed(1);
-    log(`Run ${job.number}: ${summary.passed_steps} of ${summary.steps} steps passed, ${fmt(summary.simulated_s, 2)} s of robot time (took ${wall} s).`, job.status === "passed" ? "ok" : "error");
+    log(`Run ${job.number}: ${ranSteps(summary)}, ${fmt(summary.simulated_s, 2)} s of robot time (took ${wall} s).`, job.status === "finished" ? "ok" : "error");
     for (const row of job.result.steps) {
-      if (row.executed && !row.passed) log(`Step ${row.index + 1} (${state.config.step_types[row.type].label}) failed: ${row.reason}`, "error");
+      for (const text of row.rule_breaks) log(`Step ${row.index + 1} (${state.config.step_types[row.type].label}) broke a rule: ${text}`, "error");
     }
+  }
+
+  function ranSteps(summary) {
+    if (summary.broke_rule_in_step === null) return `ran all ${summary.steps} steps`;
+    return `stopped after step ${summary.broke_rule_in_step + 1}, which broke a rule (ran ${summary.ran_steps} of ${summary.steps})`;
   }
 
   function stageLabel(job, id) {
@@ -625,11 +630,13 @@
   function resultBadge(row) {
     if (!row) return null;
     if (row.executed === false) return element("span", { class: "badge skip", text: "skipped" });
-    if (typeof row.passed !== "boolean") return element("span", { class: "badge run", text: "running" });
+    if (!Array.isArray(row.rule_breaks)) return element("span", { class: "badge run", text: "running" });
+    if (row.rule_breaks.length) return element("span", { class: "badge fail", title: row.rule_breaks.join(" "), text: "✗ broke a rule" });
     const miss = row.position_error_in ?? null;
     const turn = row.heading_error_deg ?? null;
-    const detail = Number.isFinite(miss) ? ` ${fmt(miss, 1)} in` : Number.isFinite(turn) ? ` ${fmt(turn, 1)}°` : "";
-    return element("span", { class: `badge ${row.passed ? "pass" : "fail"}`, title: row.reason, text: `${row.passed ? "✓" : "✗"}${detail}` });
+    const detail = Number.isFinite(miss) ? `${fmt(miss, 1)} in off` : Number.isFinite(turn) ? `${fmt(turn, 1)}° off` : "";
+    if (!detail) return null;
+    return element("span", { class: "badge done", title: row.readings.map((item) => item.message).join(" "), text: detail });
   }
 
   function renderSteps() {
@@ -722,10 +729,12 @@
       const status = job.status;
       summary.hidden = false;
       const result = job.result?.summary;
-      if (status === "passed" || status === "failed") {
-        summary.className = `run-summary ${status === "passed" ? "pass" : "fail"}`;
-        summary.replaceChildren(`Run ${job.number}: ${result.passed_steps} of ${result.steps} steps passed`,
-          element("span", { text: `${fmt(result.simulated_s, 2)} s of robot time${result.skipped_steps ? `, ${result.skipped_steps} skipped after a failure` : ""}.` }),
+      if (status === "finished" || status === "broke_rule") {
+        summary.className = `run-summary${status === "broke_rule" ? " fail" : ""}`;
+        const broken = job.result.steps.flatMap((row) => row.rule_breaks);
+        summary.replaceChildren(`Run ${job.number}: ${ranSteps(result)}`,
+          ...broken.map((text) => element("span", { text })),
+          element("span", { text: `${fmt(result.simulated_s, 2)} s of robot time.` }),
           ...autonomousLines(job.result.autonomous).map((text) => element("span", { class: "auton", text })));
       } else if (status === "error") {
         summary.className = "run-summary error";
@@ -761,7 +770,7 @@
 
   function runLabel(run) {
     const time = new Date(run.created_at * 1000).toTimeString().slice(0, 5);
-    const outcome = run.summary ? `${run.summary.passed_steps}/${run.summary.steps} passed` : run.status;
+    const outcome = !run.summary ? run.status : run.summary.broke_rule_in_step === null ? `${run.summary.steps} steps` : `rule broken in step ${run.summary.broke_rule_in_step + 1}`;
     return `Run ${run.number} · ${outcome} · ${time}`;
   }
 
@@ -793,7 +802,7 @@
     if (span.kind === "run" && span.end) {
       for (const row of stepRows()) {
         if (!Number.isFinite(row.start_time_s)) continue;
-        const mark = element("i", { class: row.executed === false ? "" : row.passed ? "pass" : typeof row.passed === "boolean" ? "fail" : "", title: `Step ${row.index + 1}` });
+        const mark = element("i", { class: row.rule_breaks?.length ? "fail" : "", title: `Step ${row.index + 1}` });
         mark.style.left = `${(row.start_time_s / span.end) * 100}%`;
         marks.push(mark);
       }
@@ -913,14 +922,15 @@
 
   function resultCard(index) {
     const row = stepRows().find((item) => item.index === index);
-    if (!row || typeof row.passed !== "boolean") return null;
-    const kind = row.executed === false ? "" : row.passed ? "pass" : "fail";
-    const title = row.executed === false ? "Skipped in this run" : row.passed ? `Passed in run ${state.shown.number}` : `Failed in run ${state.shown.number}`;
-    return element("div", { class: `card ${kind}` },
+    if (!row || !Array.isArray(row.rule_breaks)) return null;
+    const broke = row.rule_breaks.length > 0;
+    const title = row.executed === false ? "Skipped in this run" : broke ? `Broke a rule in run ${state.shown.number}` : `In run ${state.shown.number}`;
+    return element("div", { class: `card result${broke ? " fail" : ""}` },
       element("h3", { text: title }),
-      row.executed === false ? element("p", { text: row.reason }) : null,
-      row.checks?.length ? element("ul", { class: "checks" }, ...row.checks.map((check) =>
-        element("li", { class: check.passed ? "pass" : "fail" }, element("span", { class: "mark", text: check.passed ? "✓" : "✗" }), element("span", { text: check.message })))) : null,
+      row.executed === false ? element("p", { text: row.skipped_because }) : null,
+      broke ? element("ul", { class: "checks" }, ...row.rule_breaks.map((text) =>
+        element("li", { class: "fail" }, element("span", { class: "mark", text: "✗" }), element("span", { text })))) : null,
+      row.readings.length ? element("ul", { class: "readings" }, ...row.readings.map((item) => element("li", { text: item.message }))) : null,
       row.notes?.length ? element("ul", {}, ...row.notes.map((text) => element("li", { text: `Hint: ${text}` }))) : null,
       row.info?.length ? foldedList(`Details (${row.info.length})`, row.info) : null,
       Number.isFinite(row.start_time_s) ? element("button", { class: "small", onclick: () => { play(false); setTime(row.start_time_s); } }, `Jump playback to step ${index + 1}`) : null);
@@ -1038,7 +1048,7 @@
       const when = selectInput("When", action.when, Object.entries(rules.times), null,
         (value) => edit(() => { action.when = value; action.value = firstValue[value]; }));
       const amount = action.when === "start" || action.when === "end" ? null : numberInput({
-        label: action.when === "distance" ? "Distance" : "Time", unit: rules.units[action.when], value: action.value, min: 0,
+        label: action.when === "distance" ? "Distance from the step start" : "Time", unit: rules.units[action.when], value: action.value, min: 0,
         max: action.when === "distance" ? rules.max_distance_in : rules.max_time_ms, step: action.when === "distance" ? 1 : 50,
         onCommit: (value) => edit(() => { action.value = action.when === "time" ? Math.round(value) : value; }) });
       return element("div", { class: "section-box action-box", "data-action": i },
@@ -1131,10 +1141,7 @@
       element("h3", { text: "Controller gains (PID)" }),
       element("p", { class: "muted small", text: "Used by drive, turn, point, boomerang, arc and swing steps, and by the settle at the end of a path." }),
       element("div", { class: "form three" }, ...Object.entries(config.gains).map(([key, info]) =>
-        numberInput({ label: info.label, value: project.gains[key], min: 0, max: 100, step: 0.05, onCommit: (value) => edit(() => { project.gains[key] = value; }) }))),
-      element("h3", { text: "Run" }),
-      checkInput("Stop at the first failed step", project.stop_on_failure, "Later steps are skipped, as the exported C++ returns early.",
-        (on) => edit(() => { project.stop_on_failure = on; }, { replan: false })));
+        numberInput({ label: info.label, value: project.gains[key], min: 0, max: 100, step: 0.05, onCommit: (value) => edit(() => { project.gains[key] = value; }) }))));
   }
 
   function renderTelemetry() {
@@ -1840,7 +1847,7 @@
     if (span.kind === "none") return { series, marks, caption: "Run a simulation, or select a planned path, to see a graph.", end: 0 };
     const frames = trace();
     const rows = stepRows();
-    for (const row of rows) if (Number.isFinite(row.start_time_s)) marks.push({ t: row.start_time_s, label: `${row.index + 1}`, failed: row.executed !== false && row.passed === false });
+    for (const row of rows) if (Number.isFinite(row.start_time_s)) marks.push({ t: row.start_time_s, label: `${row.index + 1}`, failed: row.rule_breaks.length > 0 });
     if (kind === "speed") {
       const plans = state.shown.result?.plans ?? [];
       rows.forEach((row) => {
@@ -2310,7 +2317,7 @@
       format: state.config.format, version: state.config.version, name: spec.name || "Imported routine",
       robot: { preset: spec.preset, tracking: spec.tracking_mode || "two", heading_source: environment.encoder_heading ? "encoders" : "imu" },
       conditions: { battery_percent: (environment.soc ?? 1) * 100, grip_percent: (environment.friction ?? 1) * 100, noise_seed: environment.seed ?? 1 },
-      gains: spec.tuning, start: spec.start_pose, stop_on_failure: spec.stop_on_failure ?? true, steps,
+      gains: spec.tuning, start: spec.start_pose, steps,
     };
   }
 
