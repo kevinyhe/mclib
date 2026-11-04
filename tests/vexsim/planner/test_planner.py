@@ -56,7 +56,7 @@ class ProjectTests(unittest.TestCase):
         project = validate_project({})
         self.assertEqual(project["preload"], "none")
         self.assertEqual(project["steps"][0]["actions"], [])
-        self.assertEqual(validate_project(default_project())["preload"], "yellow")
+        self.assertEqual(validate_project(default_project())["preload"], "beside")
 
     def test_the_mechanisms_need_the_override_field(self):
         drive_with_action = dict(type="drive", actions=[dict(when="start", mechanism="claw", preset="open")])
@@ -66,25 +66,26 @@ class ProjectTests(unittest.TestCase):
 
         cases = [
             (dict(field="open", steps=[dict(type="lift")]), "Step 1 .*only the Override robot"),
-            (dict(field="open", steps=[dict(type="toggle_arm")]), "Step 1 .*only the Override robot"),
+            (dict(field="open", steps=[dict(type="match_load")]), "Step 1 .*Match Loads are part of the Override"),
             (dict(field="push_back", steps=[drive_with_action]), "only the Override robot"),
-            (dict(field="open", preload="yellow"), "A preload needs the Override field"),
+            (dict(field="open", preload="behind"), "A preload needs the Override field"),
             (dict(field="override", preload="green"), "Preload must be one of"),
             (dict(field="override", steps=[dict(type="lift", lift_preset="sky")]), "Lift position must be one of"),
-            (dict(field="override", steps=[dict(type="toggle_arm", toggle_arm_preset="sideways")]),
-             "Toggle arm must be one of"),
             (dict(field="override", steps=[dict(type="lift", actions=drive_with_action["actions"])]),
+             "actions go on drive steps"),
+            (dict(field="override", steps=[dict(type="match_load", actions=drive_with_action["actions"])]),
              "actions go on drive steps"),
             (dict(field="override", steps=[dict(type="claw", chain=True), dict(type="drive")]),
              "drive is not moving during a claw step"),
-            (dict(field="override", steps=[dict(type="toggle_arm", chain=True), dict(type="drive")]),
-             "drive is not moving during a Toggle arm step"),
+            (dict(field="override", steps=[dict(type="match_load", chain=True), dict(type="drive")]),
+             "drive is not moving during a Match Load"),
+            (dict(field="override", steps=[dict(type="claw", timeout_ms=1000)]),
+             r"Step 1 \(Open or close the claw\): this step always takes 10 ms, so it has no time limit"),
+            (dict(field="override", steps=[dict(type="match_load", loader="blue_left")]), "Loader must be one of"),
             (drive_with(when="time", value=2.5, mechanism="lift", preset="top"), "time must be a whole number"),
             (drive_with(when="soon", mechanism="lift", preset="top"), "when must be one of: start, distance, time, end"),
-            (drive_with(when="start", mechanism="toggle_arm", preset="top"),
-             "the toggle_arm preset must be one of: stowed, over_the_axle, under_the_axle"),
-            (drive_with(when="start", mechanism="wrist", preset="top"),
-             "mechanism must be one of: lift, claw, toggle_arm"),
+            (drive_with(when="start", mechanism="claw", preset="half"), "the claw preset must be one of: open, closed"),
+            (drive_with(when="start", mechanism="wrist", preset="top"), "mechanism must be one of: lift, claw"),
         ]
         for raw, message in cases:
             with self.subTest(message), self.assertRaisesRegex(ValueError, message):
@@ -92,11 +93,29 @@ class ProjectTests(unittest.TestCase):
 
     def test_a_file_made_for_the_old_arm_says_what_replaced_it(self):
         replaced = (r"the arm was the Flex robot's inclined lift, which the planner no longer has\. Use the lift "
-                    r"instead \(\"lift\", with lift_preset one of: down, pin_in_cup, over_alliance_goal")
+                    r"instead \(\"lift\", with lift_preset one of: down, over_neutral_goal, on_neutral_goal")
         for raw in (dict(field="override", steps=[dict(type="arm", arm_preset="down")]),
                     dict(field="override", steps=[dict(type="drive", actions=[dict(when="start", mechanism="arm",
                                                                                     preset="down")])])):
             with self.subTest(raw), self.assertRaisesRegex(ProjectError, replaced):
+                validate_project(raw)
+
+    def test_a_file_made_for_the_flange_claw_says_what_replaced_it(self):
+        bars = r"no Toggle arm any more\. It turns a Toggle with the two bars on its lift tower"
+        rim = r"the lift preset \"pin_in_cup\" held a Pin by its flange, and the claw now holds a Cup by its top rim"
+        cases = [
+            (dict(field="override", steps=[dict(type="toggle_arm", toggle_arm_preset="stowed")]), bars),
+            (dict(field="override", steps=[dict(type="drive", actions=[dict(when="start", mechanism="toggle_arm",
+                                                                             preset="stowed")])]), bars),
+            (dict(field="override", steps=[dict(type="lift", lift_preset="pin_in_cup")]), rim),
+            (dict(field="override", steps=[dict(type="drive", actions=[dict(when="start", mechanism="lift",
+                                                                             preset="over_alliance_goal")])]),
+             "the lift preset \"over_alliance_goal\" held a Pin"),
+            (dict(field="override", preload="yellow"),
+             r"The preload \"yellow\" was a Pin held in the claw by its flange.*Set preload to \"behind\""),
+        ]
+        for raw, message in cases:
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
                 validate_project(raw)
 
     def test_an_end_action_has_no_value(self):
@@ -240,32 +259,37 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(code.count("Keeps moving into the next step"), 2)
         self.compile(code)
 
-    def test_export_of_the_lift_claw_toggle_arm_and_actions_compiles(self):
-        project = validate_project(dict(field="override", preload="red", steps=[
-            dict(type="drive", distance=12, actions=[dict(when="start", mechanism="lift", preset="over_alliance_goal"),
+    def test_export_of_the_lift_claw_match_load_and_actions_compiles(self):
+        project = validate_project(dict(field="override", preload="behind", steps=[
+            dict(type="drive", distance=12, actions=[dict(when="start", mechanism="lift", preset="over_neutral_goal"),
                                                      dict(when="distance", value=8, mechanism="claw", preset="open")]),
             dict(path_step([(0, -24)]), actions=[dict(when="time", value=250, mechanism="lift", preset="down"),
-                                                 dict(when="end", mechanism="toggle_arm", preset="stowed")]),
-            dict(type="lift", lift_preset="pin_in_cup"),
-            dict(type="claw", claw_preset="closed", timeout_ms=800),
-            dict(type="toggle_arm", toggle_arm_preset="under_the_axle"),
+                                                 dict(when="end", mechanism="claw", preset="closed")]),
+            dict(type="lift", lift_preset="on_stack_on_neutral_goal"),
+            dict(type="claw", claw_preset="closed"),
+            dict(type="match_load", loader="red_right", match_load_pin="yellow"),
             dict(type="wall_reset", x=0, y=-63, heading=180,
                  actions=[dict(when="start", mechanism="lift", preset="top")])]))
         code = export(project)
         self.assertIn(exported_helpers("cascade_helpers.hpp"), code)
-        for text in ("static pros::Task cascade_task", "Preload: Red Pin, red half up",
+        for text in ("static pros::Task cascade_task", "Preload: Red/yellow Pin lying on the floor across the robot's back",
                      "mclib::device::MotorGroup lift_motors({7, -8}, mclib::device::Gearset::Green);",
-                     "cascade_rig.moveLift(cascade::LiftPreset::PinInCup, 1500)",
-                     "cascade_rig.moveClaw(cascade::ClawPreset::Closed, 800)",
-                     "cascade_rig.moveToggleArm(cascade::ToggleArmPreset::UnderTheAxle, 1000)",
+                     "mclib::device::Pneumatic claw_piston('A');",
+                     "[](bool closed) { claw_piston.set_value(closed); }",
+                     "cascade_rig.moveLift(cascade::LiftPreset::OnStackOnNeutralGoal, 1500)",
+                     "cascade_rig.setClaw(cascade::ClawPreset::Closed);",
+                     "// The Drive Team stands a Cup under the red right Loader with a yellow/yellow Pin in it. The robot "
+                     "does nothing.",
                      "{cascade::Action::When::AfterDistance, 8, cascade::Mechanism::Claw, "
                      "static_cast<int>(cascade::ClawPreset::Open)}",
                      "{cascade::Action::When::AfterTime, 250, cascade::Mechanism::Lift, "
                      "static_cast<int>(cascade::LiftPreset::Down)}",
-                     "{cascade::Action::When::End, 0, cascade::Mechanism::ToggleArm, "
-                     "static_cast<int>(cascade::ToggleArmPreset::Stowed)}",
+                     "{cascade::Action::When::End, 0, cascade::Mechanism::Claw, "
+                     "static_cast<int>(cascade::ClawPreset::Closed)}",
                      "const bool result = wallReset("):
             self.assertIn(text, code)
+        for gone in ("claw_motor", "toggle_arm", "ToggleArm"):
+            self.assertNotIn(gone, code)
         self.assertEqual(code.count("cascade_rig.finishActions();"), 3)
         self.compile(code)
 
@@ -279,7 +303,7 @@ class ExportTests(unittest.TestCase):
                                     for name, height in LIFT_HEIGHTS_IN.items()})
 
     def test_override_examples_export_and_compile(self):
-        for name in ("override_autonomous", "override_preload", "override_cup_to_goal"):
+        for name in ("override_autonomous", "override_stack_to_goal", "override_toggle_bars"):
             with self.subTest(name):
                 code = export(validate_project(example(name)))
                 self.assertIn("static pros::Task cascade_task", code)
@@ -312,12 +336,15 @@ class FieldDrawingTests(unittest.TestCase):
         sys.path.insert(0, str(VEXSIM))
         from vexsim.cascade import GEOMETRY
         robot = drawings(VEXSIM)["override"]["robot"]
-        self.assertEqual(robot["rails"]["stages"], GEOMETRY.stages)
-        self.assertEqual((robot["claw"]["lowest_in"], robot["claw"]["highest_in"]), (4.2, 40.2))
-        self.assertEqual((robot["claw"]["open_gap_in"], robot["claw"]["slot_in"]),
-                         (GEOMETRY.jaw_open_gap, GEOMETRY.flange_slot))
-        self.assertEqual(robot["toggle_arm"]["stowed_deg"], -90.0)
-        self.assertEqual(len(robot["aligner"]["legs_in"]), 2)
+        self.assertEqual(robot["stages"], GEOMETRY.stages)
+        self.assertEqual((robot["claw"]["lowest_in"], robot["claw"]["highest_in"]), (6.2, 42.2))
+        self.assertEqual((robot["claw"]["open_gap_in"], robot["claw"]["closed_gap_in"]), (4.4, 3.09))
+        moves = [part["moves"] for part in robot["parts"]]
+        self.assertEqual({kind: moves.count(kind) for kind in set(moves)}, dict(fixed=23, rails=2, jaw=2, lift=2))
+        bars = [part for part in robot["parts"] if part["name"] == "toggle bar"]
+        self.assertEqual((max(part["front"] for part in bars), min(part["bottom"] for part in bars)), (9.5, 13.8))
+        self.assertLess(robot["preloads"]["behind"]["forward_in"], -7.5)
+        self.assertLess(robot["preloads"]["beside"]["left_in"], -6.25)
 
 
 @unittest.skipUnless((VEXSIM / "vexsim/sim.py").is_file(), f"no vexsim checkout at {VEXSIM}")
@@ -329,25 +356,24 @@ class MatchesVexsimTests(unittest.TestCase):
     def test_lift_presets_are_the_claw_heights_vexsim_uses(self):
         from mechanisms import LIFT_HEIGHTS_IN
         from vexsim.cascade import LIFT_HEIGHTS
-        vexsim_names = dict(down="down", pin_in_cup="pin in a cup", over_alliance_goal="over an alliance goal",
-                            over_neutral_goal="over a neutral goal", over_center_goal="over the center goal",
-                            top="top")
-        self.assertEqual(LIFT_HEIGHTS_IN, {name: LIFT_HEIGHTS[vexsim_names[name]] for name in LIFT_HEIGHTS_IN})
+        vexsim_names = dict(down="down", over_neutral_goal="over a neutral goal", on_neutral_goal="on a neutral goal",
+                            over_stack_on_neutral_goal="over a stack on a neutral goal",
+                            on_stack_on_neutral_goal="on a stack on a neutral goal",
+                            over_center_goal="over the center goal", on_center_goal="on the center goal", top="top")
+        self.assertEqual(set(vexsim_names.values()), set(LIFT_HEIGHTS))
+        for name, height in LIFT_HEIGHTS_IN.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(height, LIFT_HEIGHTS[vexsim_names[name]], places=9)
 
-    def test_exported_motor_degrees_turn_into_vexsims_heights_and_angles(self):
-        from vexsim.cascade import GEOMETRY, TOGGLE_ARM_ANGLES
+    def test_exported_motor_degrees_turn_into_vexsims_heights(self):
+        from vexsim.cascade import GEOMETRY
         helpers = exported_helpers("cascade_helpers.hpp")
         lowest = float(re.search(r"kLowestClawIn = ([\d.]+);", helpers).group(1))
         teeth, pitch = re.search(r"kChainPerTurnIn = (\d+) \* ([\d.]+);", helpers).groups()
         stages = int(re.search(r"kLiftStages = (\d+);", helpers).group(1))
-        self.assertEqual((lowest, int(teeth), float(pitch), stages),
-                         (GEOMETRY.grip_lowest, GEOMETRY.sprocket_teeth, GEOMETRY.chain_pitch, GEOMETRY.stages))
-        arm = dict(re.findall(r"\{ToggleArmPreset::(\w+), ([\d.]+)\}", helpers))
-        names = dict(Stowed="stowed", OverTheAxle="over the axle", UnderTheAxle="under the axle")
-        for name, motor_degrees in arm.items():
-            with self.subTest(name):
-                swing = float(motor_degrees) / GEOMETRY.toggle_gear_ratio + TOGGLE_ARM_ANGLES["stowed"]
-                self.assertAlmostEqual(swing, TOGGLE_ARM_ANGLES[names[name]], delta=0.1)
+        self.assertEqual((int(teeth), float(pitch), stages),
+                         (GEOMETRY.sprocket_teeth, GEOMETRY.chain_pitch, GEOMETRY.stages))
+        self.assertAlmostEqual(lowest, GEOMETRY.grip_lowest, places=9)
 
     def test_drive_watts_are_the_motors_vexsim_puts_on_each_base(self):
         from project import PRESETS
@@ -475,59 +501,66 @@ class EngineTests(unittest.TestCase):
         self.assertGreater(step["contacts"][0]["peak_force_n"], 20)
         self.assertTrue(any(frame.get("contact") == "the wall" for frame in result["trace"]))
 
-    def test_8_override_preload_goes_into_the_red_goal_and_scores(self):
-        done, output = self.run_routine(example("override_preload"))
+    def test_8_the_claw_carries_a_stack_to_a_neutral_goal(self):
+        done, output = self.run_routine(example("override_stack_to_goal"))
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        self.assertEqual(result["summary"]["passed_steps"], 4)
-        drop = next(line for line in result["steps"][2]["info"] if line.startswith("Dropped"))
-        self.assertRegex(drop, r"red/yellow Pin at \(2[34], -4[67]\).*: the claw opened\.")
-        self.assertEqual(result["score"]["red"], dict(alliance_pins=1, yellow_pins=0, total=5))
+        self.assertEqual(result["summary"]["failed_steps"], 0)
+        info = [line for row in result["steps"] for line in row["info"]]
+        grips = [line for line in info if line.startswith("Gripped")]
+        drops = [line for line in info if line.startswith("Dropped")]
+        self.assertEqual(len(grips), 1, grips)
+        self.assertEqual(len(drops), 1, drops)
+        self.assertRegex(grips[0], r"^Gripped a Cup with a yellow Pin at \(2[34], -2[34]\)")
+        self.assertRegex(drops[0], r"^Dropped a Cup with a yellow Pin at \(-2[34], -4[67]\).*: the claw opened\.")
         self.assertEqual(len(result["pieces"]), 74)
         first, last = result["trace"][0], result["trace"][-1]
-        self.assertEqual(first["holding"], "a red/yellow Pin")
-        self.assertEqual((last["score_red"], last["score_blue"]), (5, 0))
-        self.assertLess(last["lift_height_in"], 4.6)
+        self.assertIsNone(first["holding"])
         self.assertIsNone(last["holding"])
+        self.assertLess(last["lift_height_in"], 6.5)
+        self.assertEqual(result["score"]["red"]["total"], 0)
         rules = result["autonomous"]["rules"]
-        self.assertEqual(rules["start_in"]["passed"], True)
+        self.assertEqual(rules["most_held"], dict(pins=1, cups=1, passed=True))
         self.assertLessEqual(max(rules["start_in"][key] for key in ("length", "width", "height")), 18.0)
-        self.assertEqual(rules["motors_w"], dict(drive=44, total=77.0, drive_limit=55.0, total_limit=88.0, passed=True))
+        self.assertEqual(rules["motors_w"], dict(drive=44, total=66.0, drive_limit=55.0, total_limit=88.0, passed=True))
         checks = [check["message"] for check in result["steps"][0]["checks"]]
-        self.assertIn("The drive motors are rated 44 W and all the motors 77 W. The limits are 55 W for the drive "
+        self.assertIn("The drive motors are rated 44 W and all the motors 66 W. The limits are 55 W for the drive "
                       "(R11) and 88 W in all (R10).", checks)
 
-    def test_9_override_autonomous_example_earns_the_win_point(self):
+    def test_9_override_autonomous_example_turns_both_toggles_and_scores_a_stack(self):
         done, output = self.run_routine(example("override_autonomous"))
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
         self.assertEqual(result["summary"]["failed_steps"], 0)
         self.assertLessEqual(result["summary"]["simulated_s"], 14.0)
         autonomous = result["autonomous"]
-        self.assertEqual((autonomous["red"], autonomous["blue"]), (55, 0))
+        self.assertEqual((autonomous["red"], autonomous["blue"]), (50, 0))
         self.assertEqual(autonomous["bonus"], dict(red=12, blue=0))
         self.assertEqual(autonomous["toggles"], dict(left="red", bottom="red", top="yellow", right="yellow"))
-        self.assertTrue(autonomous["win_point"]["earned"])
+        self.assertFalse(autonomous["win_point"]["earned"])
         self.assertTrue(all(rule["passed"] for rule in autonomous["rules"].values()), autonomous["rules"])
         goal_hits = [contact for row in result["steps"] for contact in row["contacts"]
                      if contact["element"].endswith("Goal")]
-        self.assertEqual({contact["element"] for contact in goal_hits}, {"the red left Goal"})
-        self.assertLess(max(contact["peak_force_n"] for contact in goal_hits), 100)
-        turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the")]
-        self.assertEqual([line.split(":")[0] for line in turned], ["Turned the left Toggle", "Turned the bottom Toggle"])
-
-    def test_10_cup_to_goal_example_grips_and_drops_the_pin(self):
-        done, output = self.run_routine(example("override_cup_to_goal"))
-        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
-        result = strict_json((output / "result.json").read_text())
-        self.assertEqual(result["summary"]["failed_steps"], 0)
-        grip = next(row for row in result["steps"] if row["type"] == "claw")
-        self.assertEqual(grip["move_result"], "Stopped closing on a game object")
-        self.assertTrue(any(line.startswith("Gripped a yellow Pin at (2") for line in grip["info"]))
+        self.assertEqual({contact["element"] for contact in goal_hits}, {"the neutral bottom Goal"})
+        self.assertLess(max(contact["peak_force_n"] for contact in goal_hits), 150)
         info = [line for row in result["steps"] for line in row["info"]]
-        self.assertTrue(any(re.match(r"Dropped a yellow Pin at \(2[34], -4[67]\)", line) for line in info), info)
-        self.assertEqual(result["autonomous"]["rules"]["most_held"], dict(pins=1, cups=0, passed=True))
-        self.assertEqual((result["autonomous"]["red"], result["autonomous"]["blue"]), (40, 0))
+        turned = [line.split(" now")[0] for line in info if line.startswith("Turned the")]
+        self.assertEqual(turned, ["Turned the left Toggle: blue", "Turned the left Toggle: red",
+                                  "Turned the bottom Toggle: blue", "Turned the bottom Toggle: red"])
+        self.assertEqual(len([line for line in info if line.startswith("Gripped")]), 1)
+        self.assertEqual(len([line for line in info if line.startswith("Dropped")]), 1)
+
+    def test_10_a_match_load_in_the_autonomous_period_breaks_sg11a(self):
+        project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
+                       start=dict(x=0, y=-62.7, heading=0),
+                       steps=[dict(type="match_load", loader="red_left", match_load_pin="red_yellow_up")])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 1, done.stderr[-3000:])
+        row = strict_json((output / "result.json").read_text())["steps"][0]
+        self.assertFalse(row["passed"])
+        self.assertIn("Match Loads may only be loaded in the Driver Controlled Period (SG11a).", row["reason"])
+        self.assertIn("The Drive Team stood a Cup under the red left Loader with a red/yellow Pin in it, yellow half up.",
+                      [check["message"] for check in row["checks"]])
 
     def test_11_a_step_stopped_by_a_goal_names_the_goal_not_the_controller(self):
         project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
@@ -541,37 +574,28 @@ class EngineTests(unittest.TestCase):
         self.assertRegex(row["notes"][0], r"^The robot was stopped by the red left Goal: it moved \d\.\d in of the "
                                           r"30\.0 in asked for\. The controller was not at fault\.")
 
-    def test_12_a_toggle_turns_the_way_the_toggle_arm_pushes_it(self):
-        def press_left_toggle(preset):
-            project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
-                           start=dict(x=0, y=-62.7, heading=0), steps=[
-                dict(type="drive", distance=5, actions=[dict(when="distance", value=2.5, mechanism="toggle_arm",
-                                                             preset=preset)]),
-                dict(type="drive", distance=-4.5, volts=4, chain=True),
-                dict(type="drive", distance=-1, timeout_ms=1000),
-                dict(type="toggle_arm", toggle_arm_preset="stowed"),
-                dict(type="drive", distance=10)])
+    def test_12_the_toggle_bars_turn_a_toggle_top_toward_the_wall(self):
+        def hit(toggle, start):
+            project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"), start=start,
+                           steps=[dict(type="drive", distance=13, chain=True),
+                                  dict(type="drive", distance=-1, timeout_ms=500)])
             done, output = self.run_routine(project)
             self.assertEqual(done.returncode, 0, done.stderr[-3000:])
             result = strict_json((output / "result.json").read_text())
-            press = result["steps"][1]
-            angles = [frame["toggles"]["left"]["angle_deg"] for frame in result["trace"]
-                      if press["start_time_s"] <= frame["t"] <= press["end_time_s"]]
-            turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the left")]
-            return angles, turned, result["autonomous"]["toggles"]["left"]
+            angles = [frame["toggles"][toggle]["angle_deg"] for frame in result["trace"]]
+            turned = [line for row in result["steps"] for line in row["info"] if line.startswith("Turned the")]
+            return angles, turned
 
-        angles, turned, setting = press_left_toggle("under_the_axle")
-        self.assertLess(min(angles), -60)
-        self.assertLess(max(angles), 0.5)
-        self.assertEqual(len(turned), 1, turned)
-        self.assertTrue(turned[0].startswith("Turned the left Toggle: red now faces into the field (yellow before)."))
-        self.assertEqual(setting, "red")
-        angles, turned, setting = press_left_toggle("over_the_axle")
-        self.assertGreater(max(angles), 60)
-        self.assertGreater(min(angles), -0.5)
-        self.assertEqual(len(turned), 1, turned)
-        self.assertTrue(turned[0].startswith("Turned the left Toggle: blue now faces into the field (yellow before)."))
-        self.assertEqual(setting, "blue")
+        for toggle, start, color in (("left", dict(x=0, y=-50, heading=180), "blue"),
+                                     ("bottom", dict(x=50, y=0, heading=90), "blue"),
+                                     ("right", dict(x=0, y=50, heading=0), "red")):
+            with self.subTest(toggle):
+                angles, turned = hit(toggle, start)
+                self.assertGreater(max(angles), 60)
+                self.assertGreater(min(angles), -0.5)
+                self.assertEqual(len(turned), 1, turned)
+                self.assertTrue(turned[0].startswith(f"Turned the {toggle} Toggle: {color} now faces into the field "
+                                                     "(yellow before)."), turned)
 
     def test_13_a_drive_over_55_w_breaks_r11_on_the_first_step(self):
         project = dict(field="override", preload="none", robot=dict(preset="six_motor_450"),
@@ -582,7 +606,7 @@ class EngineTests(unittest.TestCase):
         result = strict_json((output / "result.json").read_text())
         first = result["steps"][0]
         self.assertFalse(first["passed"])
-        self.assertIn("The drive motors are rated 66 W and all the motors 99 W. The limits are 55 W for the drive "
+        self.assertIn("The drive motors are rated 66 W and all the motors 88 W. The limits are 55 W for the drive "
                       "(R11) and 88 W in all (R10).", first["reason"])
         self.assertEqual(result["autonomous"]["rules"]["motors_w"]["passed"], False)
 

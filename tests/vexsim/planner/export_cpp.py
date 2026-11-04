@@ -1,11 +1,11 @@
 """A routine as an mclib autonomous() in C++.
 
 Paths use the code in path_helpers.hpp, copied into the output, so the robot
-bakes, plans and follows each path exactly as the simulator did. The lift,
-the claw and the Toggle arm use cascade_helpers.hpp the same way."""
+bakes, plans and follows each path exactly as the simulator did. The lift
+and the claw use cascade_helpers.hpp the same way."""
 from pathlib import Path
 
-from mechanisms import ACTION_TIMES, MECHANISM_ENUMS, MECHANISMS, PRELOADS, cpp_preset
+from mechanisms import ACTION_TIMES, MECHANISM_ENUMS, MECHANISMS, PRELOADS, cpp_preset, describe_match_load
 from geometry import designed_poses, path_layout
 from project import MECHANISM_STEPS, PRESETS, STEP_TYPES, TRACKING, carries_speed, step_time_limit
 
@@ -45,24 +45,19 @@ def uses_cascade(project):
                                                for step in project["steps"])
 
 
-CASCADE_SETUP = """// The lift, claw and Toggle arm motors. The ports are placeholders: set them
+CASCADE_SETUP = """// The lift motors and the claw's valve. The ports are placeholders: set them
 // to your robot's. The two lift motors share one shaft, so one is reversed.
-// Before the match, with the lift all the way down, the claw fully open and
-// the Toggle arm folded forward, power on the robot so the encoders read 0.
+// Before the match, with the lift all the way down, power on the robot so the
+// encoders read 0. The claw's solenoid is on 3-wire port A; true closes it.
 mclib::device::MotorGroup lift_motors({7, -8}, mclib::device::Gearset::Green);
-mclib::device::MotorGroup claw_motor({9}, mclib::device::Gearset::Green);
-mclib::device::MotorGroup toggle_arm_motor({10}, mclib::device::Gearset::Green);
+mclib::device::Pneumatic claw_piston('A');
 cascade::Rig cascade_rig([] { return lift_motors.getAveragePositionDeg(); },
                          [](double volts) { lift_motors.setVoltage(volts); },
-                         [] { return claw_motor.getAveragePositionDeg(); },
-                         [](double volts) { claw_motor.setVoltage(volts); },
-                         [] { return toggle_arm_motor.getAveragePositionDeg(); },
-                         [](double volts) { toggle_arm_motor.setVoltage(volts); });
+                         [](bool closed) { claw_piston.set_value(closed); });
 """
 
-CASCADE_TASK = """  // Runs the lift, the claw, the Toggle arm and the actions of each motion
-  // every 10 ms, as the simulator did. It keeps holding the last presets
-  // after autonomous.
+CASCADE_TASK = """  // Runs the lift and the actions of each motion every 10 ms, as the
+  // simulator did. It keeps holding the last lift preset after autonomous.
   static pros::Task cascade_task([] {
     while (true) {
       const auto pose = mclib::control::robotState().pose();
@@ -96,10 +91,17 @@ def with_actions(step, call, stop, result_type="MotionResult", reached="MotionRe
             "    cascade_rig.finishActions();", check, "  }"]
 
 
-def mechanism_call(step):
-    kind = step["type"]
-    method = MECHANISMS[kind]["method"]
-    return f"cascade_rig.{method}({cpp_preset(kind, step[kind + '_preset'])}, {step['timeout_ms']})"
+def lift_call(step):
+    return f"cascade_rig.moveLift({cpp_preset('lift', step['lift_preset'])}, {step['timeout_ms']})"
+
+
+def claw_call(step):
+    return f"cascade_rig.setClaw({cpp_preset('claw', step['claw_preset'])})"
+
+
+def match_load_comment(step):
+    return (f"  // The Drive Team stands {describe_match_load(step)}. The robot does nothing. Only legal in the "
+            "Driver Controlled Period (SG11a).")
 
 
 def describe(step, index):
@@ -161,7 +163,7 @@ def export(project, settings=None, plans=None):
                   exported_helpers()]
     if cascade:
         lines += ["// From mclib tests/vexsim/planner/cascade_helpers.hpp (Mozilla Public License 2.0):",
-                  "// the lift, claw and Toggle arm presets, and the actions run during a motion, as the",
+                  "// the lift presets, the claw, and the actions run during a motion, as the",
                   "// simulator ran them.",
                   exported_helpers("cascade_helpers.hpp"), CASCADE_SETUP]
     lines += ["using namespace mclib::units::literals;", "using mclib::control::MotionResult;", "",
@@ -174,7 +176,7 @@ def export(project, settings=None, plans=None):
               f"  mclib::control::robotState().setCorrectAngleDeg({number(start['heading'])});"]
     if cascade:
         if project["preload"] != "none":
-            lines.append(f"  // Preload: {PRELOADS[project['preload']]}, held in the claw by its flange.")
+            lines.append(f"  // Preload: {PRELOADS[project['preload']]}. It stays there when the robot drives away.")
         lines.append(CASCADE_TASK)
     if has_path:
         source = ("measured on the simulated robot. Measure your own robot (docs/motion.md)."
@@ -234,9 +236,13 @@ def export(project, settings=None, plans=None):
                 lines += with_actions(step, call, stop, result_type="bool", reached="true")
             else:
                 lines.append(f"  if (!{call}) return;" if stop else f"  {call};")
-        elif step["type"] in MECHANISM_STEPS:
-            call = mechanism_call(step)
+        elif step["type"] == "lift":
+            call = lift_call(step)
             lines.append(f"  if ({call} == cascade::MoveResult::TimedOut) return;" if stop else f"  {call};")
+        elif step["type"] == "claw":
+            lines.append(f"  {claw_call(step)};")
+        elif step["type"] == "match_load":
+            lines.append(match_load_comment(step))
         elif step["actions"]:
             lines += with_actions(step, motion_call(step), stop)
         else:

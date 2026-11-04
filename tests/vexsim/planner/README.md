@@ -122,96 +122,142 @@ Coordinates: red's Alliance Station is at the bottom (-Y). The left Toggle
 is at (0, -70.1), on red's wall. New routines start at (0, -62.7) facing
 +Y, the robot's back against that wall.
 
-## The Override robot: cascade lift, claw and Toggle arm
+## The Override robot: cascade lift, pneumatic claw and Toggle bars
 
 On the Override field the robot is vexsim's cascade robot, built like the
 Override robots teams have published:
 
-- a three-stage cascade lift on two 11 W motors, as on
+- a bite: a round notch cut into the front of the frame, between the front
+  wheels. A Goal or a stack the robot drives onto slides into it, and its
+  round back stops the Goal's middle right under the claw. It replaces the
+  sloped standoffs the robot had before;
+- a three-stage cascade lift behind the bite on two 11 W motors, as on
   [55885X](https://github.com/Jim-Ox/55885X-Inquisitors-2026-2027-VEX-Override-Code),
   [6104M](https://github.com/k1nguy3n/6104M-Monsoon-VEX-Override-2026-2027) and
   [569C](https://github.com/daydayparker/VexOverride569C), with rubber bands
   pulling it up as on
-  [1862X](https://github.com/ShadowKingYT444/Goofy_Goobers_code_OVERRIDE);
-- a claw on the top stage, 4 in wide open, that holds a Pin by its flange in
-  a groove along each jaw;
-- an aligner: two sloped standoffs under the claw that catch a Goal's top and
-  slide the robot onto its middle;
-- a Toggle arm on a 5.5 W motor geared 3:1, as on 55885X, that swings a pad
-  behind the robot;
+  [1862X](https://github.com/ShadowKingYT444/Goofy_Goobers_code_OVERRIDE).
+  It goes from fully down to fully up in about 0.58 s at 12 V. The robot's
+  owner chose that speed;
+- a pneumatic claw on the top stage, over the middle of the bite, as on
+  1862X and [Cosmic Electrons](https://github.com/CyrusKuhlmann/CE_OVERRIDE).
+  Its V-shaped jaws open to 4.4 in and close to 3.09 in. That is narrower
+  than a Cup's rims (3.16 in) and wider than anything on a Pin (3.02 in at
+  the flange). So the claw holds a standing Cup by its top rim, with or
+  without a Pin in it, and closes past a lone Pin. The piston strokes in
+  5 ms and uses no motor;
+- two fixed bars on the lift tower, sloping down and forward to tips 2 in
+  ahead of the frame and 13.8 in up, 0.6 in over a Toggle's axle. Driven
+  into a Toggle at 10 in/s or faster, they turn its top toward the wall.
+  They replace the Toggle arm and its motor;
 - a drive of four 11 W blue motors on 3.25 in omnis at 450 rpm.
 
-vexsim's `vexsim/cascade.py` builds it and lists its sources and guesses.
-The lift, claw and Toggle arm are mclib `PresetPositionMechanism`s, written
-in [cascade_helpers.hpp](cascade_helpers.hpp). The simulator runs that
-file, and **Export C++** copies it.
+The robot is 17.0 in long, 12.5 in wide and 17.91 in tall at the start.
+vexsim's `vexsim/cascade.py` builds it and lists its sources, its guesses
+and the choices the robot's owner made. The lift is an mclib
+`PresetPositionMechanism` and the claw a valve, both in
+[cascade_helpers.hpp](cascade_helpers.hpp). The simulator runs that file,
+and **Export C++** copies it.
 
 | Lift preset | Claw height | Use |
 | --- | --- | --- |
-| Down | 4.2 in | driving; nothing is held this low |
-| At a Pin standing in a Cup | 6.8 in | grip the yellow Pin that starts in a Cup |
-| Over an Alliance Goal | 6.65 in | hang a Pin 0.15 in above an Alliance Goal |
-| Over a Neutral Goal | 9.17 in | hang a Pin 0.15 in above a Neutral Goal |
-| Over the Center Goal | 12.17 in | hang a Pin 0.15 in above the Center Goal |
-| Top | 40.2 in | highest; the robot is 41.5 in tall |
+| Down | 6.2 in | grip a Cup standing on the floor, 0.28 in under its top rim |
+| Over a Neutral Goal | 15.79 in | carry a stack over a Neutral Goal's Pin |
+| On a Neutral Goal | 12.61 in | the held Cup sits on a Neutral Goal's Pin |
+| Over a stack on a Neutral Goal | 22.91 in | carry a stack over a stack already on a Neutral Goal |
+| On a stack on a Neutral Goal | 19.73 in | the held Cup sits on that stack's Pin |
+| Over the Center Goal | 18.79 in | carry a stack over the Center Goal's Pin |
+| On the Center Goal | 15.61 in | the held Cup sits on the Center Goal's Pin |
+| Top | 42.2 in | highest |
 
-The claw height is where the claw holds a Pin's flange. The lift motors turn
-an 18-tooth sprocket on 0.385 in chain, and the top stage moves three times
-as far as the first: 20.8 in of claw height per motor turn.
+The claw height is the middle of the jaws. The lift motors turn an
+18-tooth sprocket on 0.385 in chain, and the top stage moves three times as
+far as the first: 20.8 in of claw height per motor turn.
 
-| Claw preset | Claw motor | |
-| --- | --- | --- |
-| Open | 0° | jaws 4 in apart |
-| Closed | 180° | past where the jaws stop on a Pin, so the motor keeps squeezing |
+| Claw preset | Jaws |
+| --- | --- |
+| Open | 4.4 in apart |
+| Closed | 3.09 in apart, on a Cup's top rim |
 
-| Toggle arm preset | Toggle arm motor | Pad |
-| --- | --- | --- |
-| Stowed | 0° | folded forward over the robot |
-| Over the axle | 464.5° | 2 in behind the robot, 0.95 in over a Toggle's axle |
-| Under the axle | 540° | 2 in behind the robot, 0.75 in under a Toggle's axle |
+Four ways to use them:
 
-Three ways to use them:
-
-- **Move the lift**, **Open or close the claw** and **Swing the Toggle arm**
-  steps wait for the mechanism. The drive holds still. A claw step that
-  closes on a Pin ends 0.1 s after the jaws stop: "Stopped closing on a game
-  object".
-- **Mechanisms during this step**, on any drive step: move the lift, claw or
-  Toggle arm when the step starts, after the robot has gone some inches,
-  some milliseconds after the step started, or when the motion ends. The
-  step does not wait for it. An action that has not run when the motion ends
+- **Move the lift** waits until the lift gets to the preset or the time
+  limit runs out. The drive holds still.
+- **Open or close the claw** always takes 10 ms: the 5 ms stroke and a
+  margin. It has no time limit.
+- **Mechanisms during this step**, on any drive step: move the lift or the
+  claw when the step starts, after the robot has gone some inches, some
+  milliseconds after the step started, or when the motion ends. The step
+  does not wait for it. An action that has not run when the motion ends
   runs then, and the step says so.
-- **Preload**: none, or a red Alliance Pin held in the claw with its red or
-  its yellow half up.
+- **Preload**: a red/yellow Pin lying on the floor touching the robot, as
+  <SG5> asks: along its right side ("beside", the default for a robot
+  backed onto the wall) or across its back ("behind"), or none. The claw
+  cannot hold a lone Pin, so the preload stays where it lies.
 
-To turn a Toggle, swing the arm back with the robot clear of the wall, then
-back into the wall under the Toggle at a steady few volts: a chained drive
-with Max voltage about 4 V, then a short drive onto the wall. A drive that
-slows to a stop can leave the Toggle half turned. Stow the arm before
-driving away, or the pad drags the Toggle back.
-[override_autonomous.json](examples/override_autonomous.json) does this
-twice.
+To score a stack, drive the bite onto it with the lift down, close the
+claw, lift over a Neutral Goal, drive the bite onto the Goal, lower the
+lift onto it and open the claw.
+[override_stack_to_goal.json](examples/override_stack_to_goal.json) does
+this. Driving onto a stack along a curve can leave the claw an inch off
+its middle. Turn to face it first, then drive straight.
 
-The step lists what the claw did: "Gripped a yellow Pin at (24, -24), 6.8 in
-up, 0.17 s into the step." or "Dropped a red/yellow Pin at (24, -47), 5.6 in
-up: the claw opened."
+To turn a Toggle, face the wall and drive into the Toggle at 10 in/s or
+faster: a chained drive that would end past the wall. A slower push jams
+it about 36° in, short of the corner. Each hit turns it one face. On red's
+side (the left and bottom Toggles) the first hit brings blue to face the
+field and the second red. On blue's side (top and right) the first hit
+brings red. [override_toggle_bars.json](examples/override_toggle_bars.json)
+hits the left Toggle twice. Backing off at any speed, the bars drag the
+Toggle about 60° back toward the field until they slide over its top
+corner, and it falls back onto the face it was on. A hit at about 75 in/s
+can spin it two faces at once, so the long drive into the bottom Toggle in
+[override_autonomous.json](examples/override_autonomous.json) runs at 8 V.
+
+The robot may start facing the wall with its bars over a Toggle, as long as
+they do not touch it (Q&A 3278: extending over the Field Perimeter and a
+Toggle is legal; <SG1c> forbids only touching the Toggle).
+[override_autonomous.json](examples/override_autonomous.json) starts that
+way and backs off before its first hit.
+
+**Match load** is a step for the Drive Team. They lift one of red's
+Loaders by its handle and stand a Cup with a Pin in it on the floor under
+it, through the Loader's back (<SG11b>). The Loader stays up, and the robot
+takes the stack out through the bottom (<SG11d>): with the front of its
+frame on the wall the claw is over the Loader's middle. The robot does
+nothing during the step, and a robot standing where the Cup would land
+stops it. The rules:
+
+- Match Loads go through the alliance's own Loaders, and only in the Driver
+  Controlled Period (<SG11a>). The step fails if it starts in the first
+  15 s.
+- In a Robot Skills Match they can go in at any time, through red's
+  Loaders (<RSC2d>).
+- A Drive Team Member may push down on the Loader's handle so the Loader
+  holds the Pin and Cup in place for the robot (Q&A 3285).
+
+The step lists what the claw did: "Gripped a Cup with a yellow Pin at
+(24, -23), 3.2 in up, 0.01 s into the step." or "Dropped a Cup with a
+yellow Pin at (-24, -47), 9.8 in up, 0.00 s into the step: the claw
+opened." A held stack is one Pin and one Cup, inside <SG6> (Q&A 3166).
 
 The first step checks the robot against the rules: at most 18 in long, wide
 and tall at the start (SG1), 88 W of motors in all (R10) and 55 W on the
-drive (R11). The cascade's lift, claw and Toggle arm motors are 33 W, so a
+drive (R11). The two lift motors are 22 W and the claw uses no motor, so a
 six-motor drive (66 W) fails: "The drive motors are rated 66 W and all the
-motors 99 W. The limits are 55 W for the drive (R11) and 88 W in all (R10)."
-New Override routines use the four-motor drive (44 W). During the run a
-step fails if the robot gets wider or longer than 24 in (SG2), taller than
-50 in (SG3), or holds more than one Pin and one Cup (SG6).
+motors 88 W. The limits are 55 W for the drive (R11) and 88 W in all
+(R10)." New Override routines use the four-motor drive (44 W, 66 W in
+all). During the run a step fails if the robot gets wider or longer than
+24 in (SG2), taller than 50 in (SG3), or holds more than one Pin and one
+Cup (SG6).
 
 ## The Override field in 3D
 
 On the Override field, **3D view** shows the field built from the manual's
 sizes: tiles, walls, Goals, Loaders, Toggles, every Pin and Cup, and the
-robot with its cascade stages, claw, aligner and Toggle arm. Playback moves
-all of it. Drag to turn the
-view and scroll to zoom. Click the view, then press 1 to 4 for a camera or
+robot with its bite, cascade stages, claw and Toggle bars. Playback moves
+all of it, and a Loader the Drive Team lifted for a Match Load is drawn
+raised. Drag to turn the view and scroll to zoom. Click the view, then press 1 to 4 for a camera or
 5 to follow the robot. The score panel stays on top.
 
 VEX's Field CAD is not used. Its download page refused this machine (HTTP
@@ -230,9 +276,9 @@ time. After the run it also shows:
 - whether the robot is in the Midfield.
 
 A Toggle turns the way the robot pushes it where they touch. Pushed under
-the axle, the bottom goes toward the wall and your colour comes up facing
-the field. Pushed over the axle, the top goes toward the wall. If it cannot
-turn that way, the robot is held back as by a wall.
+the axle, the bottom goes toward the wall. Pushed over the axle, as the
+Toggle bars do, the top goes toward the wall. If it cannot turn that way,
+the robot is held back as by a wall.
 
 A Toggle sets the colour of the yellow halves in its Quadrant only while it
 sits flat on a face and nothing touches it. A robot that is still pushing it
@@ -251,11 +297,9 @@ The robot's sizes, masses and frictions that no source gives are in
 
 | What | Guess | Why |
 | --- | --- | --- |
-| Lift presets | the claw heights in the table above | worked out from the Goal heights: 0.15 in of clearance over each Goal |
+| Lift presets | the claw heights in the table above | worked out from the Goal and Pin heights: "on" sets the held Cup's rim on the Pin's flange, "over" carries the Cup's bottom 0.25 in over the Pin's tip; vexsim's `LIFT_HEIGHTS` |
 | Lift gains | kp 6.0 and kd 20 on inches of claw height, 12 V, plus 1.4 V to hold against the rubber bands | tuned in the simulator |
-| Claw gains | kp 0.1 on degrees, 12 V | tuned in the simulator |
-| Toggle arm gains | kp 0.12 and kd 0.6 on degrees, 12 V | tuned in the simulator so the pad holds while the robot backs into a Toggle |
-| Toggle arm presets | 464.5° and 540° | worked out from the arm length and the Toggle's axle height |
+| Claw step | 10 ms | the 5 ms piston stroke in vexsim's `GUESSES`, doubled |
 | Pin mass | 60 g | hollow moulded part of this size |
 | Cup mass | 45 g | thin moulded shell |
 | Toggle mass | 0.40 kg | 26 in triangular extrusion |
@@ -268,12 +312,13 @@ The robot's sizes, masses and frictions that no source gives are in
 | Toggle damping | 2e-3 N m s | a dropped bar stops rocking in about 0.1 s |
 | Toggle push | a robot turns it without slowing; Pins and Cups do not touch it | 0.1 N m is a few newtons on a robot |
 | Toggle contact | the middle of where a part and the bar overlap; friction 0.35 there can hold the bar | the robot on field element figure |
+| Toggle drag | a part backing away from the wall side of the bar turns it just far enough to pass, and the bar keeps no spin from it | a real bar dragged to within 2° of its corner by a fast back-off might roll on over |
 | Friction | floor 0.5, piece on piece 0.3, piece on robot 0.4, robot on field element 0.35 | plastic on foam tile and plastic |
 | Bounce | restitution 0.15 | moulded plastic |
 | Rest | a piece slower than 0.02 m/s and 0.4 rad/s for 0.2 s sleeps | |
 | Nesting | a Pin tip inside a Goal or Cup opening, lined up within 25°, drops in and is held | |
 | Hit force | averaged over 20 ms | how long a frame and bumper take to give |
-| Exported ports | lift on ports 7 and -8, claw on port 9, Toggle arm on port 10, green cartridges | placeholders: change them to your robot's |
+| Exported ports | lift on ports 7 and -8 with green cartridges, claw valve on ADI port A | placeholders: change them to your robot's |
 
 ## Checks
 
@@ -342,9 +387,9 @@ and what to change.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
-| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles and the preload, 55 points and the Win Point in 12.6 s, with mechanism actions during chained motions |
-| [override_preload.json](examples/override_preload.json) | the preload into a Goal, with lift and claw actions at the start, at the end and after a time; 5 points |
-| [override_cup_to_goal.json](examples/override_cup_to_goal.json) | turn the left Toggle, take the yellow Pin out of a Cup and drop it in a Goal; 40 points in 11.5 s |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 12.9 s, with claw and lift actions during a drive |
+| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the turn and the drive away; 0 points, because the left Toggle is still yellow |
+| [override_toggle_bars.json](examples/override_toggle_bars.json) | turn to face red's wall and hit the left Toggle twice with the bars: blue, then red; 20 points |
 
 ## Files
 
@@ -355,7 +400,7 @@ and what to change.
 | `project.py` | the routine format, its limits and its error messages |
 | `geometry.py` | where each step leaves the robot and the curve of each path |
 | `path_helpers.hpp`, `path_bridge.cpp` | path planning and following in C++, shared with the export |
-| `cascade_helpers.hpp`, `cascade_bridge.cpp`, `mechanisms.py` | the Override lift, claw and Toggle arm in C++, shared with the export; the score and the robot rules |
+| `cascade_helpers.hpp`, `cascade_bridge.cpp`, `mechanisms.py` | the Override lift and claw in C++, shared with the export; Match Loads, the score and the robot rules |
 | `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
 | `export_cpp.py` | the C++ export |
 | `native_viewer.py` | serves vexsim's 3D view for recorded runs |
@@ -384,12 +429,10 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 
 ## Limits
 
-- Push Back has no game objects. On Override nothing starts in the Loaders
-  and there is no human player to load them.
-- The lift, claw and Toggle arm draw no current from the simulated
-  battery, and their encoders are exact.
-- The Toggle arm's pad collides as a square that does not turn with the
-  arm.
+- Push Back has no game objects. On Override nothing starts in the Loaders;
+  a **Match load** step puts a stack there.
+- The lift draws no current from the simulated battery, and its encoders
+  are exact. The claw needs no air: the tank never runs out.
 - Pins and Cups do not touch the Toggles.
 - Every simulated drive has omni wheels on all corners.
 - The 3D view needs Three.js 0.160.0 in the vexsim checkout's

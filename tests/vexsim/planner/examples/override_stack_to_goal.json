@@ -1,0 +1,21 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: carry a stack to a Neutral Goal",
+  "description": "Drives the bite onto the yellow stack at (23.5, -23.5), closes the claw on the Cup's rim and sets the stack on the Pin in the neutral left Goal. The lift rises during the turn and goes down 0.3 s after the robot starts backing away. The left Toggle is still yellow, so the stack scores for neither alliance.",
+  "field": "override",
+  "preload": "beside",
+  "robot": {"preset": "four_motor_450"},
+  "start": {"x": 0, "y": -62.7, "heading": 0},
+  "steps": [
+    {"type": "drive", "note": "clear the wall before turning", "distance": 4},
+    {"type": "turn_to_point", "x": 23.55, "y": -23.55},
+    {"type": "drive", "note": "the bite onto the stack until the Cup meets the plate", "distance": 36.93},
+    {"type": "claw", "note": "close on the Cup's top rim", "claw_preset": "closed"},
+    {"type": "turn_to_point", "note": "lift the stack while turning", "x": -23.55, "y": -47.09, "actions": [{"when": "start", "mechanism": "lift", "preset": "over_neutral_goal"}]},
+    {"type": "drive", "note": "the bite onto the Goal: the stack is over its Pin", "distance": 42.3},
+    {"type": "lift", "note": "set the Cup's rim on the Goal's Pin", "lift_preset": "on_neutral_goal"},
+    {"type": "claw", "claw_preset": "open"},
+    {"type": "drive", "note": "back away, then lower the lift", "distance": -8, "actions": [{"when": "time", "value": 300, "mechanism": "lift", "preset": "down"}]}
+  ]
+}

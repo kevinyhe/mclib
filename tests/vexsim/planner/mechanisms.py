@@ -1,9 +1,9 @@
-"""The Override robot's cascade lift, claw and Toggle arm in the planner.
+"""The Override robot's cascade lift and pneumatic claw in the planner.
 
-cascade_helpers.hpp holds an mclib PresetPositionMechanism for each. Here
-their sensor reads and motor writes are connected to the simulated motors of
-vexsim's cascade robot, and Pins and Cups are turned into planner coordinates
-for the page.
+cascade_helpers.hpp holds an mclib PresetPositionMechanism for the lift and a
+valve for the claw. Here the lift's sensor reads and motor writes, and the
+claw's valve, are connected to vexsim's cascade robot, and Pins and Cups are
+turned into planner coordinates for the page.
 """
 import ctypes as C
 import math
@@ -11,37 +11,49 @@ import math
 from fields import piece_pose, to_planner
 
 LIFT_PRESETS = {
-    "down": "Down: claw 4.2 in up",
-    "pin_in_cup": "At a Pin standing in a Cup: claw 6.8 in up",
-    "over_alliance_goal": "Over an Alliance Goal: claw 6.65 in up",
-    "over_neutral_goal": "Over a Neutral Goal: claw 9.17 in up",
-    "over_center_goal": "Over the Center Goal: claw 12.17 in up",
-    "top": "Top: claw 40.2 in up",
+    "down": "Down: claw 6.2 in up, on a Cup standing on the floor",
+    "over_neutral_goal": "Over a Neutral Goal: claw 15.79 in up",
+    "on_neutral_goal": "On a Neutral Goal: claw 12.61 in up",
+    "over_stack_on_neutral_goal": "Over a stack on a Neutral Goal: claw 22.91 in up",
+    "on_stack_on_neutral_goal": "On a stack on a Neutral Goal: claw 19.73 in up",
+    "over_center_goal": "Over the Center Goal: claw 18.79 in up",
+    "on_center_goal": "On the Center Goal: claw 15.61 in up",
+    "top": "Top: claw 42.2 in up",
 }
 #: The claw heights the presets name, inches: cascade_helpers.hpp holds the same numbers
-LIFT_HEIGHTS_IN = dict(down=4.2, pin_in_cup=6.8, over_alliance_goal=6.65, over_neutral_goal=9.17,
-                       over_center_goal=12.17, top=40.2)
-CLAW_PRESETS = {"open": "Open: jaws 4 in apart (0°)", "closed": "Closed: squeezing (180°)"}
-TOGGLE_ARM_PRESETS = {
-    "stowed": "Stowed: folded forward over the robot (0°)",
-    "over_the_axle": "Over the axle: pad behind the robot, 0.95 in over a Toggle's axle (464.5°)",
-    "under_the_axle": "Under the axle: pad behind the robot, 0.75 in under a Toggle's axle (540°)",
-}
+LIFT_HEIGHTS_IN = dict(down=6.2, over_neutral_goal=15.79, on_neutral_goal=12.61, over_stack_on_neutral_goal=22.91,
+                       on_stack_on_neutral_goal=19.73, over_center_goal=18.79, on_center_goal=15.61, top=42.2)
+CLAW_PRESETS = {"open": "Open: jaws 4.4 in apart", "closed": "Closed: jaws 3.09 in apart, on a Cup's top rim"}
 MECHANISMS = {
-    "lift": dict(label="Lift", presets=LIFT_PRESETS, enum="cascade::LiftPreset", method="moveLift"),
-    "claw": dict(label="Claw", presets=CLAW_PRESETS, enum="cascade::ClawPreset", method="moveClaw"),
-    "toggle_arm": dict(label="Toggle arm", presets=TOGGLE_ARM_PRESETS, enum="cascade::ToggleArmPreset",
-                       method="moveToggleArm"),
+    "lift": dict(label="Lift", presets=LIFT_PRESETS, enum="cascade::LiftPreset"),
+    "claw": dict(label="Claw", presets=CLAW_PRESETS, enum="cascade::ClawPreset"),
 }
-MECHANISM_ENUMS = {"lift": "cascade::Mechanism::Lift", "claw": "cascade::Mechanism::Claw",
-                   "toggle_arm": "cascade::Mechanism::ToggleArm"}
-#: Steps and actions from files made for the Flex robot, which had an inclined lift called the arm
-RETIRED_MECHANISMS = {"arm": "lift"}
+MECHANISM_ENUMS = {"lift": "cascade::Mechanism::Lift", "claw": "cascade::Mechanism::Claw"}
+#: Steps and actions the planner no longer has, and what to do instead
+RETIRED_MECHANISMS = {
+    "arm": "the arm was the Flex robot's inclined lift, which the planner no longer has. Use the lift instead "
+           "(\"lift\", with lift_preset one of: " + ", ".join(LIFT_PRESETS) + ")",
+    "toggle_arm": "the cascade robot has no Toggle arm any more. It turns a Toggle with the two bars on its "
+                  "lift tower: drive forward into the Toggle at 10 in/s or faster. Remove this toggle_arm step or "
+                  "action",
+}
+#: Lift presets of the cascade robot before its claw held Cups
+RETIRED_LIFT_PRESETS = ("pin_in_cup", "over_alliance_goal")
 ACTION_TIMES = {"start": "When the step starts", "distance": "After driving", "time": "After",
                 "end": "When the motion ends"}
 ACTION_UNITS = {"start": "", "distance": "in", "time": "ms", "end": ""}
-PRELOADS = {"none": "No preload", "yellow": "Red Pin, yellow half up", "red": "Red Pin, red half up"}
-MOVE_RESULTS = ("Used the whole time limit", "Reached the preset", "Stopped closing on a game object")
+#: <SG11a>: a robot's own alliance's Loaders, as seen from its Alliance Station; the vexsim names have spaces
+LOADERS = {"red_left": "Red left Loader", "red_right": "Red right Loader"}
+#: The Pin the Drive Team stands in a Match Load's Cup: (its colours, the half that points up)
+MATCH_LOAD_PINS = {"red_yellow_up": "Red/yellow Pin, yellow half up", "red_red_up": "Red/yellow Pin, red half up",
+                   "yellow": "Yellow/yellow Pin"}
+MATCH_LOAD_PIN_COLORS = {"red_yellow_up": (("red", "yellow"), "yellow"), "red_red_up": (("red", "yellow"), "red"),
+                         "yellow": (("yellow", "yellow"), "yellow")}
+PRELOADS = {"none": "No preload", "behind": "Red/yellow Pin lying on the floor across the robot's back",
+            "beside": "Red/yellow Pin lying on the floor along the robot's right side"}
+#: Preloads from when the claw held a Pin by its flange
+RETIRED_PRELOADS = ("yellow", "red")
+MOVE_RESULTS = ("Used the whole time limit", "Reached the preset")
 #: <SC7>: the Autonomous Bonus goes to whoever leads when the period ends
 AUTONOMOUS_S = 15.0
 #: <SG1>, <SG2>, <SG3>, <SG6>, <R10>, <R11>
@@ -51,8 +63,9 @@ MAX_HEIGHT_IN = 50.0
 MAX_MOTOR_WATTS = 88.0
 MAX_DRIVE_WATTS = 55.0
 
-READ_DEGREES = C.CFUNCTYPE(C.c_double, C.c_int)
-WRITE_VOLTS = C.CFUNCTYPE(None, C.c_int, C.c_double)
+READ_LIFT_DEGREES = C.CFUNCTYPE(C.c_double)
+WRITE_LIFT_VOLTS = C.CFUNCTYPE(None, C.c_double)
+SET_CLAW_VALVE = C.CFUNCTYPE(None, C.c_int)
 
 
 def cpp_preset(mechanism, preset):
@@ -70,50 +83,64 @@ def mechanism_number(mechanism):
 
 def declare_cascade(lib):
     doubles = C.POINTER(C.c_double)
-    lib.planner_cascade_init.argtypes = [READ_DEGREES, WRITE_VOLTS]
+    lib.planner_cascade_init.argtypes = [READ_LIFT_DEGREES, WRITE_LIFT_VOLTS, SET_CLAW_VALVE]
     lib.planner_cascade_init.restype = None
     lib.planner_cascade_begin_actions.argtypes = [doubles, C.c_int]
     lib.planner_cascade_begin_actions.restype = None
     lib.planner_cascade_finish_actions.argtypes = []
     lib.planner_cascade_finish_actions.restype = C.c_int
-    lib.planner_cascade_move.argtypes = [C.c_int, C.c_int, C.c_int]
-    lib.planner_cascade_move.restype = C.c_int
+    lib.planner_cascade_move_lift.argtypes = [C.c_int, C.c_int]
+    lib.planner_cascade_move_lift.restype = C.c_int
+    lib.planner_cascade_set_claw.argtypes = [C.c_int]
+    lib.planner_cascade_set_claw.restype = None
 
 
 class CascadeRig:
-    """cascade::Rig in the C++, reading and driving the world's lift, claw
-    and Toggle arm motors. The two lift motors share a shaft: the rig reads
-    one and drives both. Errors in the callbacks go to the bridge, which
-    cancels the running motion and raises once C++ returns."""
+    """cascade::Rig in the C++, reading and driving the world's lift motors
+    and opening and closing its claw's valve. The two lift motors share a
+    shaft: the rig reads one and drives both. Errors in the callbacks go to
+    the bridge, which cancels the running motion and raises once C++
+    returns."""
 
     def __init__(self, lib, bridge, world):
         self.lib = lib
         self.bridge = bridge
-        mechanism = world.mechanism
-        self.motors = (mechanism.lift.motors, [mechanism.claw], [mechanism.toggle_arm.motor])
-        self.read_callback = READ_DEGREES(self.read)
-        self.write_callback = WRITE_VOLTS(self.write)
-        lib.planner_cascade_init(self.read_callback, self.write_callback)
+        self.lift_motors = world.mechanism.lift.motors
+        self.claw = world.mechanism.claw
+        self.read_callback = READ_LIFT_DEGREES(self.read_lift)
+        self.write_callback = WRITE_LIFT_VOLTS(self.write_lift)
+        self.valve_callback = SET_CLAW_VALVE(self.set_claw_valve)
+        lib.planner_cascade_init(self.read_callback, self.write_callback, self.valve_callback)
 
-    def read(self, mechanism):
+    def read_lift(self):
         try:
-            return math.degrees(self.motors[mechanism][0].position)
+            return math.degrees(self.lift_motors[0].position)
         except Exception as error:
             self.bridge.exceptions.append(str(error))
             return math.nan
 
-    def write(self, mechanism, volts):
+    def write_lift(self, volts):
         try:
             if not math.isfinite(volts):
-                raise ValueError(f"invalid {list(MECHANISMS)[mechanism]} voltage {volts}")
-            for motor in self.motors[mechanism]:
+                raise ValueError(f"invalid lift voltage {volts}")
+            for motor in self.lift_motors:
                 motor.set_voltage(max(-12.0, min(12.0, volts)))
         except Exception as error:
             self.bridge.exceptions.append(str(error))
 
+    def set_claw_valve(self, closed):
+        self.claw.command(bool(closed))
+
     def move(self, mechanism, preset, timeout_ms):
-        result = self.lib.planner_cascade_move(mechanism_number(mechanism), preset_number(mechanism, preset),
-                                               timeout_ms)
+        """The lift waits until it reaches the preset or the time runs out.
+        The claw waits one 10 ms tick for its piston, so it always reaches
+        the preset."""
+        number = preset_number(mechanism, preset)
+        if mechanism == "lift":
+            result = self.lib.planner_cascade_move_lift(number, timeout_ms)
+        else:
+            self.lib.planner_cascade_set_claw(number)
+            result = MOVE_RESULTS.index("Reached the preset")
         self.raise_errors()
         return result
 
@@ -136,15 +163,29 @@ class CascadeRig:
 def mechanism_reading(world, mechanism):
     """(what it is at, in words; the number) for a mechanism step's message."""
     from vexsim.units import INCH
-    robot = world.robot
     if mechanism == "lift":
-        height = robot.grip_height() / INCH
+        height = world.robot.grip_height() / INCH
         return f"the claw is {height:.2f} in up", height
-    if mechanism == "claw":
-        gap = world.mechanism.gap / INCH
-        return f"the jaws are {gap:.2f} in apart", gap
-    degrees = math.degrees(world.mechanism.toggle_arm.motor.position)
-    return f"the Toggle arm motor is at {degrees:.0f}°", degrees
+    gap = world.mechanism.gap / INCH
+    held = "nothing" if world.grip is None else describe_held(world)
+    return f"the jaws are {gap:.2f} in apart and hold {held}", gap
+
+
+def describe_match_load(step):
+    """What the Drive Team stands under the Loader, as in 'a Cup under the red
+    left Loader with a red/yellow Pin in it, yellow half up'."""
+    (lower, upper_color), upper = MATCH_LOAD_PIN_COLORS[step["match_load_pin"]]
+    which_half_up = "" if lower == upper_color else f", {upper} half up"
+    label = LOADERS[step["loader"]]
+    return f"a Cup under the {label[0].lower()}{label[1:]} with a {lower}/{upper_color} Pin in it{which_half_up}"
+
+
+def load_match(world, step):
+    """The Drive Team loads the step's Match Load (<SG11b>). Returns the move
+    result for a step that did what it was asked."""
+    colors, upper = MATCH_LOAD_PIN_COLORS[step["match_load_pin"]]
+    world.match_load(step["loader"].replace("_", " "), colors, upper)
+    return MOVE_RESULTS.index("Reached the preset")
 
 
 def frame_telemetry(world):
@@ -192,7 +233,8 @@ def claw_events(world, start, end):
             continue
         x, y = to_planner(event["at"][0], event["at"][1])
         height = event["at"][2] / INCH
-        line = (f"{verb} {describe_piece(world, event['piece'])} at ({x:.0f}, {y:.0f}), {height:.1f} in up, "
+        stacked = "".join(f" with {describe_piece(world, piece)}" for piece in event["stacked"])
+        line = (f"{verb} {describe_piece(world, event['piece'])}{stacked} at ({x:.0f}, {y:.0f}), {height:.1f} in up, "
                 f"{t - start:.2f} s into the step")
         lines.append(line + (f": {reason}." if reason else "."))
     return lines

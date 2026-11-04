@@ -1,6 +1,6 @@
 // Drives the real planner page in headless Chromium against a running
 // server.py: place points, plan, run, play back, compare, export, mirror,
-// and run the Override example with its lift, claw, score and 3D field.
+// and run the Override example with its lift, claw, Toggle bars, score and 3D field.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -270,16 +270,18 @@ try {
   await page.locator("#view-top").click();
   await page.locator("#example-picker").selectOption("override_autonomous");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
-    /two Toggles/.test(document.querySelector("#routine-name").value));
+    /both red Toggles/.test(document.querySelector("#routine-name").value));
   project = await draft();
   assert.equal(project.field, "override");
-  assert.equal(project.preload, "yellow");
-  assert.match(await page.locator("#step-list li").first().innerText(), /Toggle arm to Under the axle: pad behind the robot, 0\.75 in under a Toggle's axle \(540°\) after 2\.5 in/);
+  assert.equal(project.preload, "beside");
+  assert.match(await page.locator("#step-list li").nth(6).innerText(),
+               /Claw to Closed: jaws 3\.09 in apart, on a Cup's top rim after 33\.39 in/);
   await page.locator("#tab-robot").click();
   const chosen = await page.locator("#pane-robot select").evaluateAll((selects) => selects.map((select) => select.selectedOptions[0]?.text));
-  assert(chosen.includes("Override (2026-27)") && chosen.includes("Red Pin, yellow half up"), JSON.stringify(chosen));
+  assert(chosen.includes("Override (2026-27)") && chosen.includes("Red/yellow Pin lying on the floor along the robot's right side"),
+         JSON.stringify(chosen));
   await page.locator("#tab-step").click();
-  pass("The Override example opens on the Override field with the preload and Toggle arm actions");
+  pass("The Override example opens on the Override field with the preload beside the robot and claw and lift actions");
 
   await page.locator("#step-list li").first().click();
   await page.locator("#add-step summary").click();
@@ -287,32 +289,36 @@ try {
   assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Open or close the claw/);
   assert.match(await page.locator("#step-list li").nth(1).innerText(), /Closed/);
   await page.keyboard.press("Control+z");
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.length === 10);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.length === 14);
   pass("A claw step can be added after the first step; Ctrl+Z removes it");
 
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 600000 });
-  assert.match(await page.locator("#run-summary").innerText(), /10 of 10 steps passed/);
+  assert.match(await page.locator("#run-summary").innerText(), /14 of 14 steps passed/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
   const score = await page.locator("#score-panel").innerText();
-  assert.match(score, /Autonomous ended at 1[23]\.\d\d s: red 55, blue 0/);
+  assert.match(score, /Autonomous ended at 1[23]\.\d\d s: red 50, blue 0/);
   assert.match(score, /Autonomous Bonus: red 12/);
-  assert.match(score, /Win Point[\s\S]*Earned/);
+  assert.match(score, /Win Point: red owns 5 of 6 Pin halves needed[\s\S]*Not earned/);
   pass(`The Override autonomous scores: ${score.split("\n").find((line) => line.startsWith("Autonomous ended"))}`);
   await shot("10-override-score");
 
-  await page.locator("#step-list li").nth(1).click();
-  assert.match(await page.locator("#pane-step").innerText(), /Turned the left Toggle: red now faces into the field/);
-  await page.locator("#step-list li").nth(7).click();
-  assert.match(await page.locator("#pane-step").innerText(), /Turned the bottom Toggle: red now faces into the field/);
-  await page.locator("#timeline").evaluate((input) => { input.value = "3.0"; input.dispatchEvent(new Event("input")); });
+  const turnedIn = async (index, pattern) => {
+    await page.locator("#step-list li").nth(index).click();
+    assert.match(await page.locator("#pane-step").innerText(), pattern);
+  };
+  await turnedIn(1, /Turned the left Toggle: blue now faces into the field/);
+  await turnedIn(3, /Turned the left Toggle: red now faces into the field/);
+  await turnedIn(10, /Turned the bottom Toggle: blue now faces into the field/);
+  await turnedIn(12, /Turned the bottom Toggle: red now faces into the field/);
+  await page.locator("#timeline").evaluate((input) => { input.value = "6.5"; input.dispatchEvent(new Event("input")); });
   await page.locator("#tab-telemetry").click();
   const lift = await page.locator("#pane-telemetry").innerText();
-  assert.match(lift, /Lift, claw and Toggle arm/i);
-  assert.match(lift, /red\/yellow Pin/);
+  assert.match(lift, /Lift and claw/i);
+  assert.match(lift, /a Cup with a yellow Pin/);
   await page.locator("#tab-step").click();
-  pass("The step says when a Toggle turned, and telemetry shows the Pin in the claw");
+  pass("The steps say when each Toggle turned, and telemetry shows the stack in the claw");
   await shot("11-override-top");
 
   const shown3d = async (check) => {
@@ -321,9 +327,9 @@ try {
       if (!applied || !JSON.parse(applied).available) return false;
       const { robot, toggles } = JSON.parse(applied);
       const checks = {
-        holdingThePreload: robot.lift_height_in > 6.0 && robot.claw_gap_in > 2.0 && robot.claw_gap_in < 3.0,
-        armSwungBack: robot.toggle_arm_angle_deg > 80,
-        bothTogglesTurned: toggles.left !== "yellow" && toggles.bottom !== "yellow",
+        carryingTheStack: robot.lift_height_in > 12.0 && robot.claw_gap_in < 3.2,
+        leftTurnedBlue: toggles.left === "blue",
+        bothTogglesTurned: toggles.left === "red" && toggles.bottom === "red",
       };
       return checks[name];
     }, check, { timeout: 30000 });
@@ -333,25 +339,24 @@ try {
     input.value = String(value); input.dispatchEvent(new Event("input"));
   }, seconds);
   await page.locator("#view-3d").click();
-  let view = await shown3d("holdingThePreload");
+  let view = await shown3d("carryingTheStack");
   assert.deepEqual(view.toggles, { left: "red", bottom: "yellow", top: "yellow", right: "yellow" });
   await page.waitForTimeout(1500);
   await shot("12-override-3d");
-  pass(`At 3 s the 3D robot holds the preload with the claw ${view.robot.lift_height_in.toFixed(2)} in up and the jaws ` +
-       `${view.robot.claw_gap_in.toFixed(2)} in apart`);
+  pass(`At 6.5 s the 3D robot carries the stack with the claw ${view.robot.lift_height_in.toFixed(2)} in up and the ` +
+       `jaws ${view.robot.claw_gap_in.toFixed(2)} in apart`);
   await page.locator("#viewer3d").click({ position: { x: 400, y: 300 } });
   await page.keyboard.press("5");
   await page.waitForTimeout(1000);
   await shot("13-override-claw");
-  await scrub(1.3);
-  view = await shown3d("armSwungBack");
-  assert.deepEqual(view.toggles, { left: "yellow", bottom: "yellow", top: "yellow", right: "yellow" }, `at ${view.t} s`);
-  pass(`The 3D Toggle arm is swung back to ${view.robot.toggle_arm_angle_deg.toFixed(0)}° while the robot backs into the left Toggle`);
+  await scrub(1.2);
+  view = await shown3d("leftTurnedBlue");
+  pass(`At ${view.t} s the 3D left Toggle shows blue after the first hit`);
   await scrub(15);
   view = await shown3d("bothTogglesTurned");
   assert.deepEqual(view.toggles, { left: "red", bottom: "red", top: "yellow", right: "yellow" });
   pass("The 3D Toggles turn the way the simulator turned them: red faces into the field on the left and bottom");
-  pass("The 3D view shows the Override field, the robot with its lift and claw, and the Pins");
+  pass("The 3D view shows the Override field, the robot with its lift, claw and Toggle bars, and the Pins");
   await page.locator("#view-top").click();
 
   await page.locator("#export-cpp").click();
@@ -359,10 +364,11 @@ try {
   const cascadeCode = await page.locator("#cpp-code").inputValue();
   assert.match(cascadeCode, /cascade::Rig cascade_rig/);
   assert.match(cascadeCode, /cascade_rig\.beginActions\(/);
-  assert.match(cascadeCode, /cascade::ToggleArmPreset::UnderTheAxle/);
-  assert.match(cascadeCode, /cascade::Action::When::End/);
+  assert.match(cascadeCode, /cascade::ClawPreset::Closed/);
+  assert.match(cascadeCode, /cascade_rig\.moveLift\(cascade::LiftPreset::OnNeutralGoal, 800\)/);
+  assert.match(cascadeCode, /cascade::Action::When::AfterDistance/);
   await page.locator("#cpp-dialog .dialog-foot button.primary").click();
-  pass("Export C++ writes the lift, claw, Toggle arm and actions with the same helpers the simulator ran");
+  pass("Export C++ writes the lift, claw and actions with the same helpers the simulator ran");
 
   const offsite = requests.filter((value) => /^https?:/.test(value) && new URL(value).origin !== url.origin);
   assert.deepEqual(offsite, [], "The page must not load anything from the internet");

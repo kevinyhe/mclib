@@ -214,7 +214,8 @@
 
   function newStep(type, after) {
     const info = state.config.step_types[type];
-    const step = { type, note: "", timeout_ms: 4000, volts: type === "wall_reset" ? 6 : 12, chain: false, actions: [], ...clone(info.defaults) };
+    const timeout = "fixed_ms" in info ? info.fixed_ms : 4000;
+    const step = { type, note: "", timeout_ms: timeout, volts: type === "wall_reset" ? 6 : 12, chain: false, actions: [], ...clone(info.defaults) };
     const pose = poses()[after]?.end ?? state.project.start;
     const ahead = along(pose.heading, 24);
     if ("x" in step && type !== "wall_reset") {
@@ -601,7 +602,7 @@
       case "wall_reset": return `set odometry to ${p(step.x, step.y)}, ${trim(step.heading)}°`;
       case "lift": return `to ${state.config.fields.lift_preset.choices[step.lift_preset]}`;
       case "claw": return state.config.fields.claw_preset.choices[step.claw_preset];
-      case "toggle_arm": return `to ${state.config.fields.toggle_arm_preset.choices[step.toggle_arm_preset]}`;
+      case "match_load": return `${state.config.fields.loader.choices[step.loader]}: ${state.config.fields.match_load_pin.choices[step.match_load_pin]}`;
       default: return "";
     }
   }
@@ -939,11 +940,10 @@
     else {
       const fields = info.fields.map((key) => fieldInput(step, key));
       children.push(element("div", { class: "form two" }, ...fields));
-      children.push(element("h3", { text: "Limits" }));
-      const limits = [fieldInput(step, "timeout_ms")];
-      if (!info.mechanism && step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
-      children.push(element("div", { class: "form two" }, ...limits));
-      if (!info.mechanism) {
+      const limits = "fixed_ms" in info ? [] : [fieldInput(step, "timeout_ms")];
+      if (!info.still && step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
+      if (limits.length) children.push(element("h3", { text: "Limits" }), element("div", { class: "form two" }, ...limits));
+      if (!info.still) {
         children.push(...actionsPane(step));
         children.push(element("h3", { text: "When it ends" }), chainInput(step, index));
       }
@@ -1230,15 +1230,17 @@
     return state.shown?.result?.pieces ?? state.shown?.live?.pieces ?? null;
   }
 
+  // The preload lies on the floor touching the robot (SG5).
   function designPreload(drawing) {
-    const preload = state.project.preload ?? "none";
-    if (preload === "none") return [];
+    if (state.project.preload === "none") return [];
     const start = state.project.start;
-    const claw = drawing.robot.claw;
-    const ahead = along(start.heading, preset().body_length_in / 2 + claw.ahead_in);
-    const colors = ["red", "yellow"];
-    const up = colors[1] === preload ? 1 : -1;
-    return [{ id: "preload", kind: "pin", colors, pose: [start.x + ahead.x, start.y + ahead.y, claw.lowest_in, 0, 0, up] }];
+    const preload = drawing.robot.preloads[state.project.preload];
+    const forward = along(start.heading, 1), left = along(start.heading - 90, 1);
+    const [axisForward, axisLeft, axisUp] = preload.axis;
+    return [{ id: "preload", kind: "pin", colors: ["red", "yellow"],
+      pose: [start.x + forward.x * preload.forward_in + left.x * preload.left_in,
+        start.y + forward.y * preload.forward_in + left.y * preload.left_in, preload.up_in,
+        forward.x * axisForward + left.x * axisLeft, forward.y * axisForward + left.y * axisLeft, axisUp] }];
   }
 
   // Every Pin and Cup at the playback time: the run's starting list moved by
@@ -1321,50 +1323,30 @@
     for (const piece of pieces) drawPiece(ctx, piece, drawing.piece_size);
   }
 
-  // The cascade robot's parts seen from above: the lift rails, the jaws, the
-  // aligner's V under them, and the Toggle arm and its pad.
-  function drawCascade(ctx, pose, gapIn, toggleArmDeg, size = null) {
+  // The cascade robot seen from above, from vexsim's parts: the frame around
+  // the bite, the lift rails, the Toggle bars, the carriage, the plate behind
+  // the jaws and the jaws, which close by `gapIn`.
+  const CASCADE_FILL = { drivetrain: "#d5d9df", lift: "#9aa1ab", "toggle bar": "#6f7783", claw: "#3a414c",
+    carriage: "rgba(179,38,46,.55)" };
+
+  function drawCascade(ctx, pose, gapIn) {
     const robot = fieldDrawing()?.robot;
     if (state.project.field !== "override" || !robot) return;
-    const body = size ?? preset();
-    const half = body.body_length_in / 2;
     const scale = state.view.scale;
     const p = toScreen(pose);
-    const rect = (back, front, right, left) => ctx.fillRect(-left * scale, -front * scale, (left - right) * scale, (front - back) * scale);
+    const closing = (robot.claw.open_gap_in - gapIn) / 2;
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(pose.heading * Math.PI / 180);
-    const rails = robot.rails;
-    ctx.fillStyle = "#9aa1ab";
-    for (const side of [1, -1]) {
-      const inner = side * rails.inner_in, outer = side * rails.outer_in;
-      rect(half - rails.back_in, half - rails.front_in, Math.min(inner, outer), Math.max(inner, outer));
-    }
-    const claw = robot.claw;
-    const grip = half + claw.ahead_in;
-    ctx.fillStyle = "rgba(90,98,110,.55)";
-    for (const leg of robot.aligner.legs_in) {
+    for (const part of robot.parts) {
+      if (!(part.name in CASCADE_FILL)) throw new Error(`no colour for the robot's ${part.name}`);
+      ctx.fillStyle = CASCADE_FILL[part.name];
+      const inward = part.moves === "jaw" ? (part.left > 0 ? -closing : closing) : 0;
       ctx.beginPath();
-      leg.forEach(([forward, left], index) => (index ? ctx.lineTo : ctx.moveTo).call(ctx, -left * scale, -(grip + forward) * scale));
+      part.outline.forEach(([forward, left], index) => (index ? ctx.lineTo : ctx.moveTo).call(ctx, -(left + inward) * scale, -forward * scale));
       ctx.closePath();
       ctx.fill();
     }
-    ctx.fillStyle = "#3a414c";
-    for (const side of [1, -1]) {
-      const near = side * gapIn / 2, far = side * (gapIn / 2 + claw.jaw_thickness_in);
-      rect(grip - claw.jaw_length_in / 2, grip + claw.jaw_length_in / 2, Math.min(near, far), Math.max(near, far));
-    }
-    const arm = robot.toggle_arm;
-    const pivot = -half + arm.pivot_from_back_in;
-    const pad = pivot - arm.length_in * Math.sin(toggleArmDeg * Math.PI / 180);
-    ctx.strokeStyle = "#b3262e";
-    ctx.lineWidth = Math.max(1, 0.35 * scale);
-    ctx.beginPath();
-    ctx.moveTo(0, -pivot * scale);
-    ctx.lineTo(0, -pad * scale);
-    ctx.stroke();
-    ctx.fillStyle = "#b3262e";
-    rect(pad - arm.pad_size_in / 2, pad + arm.pad_size_in / 2, -arm.pad_width_in / 2, arm.pad_width_in / 2);
     ctx.restore();
   }
 
@@ -1729,7 +1711,7 @@
     const size = Number.isFinite(frame.body_length_in) ? { body_length_in: frame.body_length_in, body_width_in: frame.body_width_in } : null;
     if (state.layers.odometry && !frame.coordinate_reset) drawRobot(ctx, { x: frame.estimated_x, y: frame.estimated_y, heading: frame.estimated_heading }, { stroke: "#e07b00", dash: [4, 3], size });
     if (state.layers.truth) drawRobot(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, { fill: "rgba(255,255,255,.82)", stroke: "#18202c", width: 2, size });
-    if (state.layers.truth && Number.isFinite(frame.claw_gap_in)) drawCascade(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, frame.claw_gap_in, frame.toggle_arm_angle_deg, size);
+    if (state.layers.truth && Number.isFinite(frame.claw_gap_in)) drawCascade(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, frame.claw_gap_in);
     if (Number.isFinite(frame.controller_carrot_x)) {
       const p = toScreen({ x: frame.controller_carrot_x, y: frame.controller_carrot_y });
       ctx.save();
@@ -1767,16 +1749,14 @@
     if (state.project.steps.length > 1) {
       const placed = [];
       state.project.steps.forEach((item, index) => {
-        if (stepInfo(item).mechanism) return;
+        if (stepInfo(item).still) return;
         if (item.type !== "path" || item.points.length) stepTag(ctx, all[index].end, index + 1, index === state.selected, placed);
       });
     }
     const start = state.project.start;
     drawRobot(ctx, start, { stroke: "#2563eb", dash: [5, 3], width: 1.6, fill: "rgba(37,99,235,.06)" });
     if (!state.shown && state.project.field === "override") {
-      const drawing = fieldDrawing();
-      const held = state.project.preload && state.project.preload !== "none";
-      drawCascade(ctx, start, held ? drawing.piece_size.pin_cone_in : drawing.robot.claw.closed_gap_in, drawing.robot.toggle_arm.stowed_deg);
+      drawCascade(ctx, start, fieldDrawing().robot.claw.open_gap_in);
     }
     const startTip = along(start.heading, HEADING_KNOB_IN);
     polyline(ctx, [start, { x: start.x + startTip.x, y: start.y + startTip.y }], "rgba(37,99,235,.6)", 1.2);

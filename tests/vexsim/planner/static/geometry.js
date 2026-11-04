@@ -114,7 +114,7 @@ function stepEndPose(step, pose, trackWidth) {
     case "turn": return { x: pose.x, y: pose.y, heading: step.heading };
     case "lift":
     case "claw":
-    case "toggle_arm":
+    case "match_load":
       return { ...pose };
     case "turn_to_point":
       return { x: pose.x, y: pose.y, heading: wrapDegrees(bearing(pose, step) + (step.direction === -1 ? 180 : 0)) };
@@ -269,13 +269,12 @@ function telemetryRows(frame, target) {
       ["Touching", f.contact ?? "nothing"],
       ["Contact force", num(f.contact_force_n, " N", 0)],
     ]]] : []),
-    ...("lift_height_in" in f ? [["Lift, claw and Toggle arm", [
+    ...("lift_height_in" in f ? [["Lift and claw", [
       ["Claw height", num(f.lift_height_in, " in", 2)],
       ["Lift motors", `${num(f.lift_deg, "°", 0)} · ${num(f.lift_amps, " A", 2)}`],
-      ["Claw motor", `${num(f.claw_deg, "°", 0)} · ${num(f.claw_amps, " A", 2)}`],
+      ["Claw valve", f.claw_closed ? "closed" : "open"],
       ["Gap between the jaws", num(f.claw_gap_in, " in", 2)],
       ["Squeeze on the object", num(f.grip_force_n, " N", 1)],
-      ["Toggle arm motor", `${num(f.toggle_arm_deg, "°", 0)} · ${num(f.toggle_arm_amps, " A", 2)}`],
       ["Holding", f.holding ?? "nothing"],
       ["Score red / blue", pair(f.score_red, f.score_blue, "", 0)],
     ]]] : []),

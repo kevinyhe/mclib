@@ -28,11 +28,11 @@ sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
 from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
 from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, RuleWatch,  # noqa: E402
-                        autonomous_summary, claw_events, declare_cascade, frame_telemetry, mechanism_reading,
-                        score_summary, toggle_events, toggle_faces)
+                        autonomous_summary, claw_events, declare_cascade, describe_match_load, frame_telemetry,
+                        load_match, mechanism_reading, score_summary, toggle_events, toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
-from project import (LIMITS, PRESETS, STEP_TYPES, ProjectError, carries_speed, step_name, step_time_limit,
-                     strict_json, validate_project)  # noqa: E402
+from project import (LIMITS, PRESETS, STEP_TYPES, STILL_STEPS, ProjectError, carries_speed, step_name,  # noqa: E402
+                     step_time_limit, strict_json, validate_project)
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
 CASCADE_BRIDGE = HERE / "cascade_bridge.cpp"
@@ -374,7 +374,7 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
     """Where the controller is asked to finish, as it would be on the robot:
     relative moves count from where the robot is when the step starts."""
     kind = step["type"]
-    if kind in MECHANISMS:
+    if kind in STILL_STEPS:
         return dict(x=None, y=None, heading=None)
     if kind == "drive":
         radians = math.radians(commanded_heading)
@@ -413,7 +413,7 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan
 def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan):
     """Runs one step with the real mclib call. Returns followTrajectory()'s
     MotionResult for paths, wallReset()'s result for wall resets, and
-    cascade::MoveResult for the lift, the claw and the Toggle arm."""
+    cascade::MoveResult for the lift and the claw."""
     kind = step["type"]
     if kind in MECHANISMS:
         return rig.move(kind, step[f"{kind}_preset"], timeout_ms)
@@ -454,17 +454,35 @@ def score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading):
     kind = step["type"]
     preset = MECHANISMS[kind]["presets"][step[f"{kind}_preset"]]
     seconds, limit_s = duration_ms / 1000, timeout_ms / 1000
-    name = MECHANISMS[kind]["label"]
-    if motion_result == 1:
-        message = f"The {name.lower()} reached {preset} in {seconds:.2f} s (limit {limit_s:.2f} s): {reading}."
-    elif motion_result == 2:
-        message = (f"The jaws stopped on a game object after {seconds:.2f} s (limit {limit_s:.2f} s): "
-                   f"{reading}.")
+    reached = motion_result == MOVE_RESULTS.index("Reached the preset")
+    if kind == "claw":
+        verb = "closed" if step["claw_preset"] == "closed" else "opened"
+        return [check("time", "Time", reached, f"The claw {verb} in {seconds:.2f} s: {reading}.",
+                      measured=round(seconds, 3), limit=limit_s, unit="s")]
+    if reached:
+        message = f"The lift reached {preset} in {seconds:.2f} s (limit {limit_s:.2f} s): {reading}."
     else:
-        message = (f"The {name.lower()} did not reach {preset} in the {limit_s:.2f} s time limit: "
-                   f"{reading}.")
-    return [check("time", "Time", motion_result in (1, 2), message, measured=round(seconds, 3), limit=limit_s,
-                  unit="s")]
+        message = f"The lift did not reach {preset} in the {limit_s:.2f} s time limit: {reading}."
+    return [check("time", "Time", reached, message, measured=round(seconds, 3), limit=limit_s, unit="s")]
+
+
+def score_match_load(step, started_s, error):
+    """<SG11a>: Match Loads only in the Driver Controlled Period."""
+    if started_s < AUTONOMOUS_S:
+        rules = check("rules", "Rules", False,
+                      f"Match Loads may only be loaded in the Driver Controlled Period (SG11a). This step starts "
+                      f"{started_s:.2f} s into the match, inside the {AUTONOMOUS_S:g} s autonomous period.",
+                      measured=round(started_s, 2), limit=AUTONOMOUS_S, unit="s")
+    else:
+        rules = check("rules", "Rules", True,
+                      f"Loaded {started_s:.2f} s into the match, after the {AUTONOMOUS_S:g} s autonomous period "
+                      "(SG11a).", measured=round(started_s, 2), limit=AUTONOMOUS_S, unit="s")
+    load = describe_match_load(step)
+    if error is None:
+        loaded = check("loaded", "Loaded", True, f"The Drive Team stood {load}.")
+    else:
+        loaded = check("loaded", "Loaded", False, f"The Drive Team could not stand {load}: {error}.")
+    return [rules, loaded]
 
 
 def rule_checks(report):
@@ -715,8 +733,11 @@ def _execute(raw, destination, vexsim, cache, progress):
         if rig:
             rig.begin_actions(step["actions"])
         try:
-            motion_result = invoke(lib, bridge, rig, project, step, designed_start, feedforward, timeout_ms,
-                                   plans[index] if plans else None)
+            if step["type"] == "match_load":
+                motion_result = load_match(world, step)
+            else:
+                motion_result = invoke(lib, bridge, rig, project, step, designed_start, feedforward, timeout_ms,
+                                       plans[index] if plans else None)
         except ValueError as error:
             configuration_error = str(error)
             motion_result = None
@@ -737,6 +758,9 @@ def _execute(raw, destination, vexsim, cache, progress):
             reading, _ = mechanism_reading(world, step["type"])
             checks = score_mechanism_step(step, timeout_ms, duration_ms, motion_result, reading)
             position_error = heading_error = None
+        elif step["type"] == "match_load":
+            checks = score_match_load(step, started, configuration_error)
+            position_error = heading_error = None
         else:
             checks, position_error, heading_error = score_step(
                 step, target, timeout_ms, duration_ms, actual, estimate_at_exit, truth_at_exit, bridge.stopped(),
@@ -751,11 +775,12 @@ def _execute(raw, destination, vexsim, cache, progress):
         chained_path = step["chain"] and step["type"] == "path"
         contacts = contacts_between(world, started, bridge.sim.t)
         hit_hint = (stopped_by_hit(contacts, entry_truth, actual, target)
-                    if contacts and not passed and step["type"] not in MECHANISMS else None)
-        if step["type"] in MECHANISMS:
-            name = MECHANISMS[step["type"]]["label"].lower()
-            notes = [] if finished else [f"The {name} ran out of time. Check the {name} current in the telemetry: "
-                                         "high current means it was pushing against something."]
+                    if contacts and not passed and step["type"] not in STILL_STEPS else None)
+        if step["type"] == "lift":
+            notes = [] if finished else ["The lift ran out of time. Check the lift current in the telemetry: high "
+                                         "current means it was pushing against something."]
+        elif step["type"] in STILL_STEPS:
+            notes = []
         elif hit_hint:
             notes = [hit_hint]
         else:

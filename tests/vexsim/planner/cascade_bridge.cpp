@@ -5,10 +5,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // The path planner's calls into cascade_helpers.hpp, linked into the
-// simulator library next to tests/vexsim/bridge.cpp. The lift, claw and
-// Toggle arm are the real mclib PresetPositionMechanisms; their sensors and
-// motors are the simulated ones, through two callbacks. Rig::tick() runs
-// every time the simulated clock moves 10 ms, as its task does on the robot.
+// simulator library next to tests/vexsim/bridge.cpp. The lift is the real
+// mclib PresetPositionMechanism; its sensor and motors are the simulated
+// ones, through two callbacks, and a third opens and closes the simulated
+// claw's valve. Rig::tick() runs every time the simulated clock moves 10 ms,
+// as its task does on the robot.
 #include "cascade_helpers.hpp"
 
 #include "mclib/control/robot_state.hpp"
@@ -21,8 +22,9 @@ extern "C" void (*sim_after_refresh_hook)(std::uint32_t millis);
 
 namespace {
 
-using ReadDegrees = double (*)(int mechanism);
-using WriteVolts = void (*)(int mechanism, double volts);
+using ReadLiftDegrees = double (*)();
+using WriteLiftVolts = void (*)(double volts);
+using SetClawValve = void (*)(int closed);
 
 constexpr int kActionValues = 4;
 
@@ -33,30 +35,20 @@ void tick(std::uint32_t millis) {
   rig->tick(pose.x, pose.y, millis);
 }
 
-cascade::Rig::Degrees reader(ReadDegrees read, cascade::Mechanism mechanism) {
-  return [read, mechanism] { return read(static_cast<int>(mechanism)); };
-}
-
-cascade::Rig::Volts writer(WriteVolts write, cascade::Mechanism mechanism) {
-  return [write, mechanism](double volts) { write(static_cast<int>(mechanism), volts); };
-}
-
 }  // namespace
 
-// The callbacks take the mechanism number: 0 the lift, 1 the claw, 2 the
-// Toggle arm.
-extern "C" void planner_cascade_init(ReadDegrees read, WriteVolts write) {
-  using cascade::Mechanism;
-  rig = std::make_unique<cascade::Rig>(reader(read, Mechanism::Lift), writer(write, Mechanism::Lift),
-                                       reader(read, Mechanism::Claw), writer(write, Mechanism::Claw),
-                                       reader(read, Mechanism::ToggleArm), writer(write, Mechanism::ToggleArm));
+extern "C" void planner_cascade_init(ReadLiftDegrees read_lift, WriteLiftVolts write_lift,
+                                     SetClawValve set_claw) {
+  rig = std::make_unique<cascade::Rig>([read_lift] { return read_lift(); },
+                                       [write_lift](double volts) { write_lift(volts); },
+                                       [set_claw](bool closed) { set_claw(closed ? 1 : 0); });
   sim_after_refresh_hook = tick;
   tick(mclib::time::millis());
 }
 
 // Each action is 4 doubles: when (0 at the start, 1 after a distance in
 // inches, 2 after a time in ms, 3 when the motion ends), the distance or
-// time, the mechanism number, and the preset number.
+// time, the mechanism (0 the lift, 1 the claw), and the preset number.
 extern "C" void planner_cascade_begin_actions(const double* values, int count) {
   std::vector<cascade::Action> actions;
   for (int i = 0; i < count; ++i) {
@@ -70,10 +62,11 @@ extern "C" void planner_cascade_begin_actions(const double* values, int count) {
 
 extern "C" int planner_cascade_finish_actions() { return rig->finishActions(); }
 
-// Moves a mechanism to a preset and waits: 0 on the time limit, 1 at the
-// preset, 2 when the claw stopped closing on something.
-extern "C" int planner_cascade_move(int mechanism, int preset, int timeout_ms) {
+// Moves the lift to a preset and waits: 0 on the time limit, 1 at the preset.
+extern "C" int planner_cascade_move_lift(int preset, int timeout_ms) {
   const cascade::MoveResult result =
-      rig->move(static_cast<cascade::Mechanism>(mechanism), preset, static_cast<std::uint32_t>(timeout_ms));
+      rig->moveLift(static_cast<cascade::LiftPreset>(preset), static_cast<std::uint32_t>(timeout_ms));
   return static_cast<int>(result);
 }
+
+extern "C" void planner_cascade_set_claw(int preset) { rig->setClaw(static_cast<cascade::ClawPreset>(preset)); }

@@ -46,8 +46,8 @@ def piece_list(pieces):
 
 def make_world(field, sim, preload="none"):
     """The object whose step() advances the drivetrain and everything around it,
-    or None for the open floor. @p preload is the colour of the half of the
-    preload Pin that points up, or "none"."""
+    or None for the open floor. @p preload is where the preload Pin is
+    ("behind" the robot), or "none"."""
     if field == "open":
         return None
     if field == "push_back":
@@ -76,7 +76,7 @@ def override_drawing():
     for loader in of.LOADERS:
         wall = -loader.inward_x * half
         front = wall + loader.inward_x * of.LOADER_DEPTH
-        loaders.append(dict(alliance=loader.alliance,
+        loaders.append(dict(name=loader.name, alliance=loader.alliance, center=to_planner(loader.x, loader.y),
                             outline=_rect(min(wall, front), max(wall, front),
                                           loader.y - of.LOADER_WIDTH / 2, loader.y + of.LOADER_WIDTH / 2),
                             zone=_rect(*of.load_zone(loader))))
@@ -105,28 +105,42 @@ def override_drawing():
 
 
 def cascade_drawing():
-    """The cascade robot's shapes, inches. Forward and left are from the
-    middle of the drivetrain, except the aligner legs, which are from the
-    claw's grip point, and the Toggle arm pivot, which is from the back."""
-    from vexsim.cascade import GEOMETRY as g, TOGGLE_ARM_ANGLES
+    """The cascade robot's parts with the lift down and the claw open, and
+    where each preload lies, inches in the robot frame: forward and left of
+    the middle of the drivetrain, and up from the floor. A preload's axis is
+    (forward, left, up), from its red half to its yellow half. `moves` says how a part moves: "lift" parts rise with
+    the claw, a "jaw" also slides across as the claw closes, and the "rails"
+    telescope in `stages`. The rest are fixed."""
+    from vexsim import override_field as of
+    from vexsim.cascade import GEOMETRY as g, CascadeRobot
+    from vexsim.presets import four_motor_450
     from vexsim.units import INCH
-    legs = [[[round(x / INCH, 4), round(y / INCH, 4)] for x, y in leg] for leg in g.aligner_legs(0.0)]
-    return dict(
-        frame=dict(bottom_in=g.frame_bottom, top_in=g.frame_top, notch_depth_in=g.front_notch_depth,
-                   notch_half_width_in=g.front_notch_half_width),
-        rails=dict(bottom_in=g.rail_bottom, length_in=g.rail_length, inner_in=g.rail_inner, outer_in=g.rail_outer,
-                   back_in=g.rail_back, front_in=g.rail_front, stages=g.stages),
-        claw=dict(ahead_in=g.claw_ahead, jaw_length_in=g.jaw_length, jaw_thickness_in=g.jaw_thickness,
-                  below_in=g.jaw_below, above_in=g.jaw_above, slot_in=g.flange_slot, open_gap_in=g.jaw_open_gap,
-                  closed_gap_in=g.jaw_closed_gap,
-                  lowest_in=g.grip_lowest, highest_in=g.grip_highest),
-        carriage=dict(front_in=g.carriage_front, below_in=g.carriage_below, above_in=g.carriage_above),
-        aligner=dict(legs_in=legs, top_below_grip_in=g.aligner_top_below_grip,
-                     bottom_below_grip_in=g.aligner_bottom_below_grip),
-        toggle_arm=dict(pivot_from_back_in=g.toggle_pivot_ahead, pivot_height_in=g.toggle_pivot_height,
-                        length_in=g.toggle_arm_length, pad_size_in=g.toggle_pad_size,
-                        pad_width_in=g.toggle_pad_width, tower_half_width_in=g.toggle_tower_half_width,
-                        stowed_deg=TOGGLE_ARM_ANGLES["stowed"]))
+    robot = CascadeRobot()
+    inches = lambda value: round(value / INCH, 4)  # noqa: E731
+    parts = []
+    for part in robot.parts(four_motor_450()):
+        parts.append(dict(name=part.name, moves=_how_it_moves(part), outline=[[inches(x), inches(y)] for x, y in part.corners()],
+                          back=inches(part.back), front=inches(part.front), right=inches(part.right),
+                          left=inches(part.left), bottom=inches(part.bottom), top=inches(part.top)))
+    preloads = {}
+    for where in ("behind", "beside"):
+        (forward, left, up), axis, _ = robot.preload_pose(four_motor_450(), where, of.PRELOAD_COLORS["red"])
+        preloads[where] = dict(forward_in=inches(forward), left_in=inches(left), up_in=inches(up),
+                               axis=[round(value, 4) for value in axis])
+    return dict(parts=parts, stages=g.stages, rail_length_in=g.rail_length, rail_bottom_in=g.rail_bottom,
+                preloads=preloads,
+                claw=dict(open_gap_in=g.jaw_open_gap, closed_gap_in=g.jaw_closed_gap, lowest_in=round(g.grip_lowest, 4),
+                          highest_in=round(g.grip_highest, 4), middle_ahead_in=inches(robot.claw_position(four_motor_450())[0])))
+
+
+def _how_it_moves(part):
+    if part.name == "lift":
+        return "rails"
+    if part.name == "claw" and (part.right > 0 or part.left < 0):
+        return "jaw"
+    if part.name in ("claw", "carriage"):
+        return "lift"
+    return "fixed"
 
 
 def _planner_direction(x, y):
@@ -150,7 +164,7 @@ def override_solids():
                       circumradius_in=inches(of.TOGGLE_CIRCUMRADIUS),
                       face_angles_deg=[round(math.degrees(a), 3) for a in of.TOGGLE_FACE_ANGLES]) for t in of.TOGGLES],
         loader=dict(opening_in=inches(of.LOADER_OPENING), top_in=inches(of.LOADER_TOP_LOWERED),
-                    bore_in=inches(of.LOADER_BORE)),
+                    raised_by_in=inches(of.LOADER_TOP_RAISED - of.LOADER_TOP_LOWERED), bore_in=inches(of.LOADER_BORE)),
         pin_half_profile=[[inches(of.PIN_FLANGE_THICKNESS / 2.0), inches(of.PIN_CONE_DIAMETER / 2.0)],
                           [inches(of.PIN_LENGTH / 2.0 - of.PIN_TIP_STRAIGHT), inches(of.PIN_TIP_DIAMETER / 2.0)],
                           [inches(of.PIN_LENGTH / 2.0), inches(of.PIN_TIP_DIAMETER / 2.0)]],
