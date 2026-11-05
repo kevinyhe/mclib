@@ -146,29 +146,28 @@ def _planner_direction(x, y):
 
 
 def override_solids():
-    """Heights and profiles for the 3D view, inches."""
+    """What the 3D view needs besides the drawing, inches: the floor and
+    walls, which of the field CAD's parts to draw and how, and the Toggles'
+    and Loaders' positions in vexsim."""
+    from vexsim import override_cad as cad
     from vexsim import override_field as of
     from vexsim.units import INCH
     inches = lambda value: round(value / INCH, 4)  # noqa: E731
-    base_radius = (of.GOAL_BASE_ACROSS_FLATS + 2.0 * of.GOAL_BASE_CORNER_RADIUS) / 4.0
+    halves = {kind: [dict(rotation=rotation.tolist(), offset_in=offset.tolist()) for rotation, offset in
+                     cad.half_frames(kind)] for kind in ("pin", "cup")}
     return dict(
         wall_height_in=inches(of.WALL_HEIGHT), wall_thickness_in=inches(of.WALL_THICKNESS),
         tile_seams_in=[round(value - of.ORIGIN_IN, 3) for value in of.GRID_IN],
-        goals=[dict(name=g.name, top_of_base_in=inches(g.riser + of.GOAL_BASE_PLATE), height_in=inches(g.height),
-                    base_radius_in=inches(base_radius), top_radius_in=inches(of.GOAL_TOP_ACROSS / 2.0),
-                    hole_radius_in=inches(of.GOAL_HOLE_DIAMETER / 2.0)) for g in of.GOALS],
+        cad=dict(pin_half="276-9250-001", cup_half="276-9250-002", halves=halves,
+                 goal_parts=["276-9250-003", "276-9250-004", "276-9250-005"],
+                 loader_parts=["276-9250-031", "276-9250-032", "276-9250-034"], loader_tube="276-9250-031",
+                 toggle_parts=["276-9250-021", "276-9250-022", "276-9250-023", "276-9250-024", "276-9250-027"],
+                 toggle_bar="276-9250-023", toggle_turning_parts=["276-9250-023", "276-9250-024"]),
         toggles=[dict(quadrant=t.quadrant, axle=to_planner(t.x, t.y), inward=_planner_direction(t.inward_x, t.inward_y),
-                      faces=list(t.faces), length_in=inches(of.TOGGLE_LENGTH), axle_height_in=inches(of.TOGGLE_AXLE_HEIGHT),
-                      circumradius_in=inches(of.TOGGLE_CIRCUMRADIUS),
+                      faces=list(t.faces), axle_height_in=inches(of.TOGGLE_AXLE_HEIGHT),
                       face_angles_deg=[round(math.degrees(a), 3) for a in of.TOGGLE_FACE_ANGLES]) for t in of.TOGGLES],
-        loader=dict(opening_in=inches(of.LOADER_OPENING), top_in=inches(of.LOADER_TOP_LOWERED),
-                    raised_by_in=inches(of.LOADER_TOP_RAISED - of.LOADER_TOP_LOWERED), bore_in=inches(of.LOADER_BORE)),
-        pin_half_profile=[[inches(of.PIN_FLANGE_THICKNESS / 2.0), inches(of.PIN_CONE_DIAMETER / 2.0)],
-                          [inches(of.PIN_LENGTH / 2.0 - of.PIN_TIP_STRAIGHT), inches(of.PIN_TIP_DIAMETER / 2.0)],
-                          [inches(of.PIN_LENGTH / 2.0), inches(of.PIN_TIP_DIAMETER / 2.0)]],
-        pin_flange=dict(thickness_in=inches(of.PIN_FLANGE_THICKNESS), radius_in=inches(of.PIN_FLANGE_ACROSS_FLATS / 2.0)),
-        cup_half_profile=[[0.0, inches(of.CUP_WAIST_DIAMETER / 2.0)], [inches(of.CUP_LENGTH / 2.0),
-                                                                       inches(of.CUP_RIM_DIAMETER / 2.0)]])
+        loader=dict(top_in=inches(of.LOADER_TOP_LOWERED),
+                    raised_by_in=inches(of.LOADER_TOP_RAISED - of.LOADER_TOP_LOWERED)))
 
 
 def push_back_drawing():

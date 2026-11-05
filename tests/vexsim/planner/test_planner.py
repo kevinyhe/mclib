@@ -338,20 +338,50 @@ class FieldDrawingTests(unittest.TestCase):
         drawing = drawings(VEXSIM)["override"]
         solid = drawing["solid"]
         self.assertEqual((solid["wall_height_in"], solid["wall_thickness_in"]), (11.54, 2.0))
-        self.assertEqual({goal["name"]: goal["height_in"] for goal in solid["goals"]}["center"], 8.77)
-        self.assertEqual(sorted({goal["height_in"] for goal in solid["goals"]}), [3.25, 5.77, 8.77])
+        self.assertEqual({goal["name"]: goal["height_in"] for goal in drawing["goals"]}["center"], 8.77)
+        self.assertEqual(sorted({goal["height_in"] for goal in drawing["goals"]}), [3.25, 5.77, 8.77])
         left = next(toggle for toggle in solid["toggles"] if toggle["quadrant"] == "left")
         self.assertEqual((left["axle"], left["inward"], left["faces"]), ([0.0, -70.079], [-0.0, 1.0], ["yellow", "red", "blue"]))
-        self.assertEqual((left["axle_height_in"], left["length_in"]), (13.2, 25.99))
-        self.assertEqual(solid["pin_half_profile"][-1], [3.25, 0.7])
+        self.assertEqual(left["axle_height_in"], 13.2)
         kinds = [piece["kind"] for piece in drawing["pieces"]]
         self.assertEqual((kinds.count("pin"), kinds.count("cup")), (37, 36))
+
+    def test_the_3d_views_cad_goals_and_pieces_are_as_tall_as_vexsims(self):
+        import numpy as np
+        from fields import drawings
+        drawing = drawings(VEXSIM)["override"]
+        parts = drawing["solid"]["cad"]
+        layout = json.loads((VEXSIM / "cad/override/view.json").read_text())
+        blob = (VEXSIM / "cad/override/view.bin").read_bytes()
+
+        def part_points(number):
+            mesh = layout["meshes"][number]
+            return np.frombuffer(blob, np.float32, mesh["vertices"] * 3, mesh["vertex_offset"]).reshape(-1, 3)
+
+        def goal_at(x, y):
+            return min(drawing["goals"], key=lambda goal: np.hypot(goal["center"][0] + y, goal["center"][1] - x))["name"]
+
+        tops = {}
+        for number in parts["goal_parts"]:
+            for instance in layout["instances"][number]:
+                points = part_points(number) @ np.array(layout["cad_axes"]).T @ np.array(instance["rotation"]).T
+                name = goal_at(*instance["position_in"][:2])
+                tops[name] = max(tops.get(name, 0.0), float(points[:, 2].max() + instance["position_in"][2]))
+        for goal in drawing["goals"]:
+            self.assertAlmostEqual(tops[goal["name"]], goal["height_in"], delta=0.01, msg=goal["name"])
+        size = drawing["piece_size"]
+        for kind, length in (("pin", size["pin_length_in"]), ("cup", size["cup_length_in"])):
+            low, high = (part_points(parts[f"{kind}_half"]) @ np.array(half["rotation"]).T + half["offset_in"]
+                         for half in parts["halves"][kind])
+            self.assertAlmostEqual(float(low[:, 2].min()), -length / 2.0, delta=0.01, msg=kind)
+            self.assertAlmostEqual(float(high[:, 2].max()), length / 2.0, delta=0.01, msg=kind)
+            self.assertLess(float(high[:, 2].min()), 0.0, msg=kind)
 
     def test_the_3d_robot_is_vexsims_cascade_robot(self):
         from fields import drawings
         sys.path.insert(0, str(VEXSIM))
         robot = drawings(VEXSIM)["override"]["robot"]
-        self.assertEqual((robot["claw"]["lowest_in"], robot["claw"]["highest_in"]), (6.2, 33.2))
+        self.assertEqual((robot["claw"]["lowest_in"], robot["claw"]["highest_in"]), (5.94, 32.94))
         self.assertEqual((robot["claw"]["open_gap_in"], robot["claw"]["closed_gap_in"]), (4.4, 3.09))
         names = [part["name"] for part in robot["parts"]]
         self.assertEqual({name: names.count(name) for name in set(names)},
@@ -412,6 +442,23 @@ class MatchesVexsimTests(unittest.TestCase):
         for name, height in LIFT_HEIGHTS_IN.items():
             with self.subTest(name):
                 self.assertAlmostEqual(height, LIFT_HEIGHTS[vexsim_names[name]], places=9)
+
+    def test_a_held_stack_is_named_and_counted_with_the_pin_standing_in_its_cup(self):
+        from mechanisms import describe_held, possession
+        from vexsim import Simulator, cascade, presets
+        from vexsim.override import OverrideWorld
+        from vexsim.sim import SimConfig
+        from vexsim.units import INCH
+        stack_x, stack_y = -23.5 * INCH, -23.5 * INCH
+        sim = Simulator(presets.four_motor_450(), config=SimConfig(log_every=0))
+        chassis_to_claw = sim.chassis.length / 2.0 - cascade.GEOMETRY.bite_seat_back * INCH
+        sim.set_pose(stack_x - chassis_to_claw, stack_y, 0.0)
+        world = OverrideWorld(sim, robot=cascade.CascadeRobot())
+        world.mechanism.claw.command(True)
+        for _ in range(100):
+            world.step(0.001)
+        self.assertEqual(describe_held(world), "a Cup with a yellow Pin")
+        self.assertEqual(possession(world), (1, 1))
 
     def test_exported_motor_degrees_turn_into_vexsims_heights(self):
         from vexsim.cascade import GEOMETRY
@@ -689,7 +736,7 @@ class EngineTests(unittest.TestCase):
 
     def test_11_a_step_stopped_by_a_goal_names_the_goal_not_the_controller(self):
         project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
-                       start=dict(x=24, y=-62.7, heading=0), steps=[dict(type="drive", distance=30, timeout_ms=2500)])
+                       start=dict(x=8, y=-47.1, heading=90), steps=[dict(type="drive", distance=30, timeout_ms=2500)])
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 1, done.stderr[-3000:])
         row = strict_json((output / "result.json").read_text())["steps"][0]

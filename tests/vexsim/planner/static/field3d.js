@@ -1,5 +1,6 @@
-// The Override field in 3D, built from the field drawing the planner already
-// has. Planner inches: +X right, +Y away from the red Alliance Station, +Z up.
+// The Override field in 3D: the floor and walls from the planner's field
+// drawing, the Goals, Loaders, Toggles, Pins and Cups from VEX's field CAD
+// (the meshes vexsim's tools/override_cad.py makes). Planner inches: +X right, +Y away from the red Alliance Station, +Z up.
 // Three.js here is Y up, so a planner point (x, y, z) is (x, z, -y).
 import * as THREE from "/native/three/build/three.module.js";
 
@@ -111,133 +112,192 @@ function addWalls(drawing) {
   }
 }
 
+// vexsim field inches to three.js: planner (-y, x, z), then (x, z, -y).
+const FROM_VEXSIM = new THREE.Matrix4().set(0, -1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 1);
+// A piece frame (across, across, axis) to the piece group's, whose up (+Y) is the axis.
+const FROM_PIECE = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+
+function rotationAndOffset([a, b, c], offset) {
+  return new THREE.Matrix4().set(a[0], a[1], a[2], offset[0], b[0], b[1], b[2], offset[1], c[0], c[1], c[2], offset[2],
+    0, 0, 0, 1);
+}
+
+function partGeometry(cad, number, transform) {
+  const mesh = cad.layout.meshes[number];
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(
+    new Float32Array(cad.blob, mesh.vertex_offset, mesh.vertices * 3).slice(), 3));
+  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(cad.blob, mesh.index_offset, mesh.triangles * 3), 1));
+  geometry.applyMatrix4(transform);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+async function loadCad() {
+  const responses = await Promise.all([fetch("/cad/view.json"), fetch("/cad/view.bin")]);
+  for (const response of responses) {
+    if (!response.ok) throw new Error((await response.json()).error);
+  }
+  const cad = { layout: await responses[0].json(), blob: await responses[1].arrayBuffer() };
+  const cadAxes = rotationAndOffset(cad.layout.cad_axes, [0, 0, 0]);
+  const shared = new Map();
+  cad.geometry = (number) => {
+    if (!shared.has(number)) shared.set(number, partGeometry(cad, number, cadAxes));
+    return shared.get(number);
+  };
+  cad.placement = (instance) => FROM_VEXSIM.clone().multiply(rotationAndOffset(instance.rotation, instance.position_in));
+  cad.plannerPosition = ({ position_in: [x, y] }) => [-y, x];
+  cad.threePosition = ({ position_in: [x, y, z] }) => new THREE.Vector3(-y, z, -x);
+  return cad;
+}
+
+function placedMesh(geometry, matrix, materials) {
+  const mesh = new THREE.Mesh(geometry, materials);
+  mesh.matrixAutoUpdate = false;
+  mesh.matrix.copy(matrix);
+  scene.add(mesh);
+  return mesh;
+}
+
+function nearest(items, [x, y], positionOf) {
+  const distance = (item) => Math.hypot(positionOf(item)[0] - x, positionOf(item)[1] - y);
+  return items.reduce((best, item) => (distance(item) < distance(best) ? item : best));
+}
+
 function goalColor(kind) {
   return { red: COLORS.red, blue: COLORS.blue, neutral: COLORS.neutral, center: COLORS.center }[kind];
 }
 
-function addGoals(drawing) {
-  const shapes = new Map(solids.goals.map((goal) => [goal.name, goal]));
-  for (const goal of drawing.goals) {
-    const solid = shapes.get(goal.name);
-    const color = material(goalColor(goal.kind));
-    const outline = new THREE.Shape(goal.outline.map(([x, y]) => new THREE.Vector2(x, y)));
-    const base = new THREE.Mesh(new THREE.ExtrudeGeometry(outline, { depth: solid.top_of_base_in, bevelEnabled: false }), color);
-    base.rotation.x = -Math.PI / 2;
-    scene.add(base);
-    const taper = solid.height_in - solid.top_of_base_in;
-    const cone = new THREE.Mesh(new THREE.CylinderGeometry(solid.top_radius_in, solid.base_radius_in, taper, 32, 1, true), color);
-    cone.position.copy(at(goal.center[0], goal.center[1], solid.top_of_base_in + taper / 2));
-    scene.add(cone);
-    const rim = new THREE.Mesh(new THREE.RingGeometry(solid.hole_radius_in, solid.top_radius_in, 32), color);
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.copy(at(goal.center[0], goal.center[1], solid.height_in));
-    scene.add(rim);
-    const hole = new THREE.Mesh(new THREE.CircleGeometry(solid.hole_radius_in, 32), material(COLORS.hole));
-    hole.rotation.x = -Math.PI / 2;
-    hole.position.copy(at(goal.center[0], goal.center[1], solid.height_in - 0.4));
-    scene.add(hole);
+function addGoals(cad) {
+  for (const number of solids.cad.goal_parts) {
+    for (const instance of cad.layout.instances[number]) {
+      const goal = nearest(drawing.goals, cad.plannerPosition(instance), (g) => g.center);
+      placedMesh(cad.geometry(number), cad.placement(instance), material(goalColor(goal.kind)));
+    }
   }
 }
 
 const loaderMeshes = [];
 
-function addLoaders(drawing) {
-  const { opening_in: bottom, top_in: top } = solids.loader;
-  for (const loader of drawing.loaders) {
-    const xs = loader.outline.map((p) => p[0]), ys = loader.outline.map((p) => p[1]);
-    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-    const tube = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, top - bottom, y1 - y0),
-      material(COLORS[loader.alliance], { transparent: true, opacity: 0.55 }));
-    const lowered = at((x0 + x1) / 2, (y0 + y1) / 2, (top + bottom) / 2);
-    tube.position.copy(lowered);
-    scene.add(tube);
-    loaderMeshes.push({ name: loader.name, tube, lowered });
+// Each Loader's CAD parts, moved up or down so its tube's top is at the
+// manual's height: the CAD has the red Loaders 0.31 in higher than the blue.
+function addLoaders(cad) {
+  const toManualHeight = new Map();
+  for (const instance of cad.layout.instances[solids.cad.loader_tube]) {
+    const loader = nearest(drawing.loaders, cad.plannerPosition(instance), (l) => l.center);
+    const placed = cad.geometry(solids.cad.loader_tube).clone().applyMatrix4(cad.placement(instance));
+    placed.computeBoundingBox();
+    const top = placed.boundingBox.max.y;
+    toManualHeight.set(loader.name, new THREE.Matrix4().makeTranslation(0, solids.loader.top_in - top, 0));
+  }
+  for (const number of solids.cad.loader_parts) {
+    for (const instance of cad.layout.instances[number]) {
+      const loader = nearest(drawing.loaders, cad.plannerPosition(instance), (l) => l.center);
+      const look = number === solids.cad.loader_tube
+        ? material(COLORS[loader.alliance], { transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false })
+        : material(COLORS.metal, { metalness: 0.4 });
+      const lowered = toManualHeight.get(loader.name).clone().multiply(cad.placement(instance));
+      loaderMeshes.push({ name: loader.name, mesh: placedMesh(cad.geometry(number), lowered, look), lowered });
+    }
   }
 }
 
 function showLoaders(frame) {
   const raised = new Set(frame?.raised_loaders ?? []);
+  const lift = new THREE.Matrix4().makeTranslation(0, solids.loader.raised_by_in, 0);
   for (const loader of loaderMeshes) {
-    loader.tube.position.copy(loader.lowered);
-    if (raised.has(loader.name)) loader.tube.position.y += solids.loader.raised_by_in;
+    loader.mesh.matrix.copy(raised.has(loader.name) ? lift.clone().multiply(loader.lowered) : loader.lowered);
   }
 }
 
-function addToggles() {
+// A triangle of the bar belongs to the face whose normal at rest is nearest
+// its own; the ends, whose normals run along the axle, are dark.
+function barGeometry(cad, matrix, faceNormals, along) {
+  const geometry = cad.geometry(solids.cad.toggle_bar).clone().applyMatrix4(matrix);
+  const position = geometry.attributes.position, index = geometry.index.array;
+  const groups = faceNormals.map(() => []).concat([[]]);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let t = 0; t < index.length; t += 3) {
+    a.fromBufferAttribute(position, index[t]);
+    b.fromBufferAttribute(position, index[t + 1]);
+    c.fromBufferAttribute(position, index[t + 2]);
+    const normal = b.sub(a).cross(c.sub(a)).normalize();
+    const facing = faceNormals.map((faceNormal) => normal.dot(faceNormal));
+    const face = Math.abs(normal.dot(along)) > 0.7 ? faceNormals.length : facing.indexOf(Math.max(...facing));
+    groups[face].push(index[t], index[t + 1], index[t + 2]);
+  }
+  geometry.setIndex(groups.flat());
+  let start = 0;
+  groups.forEach((triangles, face) => {
+    geometry.addGroup(start, triangles.length, face);
+    start += triangles.length;
+  });
+  return geometry;
+}
+
+// Each Toggle's CAD parts, moved so the CAD axle is where vexsim has it.
+// The bar and its end caps turn about the axle.
+function addToggles(cad) {
+  const turning = new Set(solids.cad.toggle_turning_parts);
+  const up = new THREE.Vector3(0, 1, 0);
   for (const toggle of solids.toggles) {
+    const position = (instance) => cad.plannerPosition(instance);
+    const bar = nearest(cad.layout.instances[solids.cad.toggle_bar], toggle.axle, position);
+    const axle = at(toggle.axle[0], toggle.axle[1], toggle.axle_height_in);
+    const toPhysicsAxle = new THREE.Matrix4().makeTranslation(axle.clone().sub(cad.threePosition(bar)));
     const along = direction(-toggle.inward[1], toggle.inward[0], 0);
-    const up = new THREE.Vector3(0, 1, 0);
     const inward = direction(toggle.inward[0], toggle.inward[1], 0);
-    const side = new THREE.Vector3().crossVectors(along, up);
-    const sign = Math.sign(side.dot(inward));
-    const mount = new THREE.Group();
-    mount.position.copy(at(toggle.axle[0], toggle.axle[1], toggle.axle_height_in));
-    mount.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(along, up, side));
-    const spin = new THREE.Group();
-    mount.add(spin);
-    const half = toggle.length_in / 2, radius = toggle.circumradius_in;
-    const corner = (degrees) => {
-      const angle = degrees * Math.PI / 180;
-      return [radius * Math.cos(angle), radius * Math.sin(angle)];
-    };
-    const local = ([n, z], s) => new THREE.Vector3(s, z, sign * n);
-    toggle.faces.forEach((color, index) => {
-      const normal = toggle.face_angles_deg[index];
-      const a = corner(normal - 60), b = corner(normal + 60);
-      const points = [local(a, -half), local(b, -half), local(b, half), local(a, -half), local(b, half), local(a, half)];
-      const face = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(points), material(COLORS[color], { side: THREE.DoubleSide }));
-      face.geometry.computeVertexNormals();
-      spin.add(face);
-    });
-    for (const s of [-half, half]) {
-      const cap = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([90, 210, 330].map((d) => local(corner(d), s))),
-        material(COLORS.toggleEnd, { side: THREE.DoubleSide }));
-      spin.add(cap);
-    }
-    const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, toggle.length_in + 3, 12), material(COLORS.metal, { metalness: 0.5 }));
-    axle.rotation.z = Math.PI / 2;
-    mount.add(axle);
-    scene.add(mount);
+    const sign = Math.sign(new THREE.Vector3().crossVectors(along, up).dot(inward));
     const faces = toggle.faces.map((color, index) => {
       const angle = toggle.face_angles_deg[index] * Math.PI / 180;
-      return { color, normal: new THREE.Vector3(0, Math.sin(angle), sign * Math.cos(angle)) };
+      return { color, normal: inward.clone().multiplyScalar(Math.cos(angle)).addScaledVector(up, Math.sin(angle)) };
     });
+    const turned = [];
+    for (const number of solids.cad.toggle_parts) {
+      for (const instance of cad.layout.instances[number]) {
+        if (nearest(solids.toggles, position(instance), (t) => t.axle) !== toggle) continue;
+        const rest = toPhysicsAxle.clone().multiply(cad.placement(instance));
+        if (number === solids.cad.toggle_bar) {
+          const looks = toggle.faces.map((color) => material(COLORS[color])).concat([material(COLORS.toggleEnd)]);
+          const geometry = barGeometry(cad, rest, faces.map((face) => face.normal), along);
+          turned.push({ mesh: placedMesh(geometry, new THREE.Matrix4(), looks), rest: new THREE.Matrix4() });
+        } else if (turning.has(number)) {
+          turned.push({ mesh: placedMesh(cad.geometry(number), rest, material(COLORS.toggleEnd)), rest });
+        } else {
+          placedMesh(cad.geometry(number), rest, material(COLORS.metal, { metalness: 0.5 }));
+        }
+      }
+    }
     const intoTheField = inward.clone().multiplyScalar(Math.cos(Math.PI / 6)).addScaledVector(up, Math.sin(Math.PI / 6));
-    toggleMeshes.push({ quadrant: toggle.quadrant, spin, sign, faces, intoTheField });
+    toggleMeshes.push({ quadrant: toggle.quadrant, axle, along, sign, turned, faces, intoTheField,
+      turn: new THREE.Quaternion() });
   }
 }
 
 function shownInnerColor(toggle) {
-  const turned = toggle.spin.getWorldQuaternion(new THREE.Quaternion());
-  const facing = (face) => face.normal.clone().applyQuaternion(turned).dot(toggle.intoTheField);
+  const facing = (face) => face.normal.clone().applyQuaternion(toggle.turn).dot(toggle.intoTheField);
   return toggle.faces.reduce((best, face) => (facing(face) > facing(best) ? face : best)).color;
 }
 
-function lathe(profile, color, extra = {}) {
-  const points = profile.map(([axial, radius]) => new THREE.Vector2(radius, axial));
-  return new THREE.Mesh(new THREE.LatheGeometry(points, 28), material(color, { side: THREE.DoubleSide, ...extra }));
+function pieceMaker(cad) {
+  const halves = {};
+  for (const kind of ["pin", "cup"]) {
+    halves[kind] = solids.cad.halves[kind].map(({ rotation, offset_in }) =>
+      partGeometry(cad, solids.cad[`${kind}_half`], FROM_PIECE.clone().multiply(rotationAndOffset(rotation, offset_in))));
+  }
+  const looks = new Map([["clear", material(COLORS.clear, { transparent: true, opacity: 0.4, depthWrite: false })]]);
+  const look = (color) => {
+    if (!looks.has(color)) looks.set(color, material(COLORS[color]));
+    return looks.get(color);
+  };
+  return (kind, colors) => {
+    const group = new THREE.Group();
+    halves[kind].forEach((geometry, end) => group.add(new THREE.Mesh(geometry, look(colors[end]))));
+    return group;
+  };
 }
 
-function pinMesh(colors) {
-  const group = new THREE.Group();
-  const upper = solids.pin_half_profile;
-  const lower = upper.map(([axial, radius]) => [-axial, radius]).reverse();
-  group.add(lathe([[lower[0][0], 0], ...lower], COLORS[colors[0]]));
-  group.add(lathe([...upper, [upper[upper.length - 1][0], 0]], COLORS[colors[1]]));
-  const flange = new THREE.Mesh(new THREE.CylinderGeometry(solids.pin_flange.radius_in, solids.pin_flange.radius_in,
-    solids.pin_flange.thickness_in, 8), material(COLORS.flange));
-  group.add(flange);
-  return group;
-}
-
-function cupMesh() {
-  const group = new THREE.Group();
-  const upper = solids.cup_half_profile;
-  const lower = upper.map(([axial, radius]) => [-axial, radius]).reverse();
-  group.add(lathe(lower, COLORS.gray));
-  group.add(lathe(upper, COLORS.clear, { transparent: true, opacity: 0.4, depthWrite: false }));
-  return group;
-}
+let makePiece = null;
 
 function showPieces(pieces) {
   const seen = new Set();
@@ -245,7 +305,7 @@ function showPieces(pieces) {
     if (!piece.pose) continue;
     let mesh = pieceMeshes.get(piece.id);
     if (!mesh) {
-      mesh = piece.kind === "pin" ? pinMesh(piece.colors) : cupMesh();
+      mesh = makePiece(piece.kind, piece.colors);
       pieceMeshes.set(piece.id, mesh);
       scene.add(mesh);
     }
@@ -358,7 +418,11 @@ window.drawnRobotPieces = () => robot && {
 function showToggles(frame) {
   for (const toggle of toggleMeshes) {
     const angle = frame?.toggles?.[toggle.quadrant]?.angle_deg ?? 0;
-    toggle.spin.rotation.x = -toggle.sign * angle * Math.PI / 180;
+    toggle.turn.setFromAxisAngle(toggle.along, -toggle.sign * angle * Math.PI / 180);
+    const aboutTheAxle = new THREE.Matrix4().makeTranslation(toggle.axle)
+      .multiply(new THREE.Matrix4().makeRotationFromQuaternion(toggle.turn))
+      .multiply(new THREE.Matrix4().makeTranslation(toggle.axle.clone().negate()));
+    for (const { mesh, rest } of toggle.turned) mesh.matrix.copy(aboutTheAxle.clone().multiply(rest));
   }
 }
 
@@ -430,11 +494,13 @@ async function start() {
   if (!response.ok) throw new Error(`The planner did not send the field (${response.status}).`);
   drawing = (await response.json()).field_drawings.override;
   solids = drawing.solid;
+  const cad = await loadCad();
+  makePiece = pieceMaker(cad);
   addFloor(drawing);
   addWalls(drawing);
-  addGoals(drawing);
-  addLoaders(drawing);
-  addToggles();
+  addGoals(cad);
+  addLoaders(cad);
+  addToggles(cad);
   showPieces(drawing.pieces);
   resize();
   setView("operator");

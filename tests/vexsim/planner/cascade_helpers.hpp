@@ -25,9 +25,9 @@ namespace cascade {
 // The height of the claw's middle above the floor, inches, from the lift
 // motors' degrees. The motors turn an 18-tooth sprocket on 0.385 in chain,
 // 6.93 in of chain a turn, into the first of three stages; the carriage
-// moves three times as far. Fully down, the claw's middle is 0.28 in under
+// moves three times as far. Fully down, the claw's middle is 0.53 in under
 // the top rim of a Cup standing on the floor.
-constexpr double kLowestClawIn = 6.2;
+constexpr double kLowestClawIn = 5.94;
 constexpr double kChainPerTurnIn = 18 * 0.385;
 constexpr int kLiftStages = 3;
 
@@ -54,19 +54,22 @@ enum class Mechanism { Lift, Claw };
 using Lift = mclib::mechanism::PresetPositionMechanism<LiftPreset>;
 
 inline Lift::Table liftPresets() {
-  return {{LiftPreset::Down, kLowestClawIn},          {LiftPreset::OverNeutralGoal, 15.79},
-          {LiftPreset::OnNeutralGoal, 12.61},         {LiftPreset::OverStackOnNeutralGoal, 22.91},
-          {LiftPreset::OnStackOnNeutralGoal, 19.73},  {LiftPreset::OverCenterGoal, 18.79},
-          {LiftPreset::OnCenterGoal, 15.61},          {LiftPreset::Top, 33.2}};
+  return {{LiftPreset::Down, kLowestClawIn},          {LiftPreset::OverNeutralGoal, 15.29},
+          {LiftPreset::OnNeutralGoal, 11.9},          {LiftPreset::OverStackOnNeutralGoal, 21.98},
+          {LiftPreset::OnStackOnNeutralGoal, 18.59},  {LiftPreset::OverCenterGoal, 18.29},
+          {LiftPreset::OnCenterGoal, 14.9},           {LiftPreset::Top, 32.94}};
 }
 
 // What the lift motors need to hold the stages up against the rubber bands.
 constexpr double kLiftHoldVolts = 1.4;
 
+// With kd 40 a Pin standing loose in the held Cup rises 0.87 in off its
+// seat when the lift stops from full speed, and falls back. With kd 20 the
+// lift brakes at up to 2.8 g and throws the Pin out of the Cup.
 inline mclib::mechanism::PositionMechanismConfig liftConfig() {
   mclib::mechanism::PositionMechanismConfig config;
   config.kp = 6.0;
-  config.kd = 20.0;
+  config.kd = 40.0;
   config.max_voltage = 12.0;
   config.small_error = 0.15;
   config.big_error = 0.5;

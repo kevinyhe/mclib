@@ -38,6 +38,9 @@ STATIC = HERE / "static"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                  ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
 EXAMPLES = HERE / "examples"
+#: The Override field's meshes, made from VEX's field CAD by vexsim's tools/override_cad.py
+CAD_FILES = {"/cad/view.json": ("view.json", "application/json; charset=utf-8"),
+             "/cad/view.bin": ("view.bin", "application/octet-stream")}
 PAGE_POLICY = ("default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; "
                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 FRAMED_PAGES = {"/field3d.html"}
@@ -445,6 +448,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 body, content_type, policy = found
                 self.send(200, body, content_type, policy)
+        elif path in CAD_FILES:
+            name, content_type = CAD_FILES[path]
+            file = planner.vexsim / "cad" / "override" / name
+            if file.is_file():
+                self.send(200, file.read_bytes(), content_type)
+            else:
+                self.send(503, dict(error=f"{file} is missing. Make it with vexsim's tools/override_cad.py "
+                                          "(vexsim README, \"Override field CAD\")."))
         elif path in self.server.static:
             file = self.server.static[path]
             self.send(200, file.read_bytes(), CONTENT_TYPES[file.suffix], FRAMED_POLICY if path in FRAMED_PAGES else None)

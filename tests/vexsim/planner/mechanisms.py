@@ -11,18 +11,18 @@ import math
 from fields import piece_pose, to_planner
 
 LIFT_PRESETS = {
-    "down": "Down: claw 6.2 in up, on a Cup standing on the floor",
-    "over_neutral_goal": "Over a Neutral Goal: claw 15.79 in up",
-    "on_neutral_goal": "On a Neutral Goal: claw 12.61 in up",
-    "over_stack_on_neutral_goal": "Over a stack on a Neutral Goal: claw 22.91 in up",
-    "on_stack_on_neutral_goal": "On a stack on a Neutral Goal: claw 19.73 in up",
-    "over_center_goal": "Over the Center Goal: claw 18.79 in up",
-    "on_center_goal": "On the Center Goal: claw 15.61 in up",
-    "top": "Top: claw 33.2 in up",
+    "down": "Down: claw 5.94 in up, on a Cup standing on the floor",
+    "over_neutral_goal": "Over a Neutral Goal: claw 15.29 in up",
+    "on_neutral_goal": "On a Neutral Goal: claw 11.9 in up",
+    "over_stack_on_neutral_goal": "Over a stack on a Neutral Goal: claw 21.98 in up",
+    "on_stack_on_neutral_goal": "On a stack on a Neutral Goal: claw 18.59 in up",
+    "over_center_goal": "Over the Center Goal: claw 18.29 in up",
+    "on_center_goal": "On the Center Goal: claw 14.9 in up",
+    "top": "Top: claw 32.94 in up",
 }
 #: The claw heights the presets name, inches: cascade_helpers.hpp holds the same numbers
-LIFT_HEIGHTS_IN = dict(down=6.2, over_neutral_goal=15.79, on_neutral_goal=12.61, over_stack_on_neutral_goal=22.91,
-                       on_stack_on_neutral_goal=19.73, over_center_goal=18.79, on_center_goal=15.61, top=33.2)
+LIFT_HEIGHTS_IN = dict(down=5.94, over_neutral_goal=15.29, on_neutral_goal=11.9, over_stack_on_neutral_goal=21.98,
+                       on_stack_on_neutral_goal=18.59, over_center_goal=18.29, on_center_goal=14.9, top=32.94)
 CLAW_PRESETS = {"open": "Open: jaws 4.4 in apart", "closed": "Closed: jaws 3.09 in apart, on a Cup's top rim"}
 MECHANISMS = {
     "lift": dict(label="Lift", presets=LIFT_PRESETS, enum="cascade::LiftPreset"),
@@ -208,17 +208,15 @@ def describe_piece(world, piece_id):
 
 def describe_held(world):
     """The held piece, and what is stacked with it."""
-    held = world.grip.piece
-    others = [p for p in held.body.pieces if p is not held]
-    text = describe_piece(world, held.id)
-    return text + "".join(f" with {describe_piece(world, p.id)}" for p in others)
+    text = describe_piece(world, world.grip.piece.id)
+    return text + "".join(f" with {describe_piece(world, p.id)}" for p in world.grip.carried)
 
 
 def possession(world):
     """(Pins, Cups) the robot holds: the gripped piece and everything stacked with it (<SG6>)."""
     if world.grip is None:
         return 0, 0
-    kinds = [piece.kind for piece in world.grip.piece.body.pieces]
+    kinds = [piece.kind for piece in (world.grip.piece,) + world.grip.carried]
     return kinds.count("pin"), kinds.count("cup")
 
 

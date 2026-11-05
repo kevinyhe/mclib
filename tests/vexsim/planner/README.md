@@ -178,14 +178,14 @@ and **Export C++** copies it.
 
 | Lift preset | Claw height | Use |
 | --- | --- | --- |
-| Down | 6.2 in | grip a Cup standing on the floor, 0.28 in under its top rim |
-| Over a Neutral Goal | 15.79 in | carry a stack over a Neutral Goal's Pin |
-| On a Neutral Goal | 12.61 in | the held Cup sits on a Neutral Goal's Pin |
-| Over a stack on a Neutral Goal | 22.91 in | carry a stack over a stack already on a Neutral Goal |
-| On a stack on a Neutral Goal | 19.73 in | the held Cup sits on that stack's Pin |
-| Over the Center Goal | 18.79 in | carry a stack over the Center Goal's Pin |
-| On the Center Goal | 15.61 in | the held Cup sits on the Center Goal's Pin |
-| Top | 33.2 in | highest |
+| Down | 5.94 in | grip a Cup standing on the floor, 0.53 in under its top rim |
+| Over a Neutral Goal | 15.29 in | carry a stack over a Neutral Goal's Pin |
+| On a Neutral Goal | 11.9 in | the held Cup sits on a Neutral Goal's Pin |
+| Over a stack on a Neutral Goal | 21.98 in | carry a stack over a stack already on a Neutral Goal |
+| On a stack on a Neutral Goal | 18.59 in | the held Cup sits on that stack's Pin |
+| Over the Center Goal | 18.29 in | carry a stack over the Center Goal's Pin |
+| On the Center Goal | 14.9 in | the held Cup sits on the Center Goal's Pin |
+| Top | 32.94 in | highest |
 
 The claw height is the middle of the jaws. The lift motors turn an
 18-tooth sprocket on 0.385 in chain, and the top stage moves three times as
@@ -268,17 +268,20 @@ Cup (SG6).
 
 ## The Override field in 3D
 
-On the Override field, **3D view** shows the field built from the manual's
-sizes: tiles, walls, Goals, Loaders, Toggles, every Pin and Cup, and the
-robot drawn like an FRC robot, with its bumpers, cascade stages, claw and
-Toggle arms. Playback moves
+On the Override field, **3D view** shows the tiles and walls, the Goals,
+Loaders, Toggles, Pins and Cups as VEX's field CAD has them, and the robot
+drawn like an FRC robot, with its bumpers, cascade stages, claw and Toggle
+arms. Playback moves
 all of it, and a Loader the Drive Team lifted for a Match Load is drawn
 raised. Drag to turn the view and scroll to zoom. Click the view, then press 1 to 4 for a camera or
 5 to follow the robot. The score panel stays on top.
 
-VEX's Field CAD is not used. Its download page refused this machine (HTTP
-403). The shapes come from the manual's drawings instead, so curved parts
-are simplified. On the other fields the 3D view is vexsim's, as before.
+The meshes are the ones vexsim's `tools/override_cad.py` makes from the
+CAD into `cad/override/` of the vexsim checkout (vexsim's README, "Override
+field CAD"); the server sends them as `/cad/view.json` and `/cad/view.bin`.
+vexsim, not the CAD, says where each Toggle's axle is (70.08 in from the
+centre; the CAD has 71.45 in), so the view moves each Toggle there. On the
+other fields the 3D view is vexsim's, as before.
 
 ## Override scoring
 
@@ -422,10 +425,10 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
-| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two backing hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 13.8 s, with claw and lift actions during a drive |
-| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the turn and the drive away; 0 points, because the left Toggle is still yellow |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two backing hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 13.7 s, with claw and lift actions during a drive |
+| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; 0 points, because the left Toggle is still yellow |
 | [override_toggle_arms.json](examples/override_toggle_arms.json) | drive out from red's wall and back the arms into the left Toggle twice: blue, then red; 20 points |
-| [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 24.0 s |
+| [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 24.1 s |
 
 ## Files
 
@@ -475,5 +478,9 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 - Every simulated drive has omni wheels on all corners.
 - The 3D view needs Three.js 0.160.0 in the vexsim checkout's
   `node_modules` (`npm install --prefix ../vexsim --no-save three@0.160.0`).
+- Override needs numpy, MuJoCo and the shapes made from VEX's field CAD in
+  the vexsim checkout (vexsim's README, "Override field CAD"). Run the
+  server and the tests with the Python that has them, such as vexsim's
+  `.venv/bin/python`.
 - A routine can hold 40 steps and a path 30 points. The time limits must add
   up to at most 120 s.

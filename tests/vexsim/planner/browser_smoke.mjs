@@ -298,7 +298,7 @@ try {
   assert.equal(project.field, "override");
   assert.equal(project.preload, "beside");
   assert.match(await page.locator("#step-list li").nth(6).innerText(),
-               /Claw to Closed: jaws 3\.09 in apart, on a Cup's top rim after 33\.39 in/);
+               /Claw to Closed: jaws 3\.09 in apart, on a Cup's top rim after 29\.3 in/);
   await page.locator("#tab-robot").click();
   const chosen = await page.locator("#pane-robot select").evaluateAll((selects) => selects.map((select) => select.selectedOptions[0]?.text));
   assert(chosen.includes("Override (2026-27)") && chosen.includes("Red/yellow Pin lying on the floor along the robot's right side"),

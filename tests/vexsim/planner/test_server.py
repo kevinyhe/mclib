@@ -164,6 +164,22 @@ class HttpTests(unittest.TestCase):
         self.assertIn("script-src 'self';", policy)
         self.assertIn("frame-ancestors 'none'", self.policy("/field3d.js")[1])
 
+    def test_serves_only_the_3d_views_cad_meshes_from_the_vexsim_checkout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.planner.vexsim = Path(folder)
+            status, payload = self.json("GET", "/cad/view.json")
+            self.assertEqual(status, 503)
+            self.assertIn("tools/override_cad.py", payload["error"])
+            made = Path(folder) / "cad" / "override"
+            made.mkdir(parents=True)
+            (made / "view.json").write_text('{"meshes": {}}')
+            (made / "view.bin").write_bytes(b"\x00\x01")
+            (made / "shapes.json").write_text("{}")
+            self.assertEqual(self.request("GET", "/cad/view.json"), (200, "application/json; charset=utf-8", b'{"meshes": {}}'))
+            self.assertEqual(self.request("GET", "/cad/view.bin"), (200, "application/octet-stream", b"\x00\x01"))
+            for name in ("/cad/shapes.json", "/cad/../cad/override/view.json", "/cad/"):
+                self.assertEqual(self.request("GET", name)[0], 404, name)
+
 
 def sleeping_engine(*arguments, vexsim, cache):
     return [sys.executable, "-c", "import time; time.sleep(30)"]
