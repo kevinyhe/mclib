@@ -171,6 +171,25 @@ def mechanism_reading(world, mechanism):
     return f"the jaws are {gap:.2f} in apart and hold {held}", gap
 
 
+def start_overlap_error(world):
+    """Why the robot cannot start where it stands, or None when it is clear
+    of every Pin, Cup, wall, Goal and Loader."""
+    from vexsim.pieces import Piece
+    from vexsim.units import INCH
+    overlaps = world.start_overlaps()
+    if not overlaps:
+        return None
+    things = []
+    for overlap in overlaps:
+        where = ""
+        if isinstance(overlap.what, Piece):
+            x, y = to_planner(*overlap.what.center()[:2])
+            where = f" at ({x:.1f}, {y:.1f})"
+        things.append(f"{overlap.name}{where}, {overlap.depth / INCH:.2f} in deep")
+    return ("The robot starts inside " + "; ".join(things) + ". Move the start pose so the robot is clear of "
+            + ("it" if len(things) == 1 else "them") + ": the simulator would throw the robot out.")
+
+
 def describe_match_load(step):
     """What the Drive Team stands under the Loader, as in 'a Cup under the red
     left Loader with a red/yellow Pin in it, yellow half up'."""

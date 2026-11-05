@@ -485,6 +485,31 @@ class MatchesVexsimTests(unittest.TestCase):
         self.assertEqual(describe_held(world), "a Cup with a yellow Pin")
         self.assertEqual(possession(world), (1, 1))
 
+    def test_a_start_inside_a_piece_or_a_wall_is_refused_and_says_what_it_is_inside(self):
+        import math
+        from fields import make_world
+        from mechanisms import start_overlap_error
+        from vexsim import Simulator, presets
+        from vexsim.sim import SimConfig
+        from vexsim.units import INCH
+
+        def error_at(x, y, heading, preload="none"):
+            sim = Simulator(presets.four_motor_450(), config=SimConfig(log_every=0))
+            sim.set_pose(y * INCH, -x * INCH, -math.radians(heading))
+            return start_overlap_error(make_world("override", sim, preload))
+
+        self.assertRegex(error_at(0, -65, 0), r"^The robot starts inside the red Alliance Station wall, 2\.\d\d in "
+                                              r"deep\. Move the start pose so the robot is clear of it")
+        on_stack = error_at(0, -23.5, 0)
+        self.assertRegex(on_stack, r"^The robot starts inside a Cup at \(0\.0, -23\.5\), \d\.\d\d in deep; "
+                                   r"a blue/red Pin at \(0\.0, -23\.5\), \d\.\d\d in deep\. .* clear of them")
+        self.assertIn("the red left Goal", error_at(23.5, -47.1, 0))
+        for name in ("override_autonomous", "override_match_load", "override_stack_to_goal", "override_toggle_arms"):
+            with self.subTest(name):
+                project = validate_project(example(name))
+                start = project["start"]
+                self.assertIsNone(error_at(start["x"], start["y"], start["heading"], project["preload"]))
+
     def test_exported_motor_degrees_turn_into_vexsims_heights(self):
         from vexsim.cascade import GEOMETRY
         helpers = exported_helpers("cascade_helpers.hpp")
@@ -780,6 +805,15 @@ class EngineTests(unittest.TestCase):
         self.assertEqual((result["autonomous"]["red"], result["autonomous"]["blue"]), (0, 0))
         self.assertEqual(result["score"]["red"], dict(alliance_pins=1, yellow_pins=0, total=5))
         self.assertEqual(result["score"]["blue"]["total"], 0)
+
+    def test_10c_a_run_that_starts_inside_a_goal_is_refused_before_it_simulates(self):
+        project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
+                       start=dict(x=23.5, y=-47.1, heading=0), steps=[dict(type="drive", distance=10)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 2, done.stderr[-3000:])
+        error = strict_json((output / "error.json").read_text())
+        self.assertRegex(error["error"], r"^The robot starts inside the red left Goal, \d\.\d\d in deep\.")
+        self.assertFalse((output / "result.json").exists())
 
     def test_11_a_step_stopped_by_a_goal_names_the_goal_not_the_controller(self):
         project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),

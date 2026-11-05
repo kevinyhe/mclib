@@ -29,7 +29,8 @@ import run as harness  # noqa: E402
 from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
 from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, RuleWatch,  # noqa: E402
                         autonomous_summary, claw_events, declare_cascade, describe_match_load, frame_telemetry,
-                        load_match, mechanism_reading, score_summary, toggle_events, toggle_faces)
+                        load_match, mechanism_reading, score_summary, start_overlap_error, toggle_events,
+                        toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
 from project import (LIMITS, PRESETS, STEP_TYPES, STILL_STEPS, ProjectError, carries_speed, step_name,  # noqa: E402
                      step_time_limit, strict_json, validate_project)
@@ -791,6 +792,10 @@ def _execute(raw, destination, vexsim, cache, progress):
                                    sim_time_limit=LIMITS["max_simulated_s"])
     recorder = Recorder(destination)
     world = make_world(project["field"], bridge.sim, project["preload"])
+    if project["field"] == "override":
+        overlap = start_overlap_error(world)
+        if overlap:
+            raise StageError(overlap)
     rig = CascadeRig(lib, bridge, world) if project["field"] == "override" else None
     rules = RuleWatch(world, PRESETS[robot["preset"]]["drive_watts"]) if rig else None
     rule_breaks = []
