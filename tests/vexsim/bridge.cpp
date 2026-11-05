@@ -43,6 +43,7 @@ Advance advance = nullptr;
 Output output = nullptr;
 mclib::Pose2D last_integrated_pose{};
 double boomerang_lead = 0.5;
+double motion_min_volts = -1.0;
 mclib::control::RamseteConfig ramsete_config;
 
 // PoseFusion in the loop, the same class the odometry task runs on a robot.
@@ -349,16 +350,18 @@ extern "C" int sim_run(int action, double a, double b, double heading,
                         double volts, double current_threshold_ma) {
   using namespace mclib::units;
   const auto limit = timeout_ms * millisecond;
+  const auto floor = motion_min_volts * volt;
+  constexpr bool overturn = true;
   switch (action) {
-    case 0: turnToAngle(a * degree, limit, exit, volts * volt); break;
-    case 1: driveTo(a * inch, limit, exit, volts * volt); break;
-    case 2: curveCircle(a * degree, b * inch, limit, exit, volts * volt); break;
-    case 3: curveCircleReverse(a * degree, b * inch, limit, exit, volts * volt); break;
-    case 4: swing(a * degree, direction, limit, exit, volts * volt); break;
-    case 5: turnToPoint(a * inch, b * inch, direction, limit); break;
-    case 6: moveToPoint(a * inch, b * inch, direction, limit, exit, volts * volt); break;
+    case 0: turnToAngle(a * degree, limit, exit, volts * volt, floor); break;
+    case 1: driveTo(a * inch, limit, exit, volts * volt, floor); break;
+    case 2: curveCircle(a * degree, b * inch, limit, exit, volts * volt, floor); break;
+    case 3: curveCircleReverse(a * degree, b * inch, limit, exit, volts * volt, floor); break;
+    case 4: swing(a * degree, direction, limit, exit, volts * volt, floor); break;
+    case 5: turnToPoint(a * inch, b * inch, direction, limit, floor); break;
+    case 6: moveToPoint(a * inch, b * inch, direction, limit, exit, volts * volt, overturn, floor); break;
     case 7: boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
-                       limit, exit, volts * volt); break;
+                       limit, exit, volts * volt, overturn, floor); break;
     case 9:
     case 10:
     case 13: {
@@ -464,6 +467,9 @@ extern "C" void sim_set_gains(const double* gains) {
 }
 
 extern "C" void sim_set_lead(double lead) { boomerang_lead = lead; }
+
+// The min_speed every later sim_run() motion gets; negative is mclib's default.
+extern "C" void sim_set_min_volts(double volts) { motion_min_volts = volts; }
 
 extern "C" double sim_heading_target() {
   return mclib::control::robotState().correctAngleDeg();

@@ -28,8 +28,9 @@ its time. Later launches reuse the build until the C++ or vexsim changes.
 1. Click three places on the field. Each click adds a point to the path.
 2. The path turns into colours: that is mclib's planned speed, blue slow and
    red fast. The step shows the planned time and top speed.
-3. Press **Run simulation** (or Ctrl+Enter). Each step gets a ✓ or ✗ with the
-   distance it ended from its target.
+3. Press **Run simulation** (or Ctrl+Enter). Every step runs, and each one
+   shows how far it ended from its target. The run stops early only when a
+   step breaks a game rule.
 4. Press play, or drag the time bar, to watch the simulated robot.
 
 No setting has to change before the first run.
@@ -44,7 +45,7 @@ No setting has to change before the first run.
 | Field (centre) | the routine on a 144 in field. Drag to edit. Top view or vexsim's 3D view. |
 | Playback | play, scrub, playback speed, which run to show, which run to compare with |
 | Graph | planned and simulated speed, motor voltage, heading, or odometry error over time. Click it to jump there. |
-| Step tab (right) | the selected step's settings, its plan, and its checks from the last run |
+| Step tab (right) | the selected step's settings, its plan, and what it did in the last run |
 | Robot & settings tab | drivetrain, odometry sensors, start pose, path defaults, simulated battery and grip, PID gains |
 | Telemetry tab | every recorded value at the playback time: position, speeds, controller, motors, sensors |
 
@@ -82,6 +83,25 @@ the motors to make them stall.
 **Wait** does nothing for its time, 10 ms to 120 s, and exports as
 `pros::delay()`. The drive stays as the last step left it. Use it to wait
 for the Driver Controlled Period before a Match Load.
+
+## Time limit, Max voltage and Min voltage
+
+Every drive step has these under **Limits**:
+
+- **Time limit** ends the motion when it runs out, even short of the
+  target, and the next step starts. The robot is often still moving then:
+  a 30 in drive cut off at 0.30 s on the six-motor drive says "The motion
+  ended with the robot at 50.3 in/s. It braked to a stop 0.21 s and 5.4 in
+  later."
+- **Max voltage** caps the drive voltage. 12 V is full power.
+- **Min voltage** is the motion's `min_speed`, the least voltage the drive
+  gets so it does not stall short of the target. Automatic leaves it to
+  mclib, which uses 1.5 V and only while a step keeps moving into the next
+  one, except in `turnToPoint()`, which always uses it. A number applies it
+  for the whole motion, except in `turnToAngle()` and `swing()`, which only
+  use a floor while they keep moving. 0 turns it off. On a step that stops,
+  too high a floor keeps the robot from settling: with 6 V a 24 in drive
+  rocked about 3 in either way across its target until its time limit.
 
 ## Keep moving into the next step
 
@@ -244,8 +264,9 @@ nothing during the step, and a robot standing where the Cup would land
 stops it. The rules:
 
 - Match Loads go through the alliance's own Loaders, and only in the Driver
-  Controlled Period (<SG11a>). The step fails if it starts in the first
-  15 s. Put a 15000 ms **Wait** before it.
+  Controlled Period (<SG11a>). A Match Load that starts in the first 15 s
+  breaks this rule, and the run stops after it. Put a 15000 ms **Wait**
+  before it.
 - In a Robot Skills Match they can go in at any time, through red's
   Loaders (<RSC2d>).
 - A Drive Team Member may push down on the Loader's handle so the Loader
@@ -259,12 +280,15 @@ opened." A held stack is one Pin and one Cup, inside <SG6> (Q&A 3166).
 The first step checks the robot against the rules: at most 18 in long, wide
 and tall at the start (SG1), 88 W of motors in all (R10) and 55 W on the
 drive (R11). The two lift motors are 22 W and the claw uses no motor, so a
-six-motor drive (66 W) fails: "The drive motors are rated 66 W and all the
-motors 88 W. The limits are 55 W for the drive (R11) and 88 W in all
+six-motor drive (66 W) breaks R11: "The drive motors are rated 66 W and all
+the motors 88 W. The limits are 55 W for the drive (R11) and 88 W in all
 (R10)." New Override routines use the four-motor drive (44 W, 66 W in
-all). During the run a step fails if the robot gets wider or longer than
-24 in (SG2), taller than 50 in (SG3), or holds more than one Pin and one
-Cup (SG6).
+all). During the run a step breaks a rule if the robot gets wider or
+longer than 24 in (SG2), taller than 50 in (SG3), or holds more than one
+Pin and one Cup (SG6).
+
+A step that breaks a rule finishes, and then the run stops: later steps are
+skipped. These are the only things that stop a run.
 
 ## The Override field in 3D
 
@@ -342,22 +366,25 @@ The robot's sizes, masses and frictions that no source gives are in
 | Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
 | Exported ports | lift on ports 7 and -8 with green cartridges, claw valve on ADI port A | placeholders: change them to your robot's |
 
-## Checks
+## What each step reports
 
-Each step that stops is checked after a 0.3 s pause:
+Steps are not graded. Each step that stops is measured after a 0.3 s pause:
 
-| Check | Limit |
+| Reading | Example |
 | --- | --- |
-| Position | 2.5 in from the target; 1.5 in for drive to a pose; 5.5 in for arcs and reverse arcs |
-| Heading | 5° from the target heading |
-| Time | finished before the step's time limit |
-| Stopped | the drive is not powered at the end |
+| Position | "Ended 3.10 in from the target." |
+| Heading | "Ended 1.2° off the target heading." |
+| Time | "Finished in 1.42 s of its 2.50 s time limit." or "The 2.50 s time limit ended the motion." |
+| Stopped | "The drive was stopped at the end." |
+| Stopping | "The motion ended with the robot at 4.2 in/s. It braked to a stop 0.05 s and 0.1 in later." |
 
-A failed check says what was measured and the limit, for example
-"Ended 3.10 in from the target. The limit is 2.5 in." With **Stop at the
-first failed step** on, later steps are skipped, as in the exported C++.
+A step that misses by more than 2.5 in (1.5 in for drive to a pose, 5.5 in
+for arcs), ends more than 5° off its heading, or runs out of time gets a
+hint on why. The next step runs either way, as in the exported C++, which
+calls each step in turn.
 
-Any step fails if the robot falls over, and the run stops there. vexsim rocks
+A robot that falls over lies there for the rest of the run, and the step it
+fell in says so. vexsim rocks
 the robot up onto one edge of its wheels when it brakes, speeds up or turns
 harder than the height of its centre of mass allows. A step where it rocked
 0.5° or more says how far, and at what angle it would have fallen. On the
@@ -424,7 +451,7 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | [speed_zones.json](examples/speed_zones.json) | slow through the corner, fast on the straights |
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
-| [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and it passes |
+| [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and run again to compare |
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: both red Toggles, two backing hits each, and the yellow stack at (23.5, -23.5) on the neutral bottom Goal; 50 points and the Autonomous Bonus in 13.7 s, with claw and lift actions during a drive |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; 0 points, because the left Toggle is still yellow |
 | [override_toggle_arms.json](examples/override_toggle_arms.json) | drive out from red's wall and back the arms into the left Toggle twice: blue, then red; 20 points |

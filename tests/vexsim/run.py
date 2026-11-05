@@ -85,6 +85,8 @@ def load_library(library):
     lib.sim_set_gains.restype = None
     lib.sim_set_lead.argtypes = [C.c_double]
     lib.sim_set_lead.restype = None
+    lib.sim_set_min_volts.argtypes = [C.c_double]
+    lib.sim_set_min_volts.restype = None
     if hasattr(lib, "sim_set_ramsete"):
         lib.sim_set_ramsete.argtypes = [C.c_double] * 8
         lib.sim_set_ramsete.restype = None
@@ -362,10 +364,14 @@ class PhysicsBridge:
             sample.contents.heading = math.nan
 
     def run(self, action, a=0, b=0, heading=0, timeout=4000, direction=1,
-            stop=True, volts=12, current=2500, lead=0.5):
+            stop=True, volts=12, current=2500, lead=0.5, min_volts=-1.0):
+        """@p min_volts is the motion's min_speed; negative is mclib's default."""
         if not math.isfinite(lead) or not 0 <= lead < 1:
             raise ValueError("boomerang lead must be in [0, 1)")
+        if not math.isfinite(min_volts) or min_volts > volts:
+            raise ValueError("min_volts must be finite and at most volts")
         self.lib.sim_set_lead(lead)
+        self.lib.sim_set_min_volts(min_volts)
         result = self.lib.sim_run(action, a, b, heading, timeout, direction, stop, volts, current)
         if self.exceptions:
             raise RuntimeError("; ".join(self.exceptions))

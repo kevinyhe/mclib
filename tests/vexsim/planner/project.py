@@ -11,6 +11,11 @@ from mechanisms import (ACTION_TIMES, ACTION_UNITS, CLAW_PRESETS, LIFT_PRESETS, 
 
 FORMAT = "mclib-path-planner"
 VERSION = 1
+#: The min_output global a motion's min_speed of -1 V stands for
+MCLIB_MIN_VOLTS = 1.5
+#: Fields older files may have that the planner no longer uses: every run
+#: now goes on to the next step unless a step breaks a rule
+RETIRED_PROJECT_FIELDS = {"stop_on_failure"}
 
 PRESETS = {
     "six_motor_450": dict(label="6 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
@@ -60,9 +65,22 @@ FIELDS = {
     "wait_ms": dict(label="Wait", unit="ms", low=10, high=120000, step=10,
                     help="How long to wait. The step always takes exactly this long."),
     "timeout_ms": dict(label="Time limit", unit="ms", low=50, high=20000, step=50,
-                       help="The step fails if it has not finished by then."),
+                       help="The motion gives up here and the next step starts."),
     "volts": dict(label="Max voltage", unit="V", low=.1, high=12, step=.1,
                   help="Caps the drive voltage. 12 V is full power."),
+    "min_volts": dict(label="Min voltage", unit="V", low=0, high=12, step=.1, automatic=MCLIB_MIN_VOLTS,
+                      help_by_step={
+                          **dict.fromkeys(("drive", "point", "boomerang", "arc", "reverse_arc"),
+                                          "The least voltage the drive gets until the motion ends, so it does not "
+                                          "stall short of the target. Automatic is mclib's 1.5 V, and only while "
+                                          "the step keeps moving into the next one. 0 turns it off. On a step "
+                                          "that stops, too high a floor keeps the robot rocking across the "
+                                          "target until the time limit."),
+                          **dict.fromkeys(("turn", "swing"),
+                                          "The least voltage while this turn keeps moving into the next step. A "
+                                          "turn that stops at the end has no floor. Automatic is mclib's 1.5 V."),
+                          "turn_to_point": "The least voltage turnToPoint() uses for the whole turn. Automatic is "
+                                           "mclib's 1.5 V. 0 turns it off."}),
     "lift_preset": dict(label="Lift position", choices=LIFT_PRESETS,
                         help="How high the middle of the claw is above the floor. The claw holds a Cup by its top "
                              "rim, with a Pin standing in it. Over carries the Cup 0.25 in above the tip of the Pin "
@@ -86,31 +104,31 @@ STEP_TYPES = {
                  fields=[], defaults=dict(points=[], sections=[], start_handle=None, timeout_ms=None, volts=12)),
     "drive": dict(label="Drive straight", call="driveTo()",
                   description="Drive a distance along the current heading.",
-                  fields=["distance"], defaults=dict(distance=24)),
+                  fields=["distance"], defaults=dict(distance=24, min_volts=None)),
     "turn": dict(label="Turn to heading", call="turnToAngle()",
                  description="Turn in place to face a field heading.",
-                 fields=["heading"], defaults=dict(heading=90)),
+                 fields=["heading"], defaults=dict(heading=90, min_volts=None)),
     "turn_to_point": dict(label="Turn to face a point", call="turnToPoint()",
                           description="Turn in place to face a field position. Backward points the back of the robot at it.",
-                          fields=["x", "y", "direction"], defaults=dict(x=24, y=24, direction=1)),
+                          fields=["x", "y", "direction"], defaults=dict(x=24, y=24, direction=1, min_volts=None)),
     "point": dict(label="Drive to a point", call="moveToPoint()",
                   description="Turn toward a field position and drive to it.",
-                  fields=["x", "y", "direction"], defaults=dict(x=24, y=24, direction=1)),
+                  fields=["x", "y", "direction"], defaults=dict(x=24, y=24, direction=1, min_volts=None)),
     "boomerang": dict(label="Drive to a pose", call="boomerang()",
                       description="Drive to a field position and arrive facing a heading, aiming at a moving point "
                                   "behind the target.",
                       fields=["x", "y", "heading", "direction", "lead"],
-                      defaults=dict(x=24, y=24, heading=90, direction=1, lead=.5)),
+                      defaults=dict(x=24, y=24, heading=90, direction=1, lead=.5, min_volts=None)),
     "arc": dict(label="Arc", call="curveCircle()",
                 description="Drive around a circle of the given radius until facing the heading.",
-                fields=["heading", "radius"], defaults=dict(heading=90, radius=24)),
+                fields=["heading", "radius"], defaults=dict(heading=90, radius=24, min_volts=None)),
     "reverse_arc": dict(label="Reverse arc", call="curveCircleReverse()",
                         description="Back around a circle of the given radius until facing the heading. "
                                     "The radius sign and the heading change must describe backing up.",
-                        fields=["heading", "radius"], defaults=dict(heading=-90, radius=24)),
+                        fields=["heading", "radius"], defaults=dict(heading=-90, radius=24, min_volts=None)),
     "swing": dict(label="Swing turn", call="swing()",
                   description="Turn by driving one side while the other side holds still.",
-                  fields=["heading", "direction"], defaults=dict(heading=90, direction=1)),
+                  fields=["heading", "direction"], defaults=dict(heading=90, direction=1, min_volts=None)),
     "wall_reset": dict(label="Wall reset", call="wallReset()",
                        description="Push into a wall until the motors stall, then set odometry to this pose. "
                                    "On a game field the robot pushes against the real wall. On the open floor "
@@ -135,8 +153,9 @@ STEP_TYPES = {
                        description="The Drive Team lifts a red Loader by its handle and stands a Cup with a Pin in "
                                    "it on the floor under it, through the Loader's back. The Loader stays up. The "
                                    "robot does nothing in this step. Match Loads may only be loaded in the Driver "
-                                   "Controlled Period (SG11a), so this step fails in the first 15 s. In Skills "
-                                   "they may be loaded at any time (RSC2d), which the planner does not model.",
+                                   "Controlled Period (SG11a): in the first 15 s this step breaks that rule and "
+                                   "the run stops after it. In Skills they may be loaded at any time (RSC2d), "
+                                   "which the planner does not model.",
                        fields=["loader", "match_load_pin"],
                        defaults=dict(loader="red_left", match_load_pin="red_yellow_up")),
 }
@@ -204,7 +223,6 @@ DEFAULT_PROJECT = dict(
     gains={key: item["default"] for key, item in GAINS.items()},
     path_defaults={key: item["default"] for key, item in PATH_DEFAULTS.items()},
     start=dict(x=0, y=-48, heading=0),
-    stop_on_failure=True,
     steps=[dict(type="path", chain=False, **copy.deepcopy(STEP_TYPES["path"]["defaults"]))],
 )
 
@@ -322,20 +340,17 @@ def validate_project(raw):
     """A complete, checked copy of @p raw with every default filled in.
 
     Raises ValueError with a message that names the step and field."""
-    _object(raw, set(DEFAULT_PROJECT), "The project")
+    _object(raw, set(DEFAULT_PROJECT) | RETIRED_PROJECT_FIELDS, "The project")
     if raw.get("format", FORMAT) != FORMAT:
         raise ValueError(f"This is not a path planner project (format is \"{raw.get('format')}\")")
     if raw.get("version", VERSION) != VERSION:
         raise ValueError(f"This project is version {raw.get('version')}; this planner reads version {VERSION}")
     project = copy.deepcopy(DEFAULT_PROJECT)
-    for key in ("name", "stop_on_failure"):
-        if key in raw:
-            project[key] = raw[key]
+    if "name" in raw:
+        project["name"] = raw["name"]
     if not isinstance(project["name"], str) or not 1 <= len(project["name"]) <= 80 or \
             any(ord(c) < 32 for c in project["name"]):
         raise ValueError("The routine name must be 1 to 80 characters on one line")
-    if not isinstance(project["stop_on_failure"], bool):
-        raise ValueError("Stop at the first failed step must be true or false")
     project["field"] = raw.get("field", OLD_FILE_FIELD)
     if project["field"] not in GAME_FIELDS:
         raise ValueError(f"Field must be one of: {', '.join(GAME_FIELDS)}")
@@ -448,6 +463,11 @@ def _validate_step(index, value, count, field):
     _field(step, "volts", where)
     if kind == "turn_to_point" and step["volts"] != 12:
         raise ValueError(f"{where}: turnToPoint() always uses up to 12 V")
+    if step.get("min_volts") is not None:
+        _field(step, "min_volts", where)
+        if step["min_volts"] > step["volts"]:
+            raise ValueError(f"{where}: Min voltage ({step['min_volts']:g} V) must not be more than Max voltage "
+                             f"({step['volts']:g} V)")
     if kind == "wall_reset" and index != count - 1:
         raise ValueError(f"{where}: a wall reset must be the last step, because it moves the odometry frame")
     step["actions"] = _validate_actions(step["actions"], where)

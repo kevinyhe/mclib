@@ -39,7 +39,7 @@ RETIRED_MECHANISMS = {
 }
 #: Lift presets of the cascade robot before its claw held Cups
 RETIRED_LIFT_PRESETS = ("pin_in_cup", "over_alliance_goal")
-ACTION_TIMES = {"start": "When the step starts", "distance": "Once this far from the step start", "time": "After",
+ACTION_TIMES = {"start": "When the step starts", "distance": "After driving", "time": "After",
                 "end": "When the motion ends"}
 ACTION_UNITS = {"start": "", "distance": "in", "time": "ms", "end": ""}
 #: <SG11a>: a robot's own alliance's Loaders, as seen from its Alliance Station; the vexsim names have spaces

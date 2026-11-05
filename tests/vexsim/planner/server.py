@@ -33,7 +33,7 @@ from geometry import designed_poses  # noqa: E402
 from native_viewer import NativeViewerError, asset as native_asset  # noqa: E402
 from project import LIMITS, PRESETS, TRACKING, ProjectError, config, step_name, strict_json, validate_project  # noqa: E402
 
-FINISHED = {"passed", "failed", "cancelled", "error"}
+FINISHED = {"finished", "broke_rule", "cancelled", "error"}
 STATIC = HERE / "static"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                  ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
@@ -292,7 +292,7 @@ class Planner:
                         result = self._read(destination, "result.json")
                         failure = self._read(destination, "error.json", {})
                         if process.returncode in (0, 1) and isinstance(result, dict) and not job["error"]:
-                            job.update(status="passed" if result["passed"] else "failed", summary=result["summary"])
+                            job.update(status="finished" if result["legal"] else "broke_rule", summary=result["summary"])
                         else:
                             job.update(status="error",
                                        error=job["error"] or failure.get("error") or

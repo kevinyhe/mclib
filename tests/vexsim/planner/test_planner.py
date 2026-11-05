@@ -200,6 +200,15 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not a path planner project"):
             validate_project(dict(format="something-else"))
 
+    def test_min_voltage_is_automatic_unless_set_and_never_above_the_max(self):
+        project = validate_project(dict(steps=[dict(type="drive", distance=12), dict(type="turn", heading=90, min_volts=2)]))
+        self.assertEqual([step["min_volts"] for step in project["steps"]], [None, 2])
+        with self.assertRaisesRegex(ValueError, r"Step 1 \(Drive straight\): Min voltage \(7 V\) must not be more than "
+                                                r"Max voltage \(6 V\)"):
+            validate_project(dict(steps=[dict(type="drive", distance=12, volts=6, min_volts=7)]))
+        with self.assertRaisesRegex(ValueError, "fields the planner does not know: min_volts"):
+            validate_project(dict(field="override", steps=[dict(type="lift", lift_preset="top", min_volts=2)]))
+
     def test_automatic_path_time_limit_is_planned_time_plus_settle(self):
         step = validate_project(dict(steps=[path_step([(0, 0)])]))["steps"][0]
         self.assertIsNone(step["timeout_ms"])
@@ -273,6 +282,21 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(code.count("Keeps moving into the next step"), 2)
         self.compile(code)
 
+    def test_export_passes_a_set_min_voltage_and_leaves_automatic_to_mclib(self):
+        project = validate_project(dict(steps=[
+            dict(type="drive", distance=12), dict(type="drive", distance=6, min_volts=2.5),
+            dict(type="point", x=10, y=10, min_volts=3), dict(type="turn_to_point", x=0, y=40, min_volts=4),
+            dict(type="boomerang", x=-10, y=20, heading=0, min_volts=1),
+            dict(type="swing", heading=45, chain=True, min_volts=2), dict(type="turn", heading=0)]))
+        code = export(project)
+        for text in ("driveTo(12_in, 4000_ms, true, 12_V);", "driveTo(6_in, 4000_ms, true, 12_V, 2.5_V);",
+                     "moveToPoint(10_in, 10_in, 1, 4000_ms, true, 12_V, true, 3_V);",
+                     "turnToPoint(0_in, 40_in, 1, 4000_ms, 4_V);",
+                     "boomerang(-10_in, 20_in, 1, 0_deg, 0.5, 4000_ms, true, 12_V, true, 1_V);",
+                     "swing(45_deg, 1, 4000_ms, false, 12_V, 2_V);", "turnToAngle(0_deg, 4000_ms, true, 12_V);"):
+            self.assertIn(text, code)
+        self.compile(code)
+
     def test_export_of_the_lift_claw_match_load_and_actions_compiles(self):
         project = validate_project(dict(field="override", preload="behind", steps=[
             dict(type="drive", distance=12, actions=[dict(when="start", mechanism="lift", preset="over_neutral_goal"),
@@ -302,9 +326,10 @@ class ExportTests(unittest.TestCase):
                      "{cascade::Action::When::End, 0, cascade::Mechanism::Claw, "
                      "static_cast<int>(cascade::ClawPreset::Closed)}",
                      "  pros::delay(15000);\n",
-                     "const bool result = wallReset("):
+                     "    wallReset(0_in, -63_in, 180_deg, 6_V, 4000_ms, 2500 * mclib::units::milliampere);\n",
+                     "Claw to Open: jaws 4.4 in apart after driving 8 in from the step start."):
             self.assertIn(text, code)
-        for gone in ("claw_motor", "toggle_arm", "ToggleArm"):
+        for gone in ("claw_motor", "toggle_arm", "ToggleArm", "Reached) return;", "TimedOut) return;", "if (!wallReset("):
             self.assertNotIn(gone, code)
         self.assertEqual(code.count("cascade_rig.finishActions();"), 3)
         self.compile(code)
@@ -470,7 +495,7 @@ class MatchesVexsimTests(unittest.TestCase):
                          (GEOMETRY.sprocket_teeth, GEOMETRY.chain_pitch, GEOMETRY.stages))
         self.assertAlmostEqual(lowest, GEOMETRY.grip_lowest, places=9)
 
-    def test_a_robot_that_falls_over_fails_the_step_and_one_that_rocks_says_how_far(self):
+    def test_a_robot_that_falls_over_says_so_in_that_step_only_and_one_that_rocks_says_how_far(self):
         from engine import TipWatch
         from vexsim import Simulator, presets
         from vexsim.sim import SimConfig
@@ -493,18 +518,18 @@ class MatchesVexsimTests(unittest.TestCase):
             return tips
 
         fell = brake_from_full_speed(15.0)
-        self.assertTrue(fell.fallen)
-        [upright] = fell.fall_checks()
-        self.assertFalse(upright["passed"])
-        self.assertRegex(upright["message"], r"^The robot fell over at 2\.\d\d s\. It rocked onto its front wheels "
-                                             r"past 19°, where its centre of mass, 15\.0 in up, was over them\.$")
+        [fall] = fell.fall_readings(started=1.5)
+        self.assertRegex(fall["message"], r"^The robot fell over at 2\.\d\d s\. It rocked onto its front wheels "
+                                          r"past 19°, where its centre of mass, 15\.0 in up, was over them\. It "
+                                          r"lies there for the rest of the run\.$")
+        self.assertEqual(fell.fall_readings(started=fell.fell_at + 0.001), [])
         self.assertEqual(fell.rock_lines(), [])
         rocked = brake_from_full_speed(13.0)
-        self.assertEqual(rocked.fall_checks(), [])
+        self.assertEqual(rocked.fall_readings(started=1.5), [])
         self.assertRegex(rocked.rock_lines()[0], r"^The robot rocked 7\.\d° onto its front wheels\. "
                                                  r"It falls over at 22°\.$")
         level = brake_from_full_speed(5.0)
-        self.assertEqual((level.fall_checks(), level.rock_lines()), ([], []))
+        self.assertEqual((level.fall_readings(started=1.5), level.rock_lines()), ([], []))
 
     def test_drive_watts_are_the_motors_vexsim_puts_on_each_base(self):
         from project import PRESETS
@@ -539,18 +564,21 @@ class EngineTests(unittest.TestCase):
         done = self.engine("run", project, "--output", str(output))
         return done, output
 
-    def test_1_run_plans_simulates_and_scores_every_step(self):
+    def test_1_run_plans_simulates_and_reports_every_step(self):
         project = example("speed_zones")
         project["steps"].append(dict(type="turn", heading=90))
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        self.assertEqual(result["summary"]["passed_steps"], 2)
+        self.assertTrue(result["legal"])
+        self.assertEqual(result["summary"]["ran_steps"], 2)
         stages = {stage["id"]: stage for stage in result["stages"]}
         self.assertEqual([stage["status"] for stage in result["stages"]].count("failed"), 0)
         self.assertIn("Planned 1 path", stages["plan"]["detail"])
         path = result["steps"][0]
-        self.assertTrue(any(check["id"] == "position" and "limit 2.5 in" in check["message"] for check in path["checks"]))
+        self.assertTrue(any(item["id"] == "position" and re.fullmatch(r"Ended \d+\.\d\d in from the target\.", item["message"])
+                            for item in path["readings"]))
+        self.assertFalse(any("passed" in item or "limit" in item for item in path["readings"]))
         self.assertTrue(any(line.startswith("Largest gap from the planned path") for line in path["info"]))
         plan = result["plans"][0]
         self.assertEqual(plan["parts"], 3)
@@ -577,24 +605,37 @@ class EngineTests(unittest.TestCase):
         self.assertIn("Step 3 (Path): section 1 doubles back on itself", answer["error"])
         self.assertIn("Turn off Reverse for this section", answer["error"])
 
-    def test_4_a_failed_check_reports_measured_value_and_limit(self):
-        project = dict(steps=[dict(type="drive", distance=30, timeout_ms=300)], stop_on_failure=True)
+    def test_4_a_step_that_falls_short_says_what_it_did_and_the_run_goes_on(self):
+        project = dict(steps=[dict(type="drive", distance=30, timeout_ms=300), dict(type="turn", heading=90)],
+                       stop_on_failure=True)
         done, output = self.run_routine(project)
-        self.assertEqual(done.returncode, 1, done.stderr[-3000:])
-        row = strict_json((output / "result.json").read_text())["steps"][0]
-        self.assertFalse(row["passed"])
-        self.assertIn("Used the whole 0.30 s time limit without finishing.", row["reason"])
-        self.assertRegex(row["reason"], r"Ended \d+\.\d\d in from the target\. The limit is 2\.5 in\.")
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        short, turn = result["steps"]
+        messages = [item["message"] for item in short["readings"]]
+        self.assertIn("The 0.30 s time limit ended the motion.", messages)
+        self.assertTrue(any(re.fullmatch(r"Ended \d+\.\d\d in from the target\.", message) for message in messages))
+        slide = next(item for item in short["readings"] if item["id"] == "stopping")
+        self.assertRegex(slide["message"], r"^The motion ended with the robot at \d\d\.\d in/s\. It braked to a stop "
+                                           r"0\.\d\d s and \d+\.\d in later\.$")
+        self.assertGreater(slide["measured"], 2)
+        self.assertEqual(len(short["notes"]), 1, short["notes"])
+        self.assertRegex(short["notes"][0], r"^The time limit ended the motion \d+\.\d in from its target\. If the step "
+                                            r"should reach its target, raise the time limit")
+        self.assertTrue(turn["executed"])
+        self.assertEqual(result["summary"], dict(steps=2, ran_steps=2, skipped_steps=0, broke_rule_in_step=None,
+                                                 simulated_s=result["summary"]["simulated_s"]))
+        self.assertNotIn("stop_on_failure", result["project"])
 
     def test_5_a_chained_drive_hands_off_without_stopping(self):
         project = dict(steps=[dict(type="drive", distance=24, chain=True), dict(type="turn", heading=90)])
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         drive, turn = strict_json((output / "result.json").read_text())["steps"]
-        self.assertNotIn("stopped", [check["id"] for check in drive["checks"]])
-        self.assertIn("stopped", [check["id"] for check in turn["checks"]])
-        self.assertRegex(drive["reason"], "All checks passed")
-        self.assertTrue(any(check["message"].startswith("Handed off") for check in drive["checks"]))
+        self.assertNotIn("stopped", [item["id"] for item in drive["readings"]])
+        self.assertIn("stopped", [item["id"] for item in turn["readings"]])
+        self.assertEqual(drive["rule_breaks"], [])
+        self.assertTrue(any(item["message"].startswith("Handed off") for item in drive["readings"]))
         self.assertEqual(drive["end_time_s"], turn["start_time_s"])
         handoff = next(line for line in drive["info"] if line.startswith("Kept moving into step 2 at"))
         self.assertGreater(float(handoff.split(" at ")[1].split(" in/s")[0]), 5)
@@ -655,7 +696,8 @@ class EngineTests(unittest.TestCase):
         done, output = self.run_routine(example("override_stack_to_goal"))
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        self.assertEqual(result["summary"]["failed_steps"], 0)
+        self.assertTrue(result["legal"])
+        self.assertEqual(result["summary"]["skipped_steps"], 0)
         info = [line for row in result["steps"] for line in row["info"]]
         grips = [line for line in info if line.startswith("Gripped")]
         drops = [line for line in info if line.startswith("Dropped")]
@@ -673,15 +715,15 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(rules["most_held"], dict(pins=1, cups=1, passed=True))
         self.assertLessEqual(max(rules["start_in"][key] for key in ("length", "width", "height")), 18.0)
         self.assertEqual(rules["motors_w"], dict(drive=44, total=66.0, drive_limit=55.0, total_limit=88.0, passed=True))
-        checks = [check["message"] for check in result["steps"][0]["checks"]]
         self.assertIn("The drive motors are rated 44 W and all the motors 66 W. The limits are 55 W for the drive "
-                      "(R11) and 88 W in all (R10).", checks)
+                      "(R11) and 88 W in all (R10).", result["steps"][0]["info"])
 
     def test_9_override_autonomous_example_turns_both_toggles_and_scores_a_stack(self):
         done, output = self.run_routine(example("override_autonomous"))
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        self.assertEqual(result["summary"]["failed_steps"], 0)
+        self.assertTrue(result["legal"])
+        self.assertEqual(result["summary"]["skipped_steps"], 0)
         self.assertLessEqual(result["summary"]["simulated_s"], 14.0)
         autonomous = result["autonomous"]
         self.assertEqual((autonomous["red"], autonomous["blue"]), (50, 0))
@@ -706,23 +748,28 @@ class EngineTests(unittest.TestCase):
                        steps=[dict(type="match_load", loader="red_left", match_load_pin="red_yellow_up")])
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 1, done.stderr[-3000:])
-        row = strict_json((output / "result.json").read_text())["steps"][0]
-        self.assertFalse(row["passed"])
-        self.assertIn("Match Loads may only be loaded in the Driver Controlled Period (SG11a).", row["reason"])
-        self.assertIn("The Drive Team stood a Cup under the red left Loader with a red/yellow Pin in it, yellow half up.",
-                      [check["message"] for check in row["checks"]])
+        result = strict_json((output / "result.json").read_text())
+        row = result["steps"][0]
+        self.assertFalse(result["legal"])
+        self.assertEqual(result["summary"]["broke_rule_in_step"], 0)
+        self.assertEqual(len(row["rule_breaks"]), 1, row["rule_breaks"])
+        self.assertTrue(row["rule_breaks"][0].startswith(
+            "Match Loads may only be loaded in the Driver Controlled Period (SG11a)."))
+        self.assertIn("The Drive Team stood a Cup under the red left Loader with a red/yellow Pin in it, yellow half up, "
+                      "0.00 s into the match.", [item["message"] for item in row["readings"]])
 
     def test_10b_a_wait_past_15_s_lets_a_match_load_score_in_driver_control(self):
         done, output = self.run_routine(example("override_match_load"))
         self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        self.assertEqual(result["summary"]["failed_steps"], 0)
+        self.assertTrue(result["legal"])
         self.assertGreater(result["summary"]["simulated_s"], 20.0)
         wait, match_load = result["steps"][:2]
-        self.assertIn("Waited 15.00 s, to 15.00 s into the match.", [check["message"] for check in wait["checks"]])
+        self.assertIn("Waited 15.00 s, to 15.00 s into the match.", [item["message"] for item in wait["readings"]])
         self.assertAlmostEqual(match_load["start_time_s"], 15.0, places=3)
-        self.assertIn("Loaded 15.00 s into the match, after the 15 s autonomous period (SG11a).",
-                      [check["message"] for check in match_load["checks"]])
+        self.assertEqual(match_load["rule_breaks"], [])
+        self.assertTrue(any(re.fullmatch(r"The Drive Team stood .+, 15\.00 s into the match\.", item["message"])
+                            for item in match_load["readings"]), match_load["readings"])
         info = [line for row in result["steps"] for line in row["info"]]
         grips = [line for line in info if line.startswith("Gripped")]
         drops = [line for line in info if line.startswith("Dropped")]
@@ -738,9 +785,9 @@ class EngineTests(unittest.TestCase):
         project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
                        start=dict(x=8, y=-47.1, heading=90), steps=[dict(type="drive", distance=30, timeout_ms=2500)])
         done, output = self.run_routine(project)
-        self.assertEqual(done.returncode, 1, done.stderr[-3000:])
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         row = strict_json((output / "result.json").read_text())["steps"][0]
-        self.assertFalse(row["passed"])
+        self.assertEqual(row["rule_breaks"], [])
         self.assertTrue(any(line.startswith("Hit the red left Goal") for line in row["info"]))
         self.assertEqual(len(row["notes"]), 1, row["notes"])
         self.assertRegex(row["notes"][0], r"^The robot was stopped by the red left Goal: it moved \d\.\d in of the "
@@ -769,17 +816,48 @@ class EngineTests(unittest.TestCase):
                 self.assertTrue(turned[0].startswith(f"Turned the {toggle} Toggle: {color} now faces into the field "
                                                      "(yellow before)."), turned)
 
-    def test_13_a_drive_over_55_w_breaks_r11_on_the_first_step(self):
+    def test_14_min_voltage_holds_up_a_chained_turn_and_too_much_keeps_a_drive_from_settling(self):
+        project = dict(steps=[dict(type="turn", heading=90, chain=True, min_volts=4),
+                              dict(type="drive", distance=24, timeout_ms=2000, min_volts=6)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        turn, drive = result["steps"]
+        turning = [frame for frame in result["trace"] if frame["step"] == 0 and frame["phase"] == "motion"
+                   and frame["t"] - turn["start_time_s"] > 0.25]
+        self.assertGreater(len(turning), 5)
+        self.assertGreaterEqual(min(abs(frame["left_volts"]) for frame in turning), 4 - 1e-9)
+        self.assertIn("The 2.00 s time limit ended the motion.", [item["message"] for item in drive["readings"]])
+        self.assertTrue(drive["notes"][0].startswith("The 6 V Min voltage kept the drive from slowing enough to "
+                                                     "settle"), drive["notes"])
+
+    def test_15_a_lift_cut_off_by_its_time_limit_reports_the_claw_where_it_was_then(self):
+        project = dict(field="override", preload="none", robot=dict(preset="four_motor_450"),
+                       start=dict(x=0, y=-50, heading=0), steps=[dict(type="lift", lift_preset="top", timeout_ms=200)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        row = result["steps"][0]
+        found = re.fullmatch(r"The lift had not reached Top: .* when its 0\.20 s time limit ran out: the claw is "
+                             r"(\d+\.\d\d) in up\.", row["readings"][0]["message"])
+        self.assertIsNotNone(found, row["readings"])
+        at_limit = next(frame for frame in result["trace"] if frame["t"] >= row["return_time_s"])
+        self.assertAlmostEqual(float(found.group(1)), at_limit["lift_height_in"], delta=0.05)
+        self.assertLess(at_limit["lift_height_in"], result["trace"][-1]["lift_height_in"])
+
+    def test_13_a_drive_over_55_w_breaks_r11_on_the_first_step_and_stops_the_run(self):
         project = dict(field="override", preload="none", robot=dict(preset="six_motor_450"),
                        start=dict(x=0, y=-61.7, heading=0), steps=[dict(type="drive", distance=5),
                                                                   dict(type="drive", distance=-5)])
         done, output = self.run_routine(project)
         self.assertEqual(done.returncode, 1, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        first = result["steps"][0]
-        self.assertFalse(first["passed"])
+        first, second = result["steps"]
         self.assertIn("The drive motors are rated 66 W and all the motors 88 W. The limits are 55 W for the drive "
-                      "(R11) and 88 W in all (R10).", first["reason"])
+                      "(R11) and 88 W in all (R10).", first["rule_breaks"])
+        self.assertFalse(second["executed"])
+        self.assertEqual(second["skipped_because"], "Not run: step 1 broke a rule, so the run stopped there.")
+        self.assertEqual(result["summary"]["broke_rule_in_step"], 0)
         self.assertEqual(result["autonomous"]["rules"]["motors_w"]["passed"], False)
 
 
