@@ -48,11 +48,22 @@ function tellParent(message) {
   parent.postMessage(message, location.origin);
 }
 
+let renderQueued = false;
+function requestRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => {
+    renderQueued = false;
+    renderer.render(scene, camera);
+  });
+}
+
 function placeCamera() {
   const flat = Math.cos(orbit.elevation) * orbit.radius;
   camera.position.set(orbit.target.x + Math.sin(orbit.azimuth) * flat, orbit.target.y + Math.sin(orbit.elevation) * orbit.radius,
     orbit.target.z + Math.cos(orbit.azimuth) * flat);
   camera.lookAt(orbit.target);
+  requestRender();
 }
 
 function setView(name) {
@@ -75,6 +86,7 @@ function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / Math.max(1, innerHeight);
   camera.updateProjectionMatrix();
+  requestRender();
 }
 
 function addFloor(drawing) {
@@ -447,6 +459,7 @@ function showToggles(frame) {
 }
 
 function showFrame(frame, pieces, playing, live) {
+  requestRender();
   showPieces(pieces ?? []);
   showToggles(frame);
   showLoaders(frame);
@@ -525,7 +538,6 @@ async function start() {
   showPieces(drawing.pieces);
   resize();
   setView("operator");
-  renderer.setAnimationLoop(() => renderer.render(scene, camera));
   statusLine.textContent = "Override field · 1–5 camera views, drag to turn, scroll to zoom";
   tellParent({ type: "mclib-vexsim-ready", renderer: "override-field" });
 }
