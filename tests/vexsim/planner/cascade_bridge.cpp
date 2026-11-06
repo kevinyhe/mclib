@@ -22,8 +22,8 @@ extern "C" void (*sim_after_refresh_hook)(std::uint32_t millis);
 
 namespace {
 
-using ReadLiftDegrees = double (*)();
-using WriteLiftVolts = void (*)(double volts);
+using ReadMotorDegrees = double (*)();
+using WriteMotorVolts = void (*)(double volts);
 using SetClawValve = void (*)(int closed);
 
 constexpr int kActionValues = 4;
@@ -37,11 +37,16 @@ void tick(std::uint32_t millis) {
 
 }  // namespace
 
-extern "C" void planner_cascade_init(ReadLiftDegrees read_lift, WriteLiftVolts write_lift,
-                                     SetClawValve set_claw) {
+// claw_start is the claw's preset at the start: 0 open, 1 closed on a preload.
+extern "C" void planner_cascade_init(ReadMotorDegrees read_lift, WriteMotorVolts write_lift,
+                                     SetClawValve set_claw, ReadMotorDegrees read_roller,
+                                     WriteMotorVolts write_roller, int claw_start) {
   rig = std::make_unique<cascade::Rig>([read_lift] { return read_lift(); },
                                        [write_lift](double volts) { write_lift(volts); },
-                                       [set_claw](bool closed) { set_claw(closed ? 1 : 0); });
+                                       [set_claw](bool closed) { set_claw(closed ? 1 : 0); },
+                                       [read_roller] { return read_roller(); },
+                                       [write_roller](double volts) { write_roller(volts); },
+                                       static_cast<cascade::ClawPreset>(claw_start));
   sim_after_refresh_hook = tick;
   tick(mclib::time::millis());
 }
@@ -70,3 +75,13 @@ extern "C" int planner_cascade_move_lift(int preset, int timeout_ms) {
 }
 
 extern "C" void planner_cascade_set_claw(int preset) { rig->setClaw(static_cast<cascade::ClawPreset>(preset)); }
+
+// cascade::MoveResult, or -1 when no drive is registered to push back with.
+extern "C" int planner_cascade_spin_roller(double roller_degrees, double volts, double press_volts,
+                                           int timeout_ms) {
+  mclib::control::DriveHardware* drive = mclib::control::requireDrive("planner_cascade_spin_roller");
+  if (drive == nullptr) return -1;
+  const cascade::MoveResult result =
+      rig->spinRoller(*drive, roller_degrees, volts, press_volts, static_cast<std::uint32_t>(timeout_ms));
+  return static_cast<int>(result);
+}

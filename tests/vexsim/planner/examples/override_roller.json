@@ -1,0 +1,15 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: turn the left Toggle with the roller",
+  "description": "Starts with its back 1 in off red's wall in the middle of the left Toggle and turns the roller 470\u00b0 while the drive pushes back at 3 V. On red's wall the first flap turns the blue face into the field and the second the red one. Then it drives away so the Toggle is untouched and counts.",
+  "field": "override",
+  "preload": "yellow",
+  "robot": {"preset": "override_cascade", "tracking": "horizontal"},
+  "slew": {"speed_up_v": 0.3, "slow_down_v": 1},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
+  "steps": [
+    {"type": "roller", "note": "two flaps: blue, then red", "roller_deg": 470, "roller_volts": 12, "press_volts": 3, "timeout_ms": 2000},
+    {"type": "drive", "note": "drive away so it counts", "distance": 8}
+  ]
+}

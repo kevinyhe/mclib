@@ -32,8 +32,8 @@ from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, Rule
                         load_match, mechanism_reading, score_summary, start_overlap_error, toggle_events,
                         toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
-from project import (LIMITS, PRESETS, STEP_TYPES, STILL_STEPS, ProjectError, carries_speed, step_name,  # noqa: E402
-                     step_time_limit, strict_json, validate_project)
+from project import (LIMITS, MECHANISM_STEPS, PRESETS, STEP_TYPES, STILL_STEPS, TRACKING, ProjectError,  # noqa: E402
+                     carries_speed, step_name, step_time_limit, strict_json, validate_project)
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
 CASCADE_BRIDGE = HERE / "cascade_bridge.cpp"
@@ -423,10 +423,12 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan
 def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan):
     """Runs one step with the real mclib call. Returns followTrajectory()'s
     MotionResult for paths, wallReset()'s result for wall resets, and
-    cascade::MoveResult for the lift and the claw."""
+    cascade::MoveResult for the lift, the claw and the roller."""
     kind = step["type"]
     if kind in MECHANISMS:
         return rig.move(kind, step[f"{kind}_preset"], timeout_ms)
+    if kind == "roller":
+        return rig.spin_roller(step, timeout_ms)
     if kind == "path":
         return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan)
     if kind == "reverse_arc" and math.remainder(step["heading"] - bridge.pose()[2], 360) * step["radius"] > 1e-8:
@@ -489,10 +491,10 @@ class TipWatch:
         if not tilt.fallen or self.fell_at < started:
             return []
         return [reading("fell", "Fell over",
-                        f"The robot fell over at {self.fell_at:.2f} s. It rocked onto its {wheel_side(tilt.edge)} "
-                        f"wheels past {math.degrees(tilt.balance):.0f}°, where its centre of mass, "
-                        f"{self.sim.chassis.cg_height / INCH:.1f} in up, was over them. It lies there for the "
-                        "rest of the run.")]
+                        f"The robot fell over at {self.fell_at:.2f} s. It tipped toward its {wheel_side(tilt.edge)} "
+                        f"past {math.degrees(tilt.balance):.0f}°, where its centre of mass, "
+                        f"{self.sim.chassis.cg_height / INCH:.1f} in up, was over the lowest edge of the robot on "
+                        "that side. It lies there for the rest of the run.")]
 
     def rock_lines(self):
         """How far the robot rocked onto the edge of its wheels this step,
@@ -551,6 +553,16 @@ def mechanism_readings(step, timeout_ms, duration_ms, motion_result, pose_text):
         message = f"The lift reached {preset} in {seconds:.2f} s: {pose_text}."
     else:
         message = f"The lift had not reached {preset} when its {limit_s:.2f} s time limit ran out: {pose_text}."
+    return [reading("time", "Time", message, measured=round(seconds, 3), unit="s")]
+
+
+def roller_readings(step, timeout_ms, duration_ms, motion_result, turned_deg):
+    seconds, limit_s = duration_ms / 1000, timeout_ms / 1000
+    if motion_result == MOVE_RESULTS.index("Reached the preset"):
+        message = f"The roller turned {turned_deg:.0f}° in {seconds:.2f} s."
+    else:
+        message = (f"The roller had turned {turned_deg:.0f}° of {step['roller_deg']:g}° when its {limit_s:.2f} s "
+                   "time limit ran out.")
     return [reading("time", "Time", message, measured=round(seconds, 3), unit="s")]
 
 
@@ -790,12 +802,13 @@ def _execute(raw, destination, vexsim, cache, progress):
                                    seed=conditions["noise_seed"], tracking_mode=robot["tracking"],
                                    tuning=project["gains"], start_pose=(start["x"], start["y"], start["heading"]),
                                    sim_time_limit=LIMITS["max_simulated_s"])
+    bridge.set_slew(project["slew"]["speed_up_v"], project["slew"]["slow_down_v"])
     recorder = Recorder(destination)
-    world = make_world(project["field"], bridge.sim, project["preload"])
-    if project["field"] == "override":
-        overlap = start_overlap_error(world)
-        if overlap:
-            raise StageError(overlap)
+    from vexsim.override import StartOverlapError
+    try:
+        world = make_world(project["field"], bridge.sim, project["preload"])
+    except StartOverlapError as error:
+        raise StageError(start_overlap_error(error.overlaps)) from error
     rig = CascadeRig(lib, bridge, world) if project["field"] == "override" else None
     rules = RuleWatch(world, PRESETS[robot["preset"]]["drive_watts"]) if rig else None
     rule_breaks = []
@@ -848,6 +861,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         entry_truth = bridge.truth()
         configuration_error = None
         faces_before = toggle_faces(world) if rig else None
+        roller_at_start = world.mechanism.roller.angle if rig else None
         if rig:
             rig.begin_actions(step["actions"])
         tips.begin_step()
@@ -865,6 +879,7 @@ def _execute(raw, destination, vexsim, cache, progress):
             motion_result = None
         late_actions = rig.finish_actions() if rig else 0
         returned = bridge.sim.t
+        roller_turned = math.degrees(abs(world.mechanism.roller.angle - roller_at_start)) if rig else None
         mechanism_at_return = mechanism_reading(world, step["type"])[0] if step["type"] in MECHANISMS else None
         truth_at_exit, estimate_at_exit = bridge.truth(), bridge.pose()
         coordinate_reset = step["type"] == "wall_reset" and bool(motion_result)
@@ -880,6 +895,9 @@ def _execute(raw, destination, vexsim, cache, progress):
         step_breaks = []
         if step["type"] in MECHANISMS:
             readings = mechanism_readings(step, timeout_ms, duration_ms, motion_result, mechanism_at_return)
+            position_error = heading_error = None
+        elif step["type"] == "roller":
+            readings = roller_readings(step, timeout_ms, duration_ms, motion_result, roller_turned)
             position_error = heading_error = None
         elif step["type"] == "match_load":
             readings, step_breaks = match_load_report(step, started, configuration_error)
@@ -966,7 +984,7 @@ def _execute(raw, destination, vexsim, cache, progress):
                          true_pose=actual, estimated_pose_at_exit=estimate_at_exit,
                          coordinate_reset=coordinate_reset,
                          score=score_summary(world) if rig else None,
-                         move_result=MOVE_RESULTS[motion_result] if step["type"] in MECHANISMS and
+                         move_result=MOVE_RESULTS[motion_result] if step["type"] in MECHANISM_STEPS and
                          motion_result is not None else None,
                          motion_result=MOTION_RESULTS[motion_result] if step["type"] == "path" and
                          motion_result is not None else None))
@@ -1013,7 +1031,7 @@ def main():
     parser.add_argument("--project", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--preset", choices=sorted(PRESETS))
-    parser.add_argument("--tracking", choices=("two", "drive"))
+    parser.add_argument("--tracking", choices=sorted(TRACKING))
     parser.add_argument("--progress", type=Path)
     parser.add_argument("--vexsim", type=Path, default=ROOT.parent / "vexsim")
     parser.add_argument("--cache", type=Path, required=True)

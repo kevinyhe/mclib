@@ -45,15 +45,23 @@ def uses_cascade(project):
                                                for step in project["steps"])
 
 
-CASCADE_SETUP = """// The lift motors and the claw's valve. The ports are placeholders: set them
-// to your robot's. The two lift motors share one shaft, so one is reversed.
+def cascade_setup(claw_start):
+    """The lift motors, the claw's valve, the roller's motor and the Rig, with the claw starting `claw_start`
+    ("open" or "closed")."""
+    return f"""// The lift motors, the claw's valve and the roller's motor. The ports are
+// placeholders: set them to your robot's. The three lift motors share one
+// shaft, so the middle one is reversed.
 // Before the match, with the lift all the way down, power on the robot so the
 // encoders read 0. The claw's solenoid is on 3-wire port A; true closes it.
-mclib::device::MotorGroup lift_motors({7, -8}, mclib::device::Gearset::Green);
+mclib::device::MotorGroup lift_motors({{7, -8, 9}}, mclib::device::Gearset::Green);
 mclib::device::Pneumatic claw_piston('A');
-cascade::Rig cascade_rig([] { return lift_motors.getAveragePositionDeg(); },
-                         [](double volts) { lift_motors.setVoltage(volts); },
-                         [](bool closed) { claw_piston.set_value(closed); });
+mclib::device::MotorGroup roller_motor({{10}}, mclib::device::Gearset::Green);
+cascade::Rig cascade_rig([] {{ return lift_motors.getAveragePositionDeg(); }},
+                         [](double volts) {{ lift_motors.setVoltage(volts); }},
+                         [](bool closed) {{ claw_piston.set_value(closed); }},
+                         [] {{ return roller_motor.getAveragePositionDeg(); }},
+                         [](double volts) {{ roller_motor.setVoltage(volts); }},
+                         {cpp_preset("claw", claw_start)});
 """
 
 CASCADE_TASK = """  // Runs the lift and the actions of each motion every 10 ms, as the
@@ -96,6 +104,11 @@ def lift_call(step):
 
 def claw_call(step):
     return f"cascade_rig.setClaw({cpp_preset('claw', step['claw_preset'])})"
+
+
+def roller_call(step):
+    return (f"cascade_rig.spinRoller(*drive, {number(step['roller_deg'])}, {number(step['roller_volts'])}, "
+            f"{number(step['press_volts'])}, {step['timeout_ms']})")
 
 
 def match_load_comment(step):
@@ -169,7 +182,8 @@ def export(project, settings=None, plans=None):
         lines += ["// From mclib tests/vexsim/planner/cascade_helpers.hpp (Mozilla Public License 2.0):",
                   "// the lift presets, the claw, and the actions run during a motion, as the",
                   "// simulator ran them.",
-                  exported_helpers("cascade_helpers.hpp"), CASCADE_SETUP]
+                  exported_helpers("cascade_helpers.hpp"),
+                  cascade_setup("closed" if project["preload"] != "none" else "open")]
     lines += ["using namespace mclib::units::literals;", "",
               "void autonomous() {",
               "  mclib::control::DriveHardware* drive = mclib::control::requireDrive(\"autonomous\");",
@@ -178,9 +192,15 @@ def export(project, settings=None, plans=None):
               f"  mclib::control::resetOdometry({{{number(start['x'])}, {number(start['y'])}, "
               f"{number(start['heading'])} * mclib::kPi / 180}});",
               f"  mclib::control::robotState().setCorrectAngleDeg({number(start['heading'])});"]
+    speed_up, slow_down = number(project["slew"]["speed_up_v"]), number(project["slew"]["slow_down_v"])
+    lines += ["  // How fast drive steps may raise and lower the drive voltage, volts per 10 ms.",
+              "  mclib::control::MotionConfig motion = mclib::control::motionConfig();",
+              f"  motion.slew = {{{speed_up}, {slow_down}, {speed_up}, {slow_down}}};",
+              "  mclib::control::setMotionConfig(motion);"]
     if cascade:
         if project["preload"] != "none":
-            lines.append(f"  // Preload: {PRELOADS[project['preload']]}. It stays there when the robot drives away.")
+            lines.append(f"  // Preload: {PRELOADS[project['preload']]}. The claw closes on it when the "
+                         "program starts.")
         lines.append(CASCADE_TASK)
     if has_path:
         source = ("measured on the simulated robot. Measure your own robot (docs/motion.md)."
@@ -242,6 +262,8 @@ def export(project, settings=None, plans=None):
             lines.append(f"  {call};")
         elif step["type"] == "claw":
             lines.append(f"  {claw_call(step)};")
+        elif step["type"] == "roller":
+            lines.append(f"  {roller_call(step)};")
         elif step["type"] == "match_load":
             lines.append(match_load_comment(step))
         elif step["type"] == "wait":

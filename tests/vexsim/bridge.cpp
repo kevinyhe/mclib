@@ -449,6 +449,26 @@ extern "C" void sim_set_trackers(double vertical_circumference,
   refresh(0);
 }
 
+// How fast the drive motions may raise and lower the drive voltage, volts per
+// 10 ms tick, the same going forward and backward.
+extern "C" void sim_set_slew(double speed_up, double slow_down) {
+  auto config = mclib::control::motionConfig();
+  config.slew = {speed_up, slow_down, speed_up, slow_down};
+  mclib::control::setMotionConfig(config);
+}
+
+// One sideways tracking wheel, with the drive encoders measuring forward.
+extern "C" void sim_set_horizontal_tracker(double circumference, double forward_offset) {
+  using namespace mclib::units;
+  auto config = mclib::control::getOdometryConfig();
+  config.use_vertical_tracker = false;
+  config.use_horizontal_tracker = true;
+  config.horizontal_circumference = circumference * inch;
+  config.horizontal_offset_forward = forward_offset * inch;
+  mclib::control::setOdometryConfig(config);
+  refresh(0);
+}
+
 // Which tracking wheels odometry reads, after sim_set_trackers().
 extern "C" void sim_use_trackers(int vertical, int horizontal) {
   auto config = mclib::control::getOdometryConfig();

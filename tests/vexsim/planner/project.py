@@ -26,12 +26,16 @@ PRESETS = {
                            body_length_in=15.0, body_width_in=12.5, drive_watts=44),
     "speed_base": dict(label="4 motors, 450 RPM, 4 in wheels", track_width_in=11.0,
                        body_length_in=15.0, body_width_in=12.5, drive_watts=44),
+    "override_cascade": dict(label="Override cascade robot: 4 motors, 450 RPM, 2.75 in wheels, 14 lb",
+                             track_width_in=11.5, body_length_in=15.0, body_width_in=12.5, drive_watts=44),
 }
-#: The Override robot's drive: four 11 W motors, 44 W. The lift's two 11 W motors make 66 W of the 88 W; the claw
-#: is pneumatic
-OVERRIDE_PRESET = "four_motor_450"
+#: The Override robot's drive: four 11 W motors, 44 W. The lift's three 11 W motors make 77 W of the 88 W; the
+#: claw is pneumatic
+OVERRIDE_PRESET = "override_cascade"
+OVERRIDE_TRACKING = "horizontal"
 TRACKING = {
     "two": "Two tracking wheels (forward and sideways)",
+    "horizontal": "One sideways tracking wheel, drive encoders forward",
     "drive": "Drive motor encoders only",
 }
 HEADING_SOURCES = {
@@ -82,13 +86,29 @@ FIELDS = {
                           "turn_to_point": "The least voltage turnToPoint() uses for the whole turn. Automatic is "
                                            "mclib's 1.5 V. 0 turns it off."}),
     "lift_preset": dict(label="Lift position", choices=LIFT_PRESETS,
-                        help="How high the middle of the claw is above the floor. The claw holds a Cup by its top "
-                             "rim, with a Pin standing in it. Over carries the Cup 0.25 in above the tip of the Pin "
-                             "in that Goal; On sets the Cup's rim on that Pin."),
+                        help="How high the middle of the claw is above the floor. Each jaw holds a stack's Cup "
+                             "below its rim and its Pin above its flange. Over carries the Cup 0.25 in above the "
+                             "tip of the Pin in that Goal; On sets the Cup's rim on that Pin."),
     "claw_preset": dict(label="Claw", choices=CLAW_PRESETS,
-                        help="A pneumatic piston opens and closes both jaws in about 5 ms. Closed, the jaws are "
-                             "narrower than a Cup's rim and wider than any part of a Pin, so they hold a Cup and "
-                             "the Pin standing in it, and never a Pin on its own."),
+                        help="A pneumatic piston closes both jaws in 130 ms and opens them in 160 ms, as fast as "
+                             "air gets through the valve. Each V-shaped jaw holds a stack at two heights: the Cup "
+                             "below its rim and the Pin above its flange. It also holds a lone Cup, and a Pin hung "
+                             "by its flange. A Pin standing alone on the floor is too thin where the jaws reach."),
+    "roller_deg": dict(label="Roller turn", unit="°", low=10, high=3600, step=10,
+                       help="How far the roller turns, read from its motor's encoder. Each flap turns a Toggle one "
+                            "face. Starting with the flaps level and the back 1 in off the wall, at 12 V a flap "
+                            "reaches the bar at about 177° and seats the first face by 255°; the next flap reaches "
+                            "it at 357° and seats the second face by 435°, and a third would reach it at 530°."),
+    "roller_volts": dict(label="Roller voltage", unit="V", low=1, high=12, step=.5,
+                         help="The roller turns the flaps behind its axle up, which turns a Toggle's top toward "
+                              "the wall. Turned the other way the flaps press the Toggle onto its plates and it "
+                              "does not move, so the step only turns it this way."),
+    "press_volts": dict(label="Drive pushing back", unit="V", low=0, high=12, step=.5,
+                        help="The drive pushes the robot back onto the wall while the roller turns. Each flap that "
+                             "turns a Toggle pushes the robot off the wall. At 0 V a robot 1 in off the wall stays "
+                             "there and the flaps miss the bar. From 2 V up both faces seat. The roller tips the "
+                             "robot onto its front wheels and the back wheels slip, so odometry ends 0.1 in off at "
+                             "2 V, 0.3 in at 3 V and 1.4 in at 4 V; at 4 V the drive pushes with 97% of the grip."),
     "loader": dict(label="Loader", choices=LOADERS,
                    help="The red Loader the Drive Team loads. Left and right are as seen from the red Alliance "
                         "Station."),
@@ -138,13 +158,22 @@ STEP_TYPES = {
                        defaults=dict(x=0, y=0, heading=0, current_ma=2500)),
     "lift": dict(label="Move the lift", call="moveLift()", mechanism="lift", still=True,
                  description="Raise or lower the cascade lift to a preset and wait until it gets there. The drive "
-                             "holds still. The lift is an mclib PresetPositionMechanism on two motors.",
+                             "holds still. The lift is an mclib PresetPositionMechanism on three motors.",
                  fields=["lift_preset"], defaults=dict(lift_preset="over_neutral_goal", timeout_ms=1500)),
-    "claw": dict(label="Open or close the claw", call="setClaw()", mechanism="claw", still=True, fixed_ms=10,
-                 description="Open or close the pneumatic claw. The piston takes about 5 ms; the step waits 10 ms. "
+    "claw": dict(label="Open or close the claw", call="setClaw()", mechanism="claw", still=True, fixed_ms=170,
+                 description="Open or close the pneumatic claw. The piston takes 130 ms to close and 160 ms "
+                             "to open; the step waits 170 ms. "
                              "To pick up a stack, open the claw with the lift Down and drive the bite onto a Cup "
                              "with a Pin in it until the Cup stops against the plate behind the jaws, then close.",
                  fields=["claw_preset"], defaults=dict(claw_preset="closed")),
+    "roller": dict(label="Turn a Toggle with the roller", call="spinRoller()", mechanism="roller", still=True,
+                   description="Back onto the wall at a Toggle first, its flaps 1 in or less from the bar. The "
+                               "roller turns as far as you set while the drive pushes the robot back onto the "
+                               "wall, then stops. Each flap turns the Toggle one face, its top toward the wall. "
+                               "On red's wall one face from yellow is blue and two are red; on blue's wall, red "
+                               "then blue.",
+                   fields=["roller_deg", "roller_volts", "press_volts"],
+                   defaults=dict(roller_deg=470, roller_volts=12, press_volts=3, timeout_ms=2000)),
     "wait": dict(label="Wait", call="pros::delay()", still=True, timed_by="wait_ms",
                  description="Wait with the drive as the last step left it, then go on. Use it to wait for the "
                              "Driver Controlled Period, 15 s into the match, before a Match Load.",
@@ -170,10 +199,9 @@ ACTIONS = dict(
     max=6, max_distance_in=500, max_time_ms=20000,
 )
 PRELOAD = dict(label="Preload", choices=PRELOADS,
-               help="The red/yellow Pin each robot must touch at the start (SG5). The claw holds only a Cup with a "
-                    "Pin in it, never a Pin on its own, so the preload lies on the floor touching the robot and "
-                    "stays there when the robot drives away: across its back, or along its right side when the "
-                    "robot starts with its back against the wall.")
+               help="The red/yellow Pin each robot must touch at the start (SG5). It hangs in the closed claw "
+                    "by its flange with the half you choose up, and the claw holds it until a step opens the "
+                    "claw.")
 
 CHAIN = dict(
     label="Keep moving into the next step",
@@ -185,6 +213,7 @@ CHAIN = dict(
         "wall_reset": "A wall reset has to stop against the wall.",
         "lift": "The drive is not moving during a lift step.",
         "claw": "The drive is not moving during a claw step.",
+        "roller": "The drive pushes the robot onto the wall during a roller step.",
         "match_load": "The drive is not moving during a Match Load.",
         "wait": "The drive is not moving during a wait.",
     },
@@ -202,6 +231,14 @@ PATH_DEFAULTS = {
                       help="How hard RAMSETE pulls back onto the path. 50 suits these simulated robots."),
     "ramsete_zeta": dict(default=.7, label="RAMSETE zeta", unit="", low=0, high=1, step=.05,
                          help="Damping. Larger overshoots less."),
+}
+SLEW = {
+    "speed_up_v": dict(default=1, label="Speed-up limit", unit="V per 10 ms", low=.05, high=12, step=.05,
+                       help="How fast drive, turn, point and arc steps may raise the drive voltage. mclib's default "
+                            "is 1 V: 0 to 12 V in 0.12 s. Lower keeps the wheels from spinning as the robot starts, "
+                            "which drive encoders count as distance."),
+    "slow_down_v": dict(default=1, label="Slow-down limit", unit="V per 10 ms", low=.05, high=12, step=.05,
+                        help="How fast those steps may lower the drive voltage. mclib's default is 1 V."),
 }
 CONDITIONS = {
     "battery_percent": dict(default=100, label="Battery charge", unit="%", low=0, high=100, step=5,
@@ -221,6 +258,7 @@ DEFAULT_PROJECT = dict(
     robot=dict(preset="six_motor_450", tracking="two", heading_source="imu"),
     conditions={key: item["default"] for key, item in CONDITIONS.items()},
     gains={key: item["default"] for key, item in GAINS.items()},
+    slew={key: item["default"] for key, item in SLEW.items()},
     path_defaults={key: item["default"] for key, item in PATH_DEFAULTS.items()},
     start=dict(x=0, y=-48, heading=0),
     steps=[dict(type="path", chain=False, **copy.deepcopy(STEP_TYPES["path"]["defaults"]))],
@@ -356,9 +394,9 @@ def validate_project(raw):
         raise ValueError(f"Field must be one of: {', '.join(GAME_FIELDS)}")
     project["preload"] = raw.get("preload", "none")
     if project["preload"] in RETIRED_PRELOADS:
-        raise ValueError(f"The preload \"{project['preload']}\" was a Pin held in the claw by its flange. The claw "
-                         "now holds only a Cup with a Pin standing in it, so the preload lies on the floor against "
-                         "the robot. Set preload to \"behind\", \"beside\" or \"none\"")
+        raise ValueError(f"The preload \"{project['preload']}\" was a Pin lying on the floor against the robot. "
+                         "The claw now holds a Pin by its flange, so the preload starts in the closed claw. Set "
+                         "preload to \"yellow\" or \"red\", the half that points up, or \"none\"")
     if project["preload"] not in PRELOADS:
         raise ValueError(f"Preload must be one of: {', '.join(PRELOADS)}")
     if project["preload"] != "none" and project["field"] != "override":
@@ -367,8 +405,9 @@ def validate_project(raw):
     for key, choices in (("preset", PRESETS), ("tracking", TRACKING), ("heading_source", HEADING_SOURCES)):
         if project["robot"][key] not in choices:
             raise ValueError(f"Robot {key.replace('_', ' ')} must be one of: {', '.join(choices)}")
-    for group, schema, title in (("conditions", CONDITIONS, "Conditions"), ("gains", GAINS, "Controller gains"),
-                                 ("path_defaults", PATH_DEFAULTS, "Path settings")):
+    groups = (("conditions", CONDITIONS, "Conditions"), ("gains", GAINS, "Controller gains"),
+              ("slew", SLEW, "Speed-up and slow-down"), ("path_defaults", PATH_DEFAULTS, "Path settings"))
+    for group, schema, title in groups:
         project[group].update(_object(raw.get(group, {}), schema, title))
         for key, value in project[group].items():
             info = schema[key]
@@ -473,9 +512,9 @@ def _validate_step(index, value, count, field):
     step["actions"] = _validate_actions(step["actions"], where)
     if kind == "match_load" and field != "override":
         raise ValueError(f"{where}: Match Loads are part of the Override field. Choose the Override field")
-    uses_claw = kind in MECHANISM_STEPS or step["actions"]
-    if uses_claw and field != "override":
-        raise ValueError(f"{where}: only the Override robot has a lift and a claw. Choose the Override field")
+    uses_mechanism = kind in MECHANISM_STEPS or step["actions"]
+    if uses_mechanism and field != "override":
+        raise ValueError(f"{where}: only the Override robot has a lift, a claw and a roller. Choose the Override field")
     if step["actions"] and kind in STILL_STEPS:
         raise ValueError(f"{where}: mechanism actions go on drive steps")
     if not isinstance(step["chain"], bool):
@@ -515,14 +554,15 @@ OVERRIDE_START = dict(x=0, y=-61.7, heading=0)
 
 
 def default_project():
-    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START, preload="beside",
-                              robot=dict(DEFAULT_PROJECT["robot"], preset=OVERRIDE_PRESET)))
+    return copy.deepcopy(dict(DEFAULT_PROJECT, field=NEW_ROUTINE_FIELD, start=OVERRIDE_START, preload="yellow",
+                              robot=dict(DEFAULT_PROJECT["robot"], preset=OVERRIDE_PRESET,
+                                         tracking=OVERRIDE_TRACKING)))
 
 
 def config():
     """Everything the page needs to draw its forms."""
     return dict(format=FORMAT, version=VERSION, game_fields=GAME_FIELDS, presets=PRESETS, tracking=TRACKING,
-                heading_sources=HEADING_SOURCES, gains=GAINS, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
+                heading_sources=HEADING_SOURCES, gains=GAINS, slew=SLEW, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
                 actions=ACTIONS, preload=PRELOAD,
                 path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, limits=LIMITS,
                 default_project=default_project())

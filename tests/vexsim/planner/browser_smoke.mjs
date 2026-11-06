@@ -1,6 +1,6 @@
 // Drives the real planner page in headless Chromium against a running
 // server.py: place points, plan, run, play back, compare, export, mirror,
-// run the Override example with its lift, claw, Toggle arms, score and 3D field, and
+// run the Override example with its lift, claw, Toggle roller, score and 3D field, and
 // run the Match Load example past 15 s.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
@@ -306,18 +306,18 @@ try {
   await page.locator("#view-top").click();
   await page.locator("#example-picker").selectOption("override_autonomous");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
-    /both red Toggles/.test(document.querySelector("#routine-name").value));
+    /the left Toggle and a stack/.test(document.querySelector("#routine-name").value));
   project = await draft();
   assert.equal(project.field, "override");
-  assert.equal(project.preload, "beside");
+  assert.equal(project.preload, "none");
+  assert.match(await page.locator("#step-list li").first().innerText(), /470° at 12 V, pressing back at 3 V/);
   assert.match(await page.locator("#step-list li").nth(6).innerText(),
-               /Claw to Closed: jaws 3\.09 in apart, on a Cup's top rim after 29\.3 in/);
+               /Lift to Over a stack on a Neutral Goal: claw 22\.66 in up after 3 in/);
   await page.locator("#tab-robot").click();
   const chosen = await page.locator("#pane-robot select").evaluateAll((selects) => selects.map((select) => select.selectedOptions[0]?.text));
-  assert(chosen.includes("Override (2026-27)") && chosen.includes("Red/yellow Pin lying on the floor along the robot's right side"),
-         JSON.stringify(chosen));
+  assert(chosen.includes("Override (2026-27)") && chosen.includes("No preload"), JSON.stringify(chosen));
   await page.locator("#tab-step").click();
-  pass("The Override example opens on the Override field with the preload beside the robot and claw and lift actions");
+  pass("The Override example opens on the Override field with no preload, a roller step and a lift action");
 
   await page.locator("#step-list li").first().click();
   await page.locator("#add-step summary").click();
@@ -325,19 +325,19 @@ try {
   assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Open or close the claw/);
   assert.match(await page.locator("#step-list li").nth(1).innerText(), /Closed/);
   await page.keyboard.press("Control+z");
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.length === 14);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.length === 10);
   pass("A claw step can be added after the first step; Ctrl+Z removes it");
 
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 600000 });
-  assert.match(await page.locator("#run-summary").innerText(), /ran all 14 steps/);
+  assert.match(await page.locator("#run-summary").innerText(), /ran all 10 steps/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
-  assert.match(await page.locator("#score-panel").innerText(), /Red 50\s+Blue 0/);
+  assert.match(await page.locator("#score-panel").innerText(), /Red 30\s+Blue 0/);
   const score = await page.locator("#run-summary").innerText();
-  assert.match(score, /Autonomous ended at 1[23]\.\d\d s: red 50, blue 0/);
+  assert.match(score, /Autonomous ended at 12\.\d\d s: red 30, blue 0/);
   assert.match(score, /Autonomous Bonus: red 12/);
-  assert.match(score, /Win Point: red owns 5 of 6 Pin halves needed[\s\S]*Not earned/);
+  assert.match(score, /Win Point: red owns 3 of 6 Pin halves needed[\s\S]*Not earned/);
   pass(`The Override autonomous scores: ${score.split("\n").find((line) => line.startsWith("Autonomous ended"))}`);
   await shot("10-override-score");
 
@@ -345,17 +345,15 @@ try {
     await page.locator("#step-list li").nth(index).click();
     assert.match(await page.locator("#pane-step").textContent(), pattern);
   };
-  await turnedIn(2, /Turned the left Toggle: blue now faces into the field/);
-  await turnedIn(4, /Turned the left Toggle: red now faces into the field/);
-  await turnedIn(10, /Turned the bottom Toggle: blue now faces into the field/);
-  await turnedIn(12, /Turned the bottom Toggle: red now faces into the field/);
+  await turnedIn(0, /Turned the left Toggle: red now faces into the field/);
+  await turnedIn(0, /The roller turned 47\d° in 1\.\d\d s\./);
   await page.locator("#timeline").evaluate((input) => { input.value = "6.5"; input.dispatchEvent(new Event("input")); });
   await page.locator("#tab-telemetry").click();
   const lift = await page.locator("#pane-telemetry").innerText();
   assert.match(lift, /Lift and claw/i);
   assert.match(lift, /a Cup with a yellow Pin/);
   await page.locator("#tab-step").click();
-  pass("The steps say when each Toggle turned, and telemetry shows the stack in the claw");
+  pass("The roller step says it turned the left Toggle to red, and telemetry shows the stack in the claw");
   await shot("11-override-top");
 
   const shown3d = async (check) => {
@@ -364,8 +362,8 @@ try {
       if (!applied || !JSON.parse(applied).available) return false;
       const { robot, toggles } = JSON.parse(applied);
       const checks = {
-        carryingTheStack: robot.lift_height_in > 12.0 && robot.claw_gap_in < 3.2,
-        bothTogglesTurned: toggles.left === "red" && toggles.bottom === "red",
+        carryingTheStack: robot.lift_height_in > 12.0 && robot.claw_gap_in < 4.2,
+        leftToggleTurned: toggles.left === "red",
       };
       return checks[name];
     }, check, { timeout: 30000 });
@@ -393,30 +391,42 @@ try {
       assert(Math.abs(drawn[side] - expected[side]) < 1e-3, `${label} ${side}: drawn at ${drawn[side]} in, vexsim ${expected[side]} in`);
     }
   };
+  const turnedAbout = ([forward, up], hinge, degrees) => {
+    const c = Math.cos(degrees * Math.PI / 180), s = Math.sin(degrees * Math.PI / 180);
+    const along = forward - hinge.forward_in, above = up - hinge.up_in;
+    return [hinge.forward_in + along * c + above * s, hinge.up_in - along * s + above * c];
+  };
   const drawnPiecesMatchVexsim = async (applied) => {
     const field3d = page.frames().find((frame) => frame.url().startsWith(`${url.origin}/field3d.html`));
     assert(field3d, "The Override 3D view's frame is on the page");
     const drawn = await field3d.evaluate(() => window.drawnRobotPieces());
-    const rise = applied.robot.lift_height_in - robotDrawing.claw.lowest_in;
+    const stageRises = [0, ...applied.robot.stage_rises_in];
     const closing = (robotDrawing.claw.open_gap_in - applied.robot.claw_gap_in) / 2;
+    const turns = { roller: applied.robot.roller_deg, ...applied.robot.flap_bends_deg };
     const solid = robotDrawing.parts.filter((part) => part.name !== "drivetrain");
     assert.deepEqual(drawn.pieces.map((piece) => piece.key), solid.map((part) => part.key));
     for (const [index, part] of solid.entries()) {
-      const up = part.rise_share * rise;
+      const up = stageRises[part.stage];
       const left = -part.jaw_side * closing;
-      assertSameBox(part.key, drawn.pieces[index], { back: part.back, front: part.front, right: part.right + left,
-        left: part.left + left, bottom: part.bottom + up, top: part.top + up });
+      let sideView = part.profile.length ? part.profile
+        : [[part.back, part.bottom], [part.front, part.bottom], [part.front, part.top], [part.back, part.top]];
+      for (const hinge of [...part.hinges].reverse()) sideView = sideView.map((point) => turnedAbout(point, hinge, turns[hinge.name]));
+      const forwards = sideView.map(([forward]) => forward);
+      const ups = sideView.map(([, height]) => height);
+      assertSameBox(part.key, drawn.pieces[index], { back: Math.min(...forwards), front: Math.max(...forwards),
+        right: part.right + left, left: part.left + left, bottom: Math.min(...ups) + up, top: Math.max(...ups) + up });
     }
     assertSameBox("bumpers", drawn.frame[0], outlineBox(robotDrawing.frame.outline));
     assertSameBox("frame inside the bumpers", drawn.frame[1], outlineBox(robotDrawing.frame.bumper_inside));
     return solid.length;
   };
   await page.locator("#view-3d").click();
+  await scrub(8.5);
   let view = await shown3d("carryingTheStack");
   assert.deepEqual(view.toggles, { left: "red", bottom: "yellow", top: "yellow", right: "yellow" });
   await page.waitForTimeout(1500);
   await shot("12-override-3d");
-  pass(`At 6.5 s the 3D robot carries the stack with the claw ${view.robot.lift_height_in.toFixed(2)} in up and the ` +
+  pass(`At 8.5 s the 3D robot carries the stack with the claw ${view.robot.lift_height_in.toFixed(2)} in up and the ` +
        `jaws ${view.robot.claw_gap_in.toFixed(2)} in apart`);
   let pieceCount = await drawnPiecesMatchVexsim(view);
   pass(`With the claw ${view.robot.lift_height_in.toFixed(2)} in up and the jaws closed, the 3D view draws all ` +
@@ -425,12 +435,15 @@ try {
   await page.keyboard.press("5");
   await page.waitForTimeout(1000);
   await shot("13-override-lift-up");
-  view = await shownAt(1.58);
-  const atTheWall = view.robot;
-  assert.equal(view.robot.lift_height_in, robotDrawing.claw.lowest_in);
+  view = await shownAt(0.8);
+  const firstFace = view.robot;
+  assert(Math.abs(view.robot.lift_height_in - robotDrawing.claw.lowest_in) < 0.2,
+         `The lift is ${view.robot.lift_height_in} in up during the roller step, lowest ${robotDrawing.claw.lowest_in} in`);
+  assert(view.robot.roller_deg > 250 && view.robot.roller_deg < 350, `The roller had turned ${view.robot.roller_deg}° at 0.8 s`);
   assert.equal(view.toggles.left, "blue");
   pieceCount = await drawnPiecesMatchVexsim(view);
-  pass(`With the lift down, the 3D view draws all ${pieceCount} pieces and the bumpers where vexsim has them, within 0.001 in`);
+  pass(`With the lift down and the roller ${view.robot.roller_deg.toFixed(0)}° round, the 3D view draws all ${pieceCount} ` +
+       "pieces, flaps turned, and the bumpers where vexsim has them, within 0.001 in");
   await page.waitForTimeout(1000);
   await shot("14-override-lift-down");
   const viewerBox = await page.locator("#viewer3d").boundingBox();
@@ -441,20 +454,21 @@ try {
   await page.mouse.up();
   await page.mouse.wheel(0, -100);
   await page.waitForTimeout(1000);
-  await shot("15-toggle-arms-hit");
-  view = await shownAt(1.8);
-  const backedOff = view.robot.y - atTheWall.y;
-  assert(backedOff > 1.5, `The robot moved ${backedOff} in off the wall by 1.8 s`);
-  assert.equal(view.toggles.left, "blue");
+  await shot("15-roller-first-face");
+  view = await shownAt(1.2);
+  const pushedOff = view.robot.y - firstFace.y;
+  assert(Math.abs(pushedOff) < 0.3, `The robot moved ${pushedOff} in off the wall between 0.8 and 1.2 s`);
+  assert.equal(view.toggles.left, "red");
+  pieceCount = await drawnPiecesMatchVexsim(view);
   await page.waitForTimeout(1000);
-  await shot("16-toggle-arms-back-off");
-  pass(`At 1.58 s the 3D Toggle arms press the left Toggle at the wall, blue in; at 1.8 s the robot is ` +
-       `${backedOff.toFixed(2)} in off the wall and the Toggle still shows blue`);
+  await shot("16-roller-second-face");
+  pass(`At 0.8 s the 3D roller has turned the left Toggle to blue; at 1.2 s, ${view.robot.roller_deg.toFixed(0)}° round, ` +
+       `to red, with the robot ${Math.abs(pushedOff).toFixed(2)} in from where it was and all ${pieceCount} pieces in place`);
   await scrub(15);
-  view = await shown3d("bothTogglesTurned");
-  assert.deepEqual(view.toggles, { left: "red", bottom: "red", top: "yellow", right: "yellow" });
-  pass("The 3D Toggles turn the way the simulator turned them: red faces into the field on the left and bottom");
-  pass("The 3D view shows the Override field, the robot with its lift, claw and Toggle arms, and the Pins");
+  view = await shown3d("leftToggleTurned");
+  assert.deepEqual(view.toggles, { left: "red", bottom: "yellow", top: "yellow", right: "yellow" });
+  pass("The 3D Toggles turn the way the simulator turned them: red faces into the field on the left");
+  pass("The 3D view shows the Override field, the robot with its lift, claw and Toggle roller, and the Pins");
   await page.locator("#view-top").click();
 
   await page.locator("#export-cpp").click();
@@ -465,8 +479,9 @@ try {
   assert.match(cascadeCode, /cascade::ClawPreset::Closed/);
   assert.match(cascadeCode, /cascade_rig\.moveLift\(cascade::LiftPreset::OnNeutralGoal, 800\)/);
   assert.match(cascadeCode, /cascade::Action::When::AfterDistance/);
+  assert.match(cascadeCode, /cascade_rig\.spinRoller\(\*drive, 470, 12, 3, 2000\)/);
   await page.locator("#cpp-dialog .dialog-foot button.primary").click();
-  pass("Export C++ writes the lift, claw and actions with the same helpers the simulator ran");
+  pass("Export C++ writes the lift, claw, roller and actions with the same helpers the simulator ran");
 
   await page.locator("#example-picker").selectOption("override_match_load");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
@@ -479,7 +494,7 @@ try {
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
   await page.waitForFunction(finished, null, { timeout: 600000 });
-  assert.match(await page.locator("#run-summary").innerText(), /ran all 10 steps/);
+  assert.match(await page.locator("#run-summary").innerText(), /ran all 11 steps/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
   const matchLoadScore = await page.locator("#score-panel").innerText();
   assert.match(matchLoadScore, /Score at 2\d\.\d\d s/);

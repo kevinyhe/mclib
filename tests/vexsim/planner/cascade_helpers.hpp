@@ -10,9 +10,11 @@
 #pragma once
 
 #include "api.h"
+#include "mclib/control/chassis_io.hpp"
 #include "mclib/mechanism/preset_position_mechanism.hpp"
 #include "mclib/sync.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -23,23 +25,33 @@
 namespace cascade {
 
 // The height of the claw's middle above the floor, inches, from the lift
-// motors' degrees. The motors turn an 18-tooth sprocket on 0.385 in chain,
-// 6.93 in of chain a turn, into the first of three stages; the carriage
-// moves three times as far. Fully down, the claw's middle is 0.53 in under
-// the top rim of a Cup standing on the floor.
-constexpr double kLowestClawIn = 5.94;
-constexpr double kChainPerTurnIn = 18 * 0.385;
-constexpr int kLiftStages = 3;
+// motors' degrees. Three motors turn a 1.0 in drum through 48:60 gears, so
+// the drum winds in pi / 1.25 = 2.51 in of string a motor turn. The string
+// lifts the first of five stages and the carriage moves five times as far.
+// Fully down, the claw's middle is level with the ridge of a stack standing
+// on the floor, where the Pin's flange sits on the Cup's rim. Once the
+// stages hang on the strings, the strings stretch and the claw sits
+// kStringStretchIn under where the wound string alone would put it.
+constexpr double kLowestClawIn = 6.62;
+constexpr double kDrumDiameterIn = 1.0;
+constexpr double kMotorTurnsPerDrumTurn = 1.25;
+constexpr int kLiftStages = 5;
+constexpr double kStringStretchIn = 0.25;
 
 inline double clawHeightIn(double lift_motor_degrees) {
-  return kLowestClawIn + lift_motor_degrees / 360.0 * kChainPerTurnIn * kLiftStages;
+  const double string_in = lift_motor_degrees / 360.0 * M_PI * kDrumDiameterIn / kMotorTurnsPerDrumTurn;
+  return std::max(kLowestClawIn, kLowestClawIn + string_in * kLiftStages - kStringStretchIn);
 }
 
-// Lift presets are heights of the claw's middle. The claw holds a Cup by its
-// top rim with a Pin standing in it. On sets the held Cup's rim on the Pin
-// in that Goal; Over carries the Cup 0.25 in over that Pin's tip.
+// Lift presets are heights of the claw's middle. Each jaw holds a stack at
+// two heights: the Cup below its rim and the Pin above its flange. On sets
+// the held Cup's rim on the Pin in that Goal; Over carries the Cup 0.25 in
+// over that Pin's tip. OffTheFloor lifts a stack taken from a Loader 0.5 in,
+// so its Cup does not drag on the foam as the robot backs out, and keeps the
+// claw's top under a raised Loader's tube.
 enum class LiftPreset {
   Down,
+  OffTheFloor,
   OverNeutralGoal,
   OnNeutralGoal,
   OverStackOnNeutralGoal,
@@ -54,18 +66,17 @@ enum class Mechanism { Lift, Claw };
 using Lift = mclib::mechanism::PresetPositionMechanism<LiftPreset>;
 
 inline Lift::Table liftPresets() {
-  return {{LiftPreset::Down, kLowestClawIn},          {LiftPreset::OverNeutralGoal, 15.29},
-          {LiftPreset::OnNeutralGoal, 11.9},          {LiftPreset::OverStackOnNeutralGoal, 21.98},
-          {LiftPreset::OnStackOnNeutralGoal, 18.59},  {LiftPreset::OverCenterGoal, 18.29},
-          {LiftPreset::OnCenterGoal, 14.9},           {LiftPreset::Top, 32.94}};
+  return {{LiftPreset::Down, kLowestClawIn},         {LiftPreset::OffTheFloor, 7.12},
+          {LiftPreset::OverNeutralGoal, 15.97},       {LiftPreset::OnNeutralGoal, 12.58},
+          {LiftPreset::OverStackOnNeutralGoal, 22.66}, {LiftPreset::OnStackOnNeutralGoal, 19.27},
+          {LiftPreset::OverCenterGoal, 18.97},        {LiftPreset::OnCenterGoal, 15.58},
+          {LiftPreset::Top, 46.72}};
 }
 
-// What the lift motors need to hold the stages up against the rubber bands.
-constexpr double kLiftHoldVolts = 1.4;
+// What the lift motors need to hold the stages up with the rubber bands'
+// help: 0.6 V at the bottom, 0.9 V at 16 in and at the top.
+constexpr double kLiftHoldVolts = 0.9;
 
-// With kd 40 a Pin standing loose in the held Cup rises 0.87 in off its
-// seat when the lift stops from full speed, and falls back. With kd 20 the
-// lift brakes at up to 2.8 g and throws the Pin out of the Cup.
 inline mclib::mechanism::PositionMechanismConfig liftConfig() {
   mclib::mechanism::PositionMechanismConfig config;
   config.kp = 6.0;
@@ -77,8 +88,12 @@ inline mclib::mechanism::PositionMechanismConfig liftConfig() {
   return config;
 }
 
-// The claw's piston strokes in about 5 ms. A claw step waits one 10 ms tick.
-constexpr std::uint32_t kClawStrokeMs = 10;
+// The claw's piston closes in 130 ms and opens in 160 ms, as fast as air
+// gets through the valve. A claw step waits for the slower one.
+constexpr std::uint32_t kClawStrokeMs = 170;
+
+// The roller's motor turns its axle through 12:36 chain.
+constexpr double kRollerMotorTurnsPerTurn = 3.0;
 
 // Something to do while a motion runs: move a mechanism to a preset when the
 // step starts, once the robot is `value` inches from where the step started,
@@ -93,22 +108,26 @@ struct Action {
 
 enum class MoveResult { TimedOut, Reached };
 
-// The lift, the claw and the actions of the motion that is running. tick()
-// runs them and must be called every 10 ms from its own task; the other
-// calls come from the autonomous task. The claw starts open.
+// The lift, the claw, the Toggle roller and the actions of the motion that
+// is running. tick() runs them and must be called every 10 ms from its own
+// task; the other calls come from the autonomous task. The claw starts as
+// `claw_start` says: closed on a preload Pin, or open.
 class Rig {
  public:
   using Degrees = std::function<double()>;
   using Volts = std::function<void(double)>;
   using Valve = std::function<void(bool closed)>;
 
-  Rig(Degrees lift_motor_degrees, Volts lift_volts, Valve claw_valve)
+  Rig(Degrees lift_motor_degrees, Volts lift_volts, Valve claw_valve, Degrees roller_motor_degrees,
+      Volts roller_volts, ClawPreset claw_start)
       : m_lift(LiftPreset::Down, liftPresets(),
                [lift_motor_degrees] { return clawHeightIn(lift_motor_degrees()); },
                [lift_volts](double volts) { lift_volts(volts + kLiftHoldVolts); }, liftConfig()),
-        m_claw_valve(std::move(claw_valve)) {
+        m_claw_valve(std::move(claw_valve)),
+        m_roller_motor_degrees(std::move(roller_motor_degrees)),
+        m_roller_volts(std::move(roller_volts)) {
     m_lift.setPreset(LiftPreset::Down);
-    setClawValve(ClawPreset::Open);
+    setClawValve(claw_start);
   }
 
   void tick(double x_in, double y_in, std::uint32_t now_ms) {
@@ -174,6 +193,31 @@ class Rig {
     pros::delay(kClawStrokeMs);
   }
 
+  // Turns the roller `roller_degrees` at `volts`, then stops it. Positive
+  // volts take the flaps behind the axle up, which turns a Toggle's top
+  // toward the wall. Each flap that turns a Toggle pushes the robot off the
+  // wall, so the drive pushes back at `press_volts` the whole time.
+  MoveResult spinRoller(mclib::control::DriveHardware& drive, double roller_degrees, double volts,
+                        double press_volts, std::uint32_t timeout_ms) {
+    const double start = rollerDegrees();
+    drive.setDriveVoltage(-press_volts, -press_volts);
+    m_roller_volts(volts);
+    const std::uint32_t started = mclib::time::millis();
+    MoveResult result = MoveResult::TimedOut;
+    while (mclib::time::millis() - started < timeout_ms) {
+      pros::delay(10);
+      if (std::abs(rollerDegrees() - start) >= roller_degrees) {
+        result = MoveResult::Reached;
+        break;
+      }
+    }
+    m_roller_volts(0.0);
+    drive.setDriveVoltage(0.0, 0.0);
+    return result;
+  }
+
+  double rollerDegrees() { return m_roller_motor_degrees() / kRollerMotorTurnsPerTurn; }
+
   double clawHeight() {
     mclib::sync::LockGuard lock(m_mutex);
     return m_lift.positionValue();
@@ -206,6 +250,8 @@ class Rig {
   mclib::sync::Mutex m_mutex;
   Lift m_lift;
   Valve m_claw_valve;
+  Degrees m_roller_motor_degrees;
+  Volts m_roller_volts;
   bool m_claw_closed = false;
   std::vector<Action> m_actions;
   std::vector<bool> m_fired;

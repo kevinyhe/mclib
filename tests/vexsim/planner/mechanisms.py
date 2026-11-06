@@ -11,19 +11,21 @@ import math
 from fields import piece_pose, to_planner
 
 LIFT_PRESETS = {
-    "down": "Down: claw 5.94 in up, on a Cup standing on the floor",
-    "over_neutral_goal": "Over a Neutral Goal: claw 15.29 in up",
-    "on_neutral_goal": "On a Neutral Goal: claw 11.9 in up",
-    "over_stack_on_neutral_goal": "Over a stack on a Neutral Goal: claw 21.98 in up",
-    "on_stack_on_neutral_goal": "On a stack on a Neutral Goal: claw 18.59 in up",
-    "over_center_goal": "Over the Center Goal: claw 18.29 in up",
-    "on_center_goal": "On the Center Goal: claw 14.9 in up",
-    "top": "Top: claw 32.94 in up",
+    "down": "Down: claw 6.62 in up, on a Cup standing on the floor",
+    "off_the_floor": "Off the floor: claw 7.12 in up, a held stack 0.5 in off the floor",
+    "over_neutral_goal": "Over a Neutral Goal: claw 15.97 in up",
+    "on_neutral_goal": "On a Neutral Goal: claw 12.58 in up",
+    "over_stack_on_neutral_goal": "Over a stack on a Neutral Goal: claw 22.66 in up",
+    "on_stack_on_neutral_goal": "On a stack on a Neutral Goal: claw 19.27 in up",
+    "over_center_goal": "Over the Center Goal: claw 18.97 in up",
+    "on_center_goal": "On the Center Goal: claw 15.58 in up",
+    "top": "Top: claw 46.72 in up",
 }
 #: The claw heights the presets name, inches: cascade_helpers.hpp holds the same numbers
-LIFT_HEIGHTS_IN = dict(down=5.94, over_neutral_goal=15.29, on_neutral_goal=11.9, over_stack_on_neutral_goal=21.98,
-                       on_stack_on_neutral_goal=18.59, over_center_goal=18.29, on_center_goal=14.9, top=32.94)
-CLAW_PRESETS = {"open": "Open: jaws 4.4 in apart", "closed": "Closed: jaws 3.09 in apart, on a Cup's top rim"}
+LIFT_HEIGHTS_IN = dict(down=6.62, off_the_floor=7.12, over_neutral_goal=15.97, on_neutral_goal=12.58, over_stack_on_neutral_goal=22.66,
+                       on_stack_on_neutral_goal=19.27, over_center_goal=18.97, on_center_goal=15.58, top=46.72)
+CLAW_PRESETS = {"open": "Open: jaws 4.4 in apart",
+                "closed": "Closed: on a stack's Cup below its rim and Pin above its flange, a lone Cup, or a hung Pin"}
 MECHANISMS = {
     "lift": dict(label="Lift", presets=LIFT_PRESETS, enum="cascade::LiftPreset"),
     "claw": dict(label="Claw", presets=CLAW_PRESETS, enum="cascade::ClawPreset"),
@@ -33,9 +35,9 @@ MECHANISM_ENUMS = {"lift": "cascade::Mechanism::Lift", "claw": "cascade::Mechani
 RETIRED_MECHANISMS = {
     "arm": "the arm was the Flex robot's inclined lift, which the planner no longer has. Use the lift instead "
            "(\"lift\", with lift_preset one of: " + ", ".join(LIFT_PRESETS) + ")",
-    "toggle_arm": "the cascade robot has no Toggle arm to move any more. It turns a Toggle with the two fixed "
-                  "arms on the back of its lift tower: back into the Toggle at 34 in/s or faster. Remove this "
-                  "toggle_arm step or action",
+    "toggle_arm": "the cascade robot has no Toggle arm to move any more. It turns a Toggle with the flap roller "
+                  "on its back: back onto the wall at the Toggle and add a roller step. Remove this toggle_arm "
+                  "step or action",
 }
 #: Lift presets of the cascade robot before its claw held Cups
 RETIRED_LIFT_PRESETS = ("pin_in_cup", "over_alliance_goal")
@@ -49,10 +51,10 @@ MATCH_LOAD_PINS = {"red_yellow_up": "Red/yellow Pin, yellow half up", "red_red_u
                    "yellow": "Yellow/yellow Pin"}
 MATCH_LOAD_PIN_COLORS = {"red_yellow_up": (("red", "yellow"), "yellow"), "red_red_up": (("red", "yellow"), "red"),
                          "yellow": (("yellow", "yellow"), "yellow")}
-PRELOADS = {"none": "No preload", "behind": "Red/yellow Pin lying on the floor across the robot's back",
-            "beside": "Red/yellow Pin lying on the floor along the robot's right side"}
-#: Preloads from when the claw held a Pin by its flange
-RETIRED_PRELOADS = ("yellow", "red")
+PRELOADS = {"none": "No preload", "yellow": "Red/yellow Pin held in the closed claw by its flange, yellow half up",
+            "red": "Red/yellow Pin held in the closed claw by its flange, red half up"}
+#: Preloads from when the claw could not hold a lone Pin, so the preload lay on the floor
+RETIRED_PRELOADS = ("behind", "beside")
 MOVE_RESULTS = ("Used the whole time limit", "Reached the preset")
 #: <SC7>: the Autonomous Bonus goes to whoever leads when the period ends
 AUTONOMOUS_S = 15.0
@@ -63,8 +65,8 @@ MAX_HEIGHT_IN = 50.0
 MAX_MOTOR_WATTS = 88.0
 MAX_DRIVE_WATTS = 55.0
 
-READ_LIFT_DEGREES = C.CFUNCTYPE(C.c_double)
-WRITE_LIFT_VOLTS = C.CFUNCTYPE(None, C.c_double)
+READ_MOTOR_DEGREES = C.CFUNCTYPE(C.c_double)
+WRITE_MOTOR_VOLTS = C.CFUNCTYPE(None, C.c_double)
 SET_CLAW_VALVE = C.CFUNCTYPE(None, C.c_int)
 
 
@@ -83,7 +85,8 @@ def mechanism_number(mechanism):
 
 def declare_cascade(lib):
     doubles = C.POINTER(C.c_double)
-    lib.planner_cascade_init.argtypes = [READ_LIFT_DEGREES, WRITE_LIFT_VOLTS, SET_CLAW_VALVE]
+    lib.planner_cascade_init.argtypes = [READ_MOTOR_DEGREES, WRITE_MOTOR_VOLTS, SET_CLAW_VALVE, READ_MOTOR_DEGREES,
+                                         WRITE_MOTOR_VOLTS, C.c_int]
     lib.planner_cascade_init.restype = None
     lib.planner_cascade_begin_actions.argtypes = [doubles, C.c_int]
     lib.planner_cascade_begin_actions.restype = None
@@ -93,13 +96,15 @@ def declare_cascade(lib):
     lib.planner_cascade_move_lift.restype = C.c_int
     lib.planner_cascade_set_claw.argtypes = [C.c_int]
     lib.planner_cascade_set_claw.restype = None
+    lib.planner_cascade_spin_roller.argtypes = [C.c_double, C.c_double, C.c_double, C.c_int]
+    lib.planner_cascade_spin_roller.restype = C.c_int
 
 
 class CascadeRig:
     """cascade::Rig in the C++, reading and driving the world's lift motors
-    and opening and closing its claw's valve. The two lift motors share a
-    shaft: the rig reads one and drives both. Errors in the callbacks go to
-    the bridge, which cancels the running motion and raises once C++
+    and opening and closing its claw's valve. The three lift motors share a
+    shaft: the rig reads one and drives all three. Errors in the callbacks go
+    to the bridge, which cancels the running motion and raises once C++
     returns."""
 
     def __init__(self, lib, bridge, world):
@@ -107,10 +112,16 @@ class CascadeRig:
         self.bridge = bridge
         self.lift_motors = world.mechanism.lift.motors
         self.claw = world.mechanism.claw
-        self.read_callback = READ_LIFT_DEGREES(self.read_lift)
-        self.write_callback = WRITE_LIFT_VOLTS(self.write_lift)
+        self.roller_motor = world.mechanism.roller.motor
+        self.read_callback = READ_MOTOR_DEGREES(self.read_lift)
+        self.write_callback = WRITE_MOTOR_VOLTS(self.write_lift)
         self.valve_callback = SET_CLAW_VALVE(self.set_claw_valve)
-        lib.planner_cascade_init(self.read_callback, self.write_callback, self.valve_callback)
+        self.read_roller_callback = READ_MOTOR_DEGREES(self.read_roller)
+        self.write_roller_callback = WRITE_MOTOR_VOLTS(self.write_roller)
+        claw_start = "closed" if world.preload is not None else "open"
+        lib.planner_cascade_init(self.read_callback, self.write_callback, self.valve_callback,
+                                 self.read_roller_callback, self.write_roller_callback,
+                                 preset_number("claw", claw_start))
 
     def read_lift(self):
         try:
@@ -131,10 +142,33 @@ class CascadeRig:
     def set_claw_valve(self, closed):
         self.claw.command(bool(closed))
 
+    def read_roller(self):
+        try:
+            return math.degrees(self.roller_motor.position)
+        except Exception as error:
+            self.bridge.exceptions.append(str(error))
+            return math.nan
+
+    def write_roller(self, volts):
+        try:
+            if not math.isfinite(volts) or abs(volts) > 12.0:
+                raise ValueError(f"invalid roller voltage {volts}")
+            self.roller_motor.set_voltage(volts)
+        except Exception as error:
+            self.bridge.exceptions.append(str(error))
+
+    def spin_roller(self, step, timeout_ms):
+        result = self.lib.planner_cascade_spin_roller(step["roller_deg"], step["roller_volts"], step["press_volts"],
+                                                      timeout_ms)
+        if result < 0:
+            raise RuntimeError("no drive is registered for the roller step to push back with")
+        self.raise_errors()
+        return result
+
     def move(self, mechanism, preset, timeout_ms):
         """The lift waits until it reaches the preset or the time runs out.
-        The claw waits one 10 ms tick for its piston, so it always reaches
-        the preset."""
+        The claw waits the time its piston takes to stroke, so it always
+        reaches the preset."""
         number = preset_number(mechanism, preset)
         if mechanism == "lift":
             result = self.lib.planner_cascade_move_lift(number, timeout_ms)
@@ -171,14 +205,11 @@ def mechanism_reading(world, mechanism):
     return f"the jaws are {gap:.2f} in apart and hold {held}", gap
 
 
-def start_overlap_error(world):
-    """Why the robot cannot start where it stands, or None when it is clear
-    of every Pin, Cup, wall, Goal and Loader."""
+def start_overlap_error(overlaps):
+    """Why the robot cannot start where it stands: the Pins, Cups, walls,
+    Goals and Loaders it is inside."""
     from vexsim.pieces import Piece
     from vexsim.units import INCH
-    overlaps = world.start_overlaps()
-    if not overlaps:
-        return None
     things = []
     for overlap in overlaps:
         where = ""
@@ -273,7 +304,7 @@ def autonomous_summary(world, sizes):
     toggles = world.toggle_colors
     pins, goals = of.win_point_progress("red", world.stacks(), toggles)
     pins_needed, goals_needed = of.win_point_needs()
-    touching = world.arena.touching_perimeter
+    touching = world.touching_perimeter
     state = world.sim.state
     return dict(
         t=world.sim.t, red=score["red"].total, blue=score["blue"].total,

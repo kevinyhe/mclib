@@ -8,7 +8,7 @@ const COLORS = {
   red: 0xc8323a, blue: 0x2a62c9, yellow: 0xf0c02a, gray: 0x8d929a, clear: 0xd8ecff,
   neutral: 0x5b6068, center: 0x41454c, tile: 0x5a5e66, seam: 0x4a4e55, tape: 0xf2f2f2,
   wall: 0xbfd0e0, rail: 0xa9afb8, flange: 0x30343a, chassis: 0x3a3e46, robot: 0xb3262e,
-  metal: 0xc4c9d0, toggleEnd: 0x2b2e34, hole: 0x0e0f12,
+  metal: 0xc4c9d0, toggleEnd: 0x2b2e34, hole: 0x0e0f12, rubber: 0x1c1e22,
 };
 const VIEWS = { "1": "operator", "2": "audience", "3": "overhead", "4": "free", "5": "robot" };
 
@@ -269,7 +269,8 @@ function addToggles(cad) {
       }
     }
     const intoTheField = inward.clone().multiplyScalar(Math.cos(Math.PI / 6)).addScaledVector(up, Math.sin(Math.PI / 6));
-    toggleMeshes.push({ quadrant: toggle.quadrant, axle, along, sign, turned, faces, intoTheField,
+    const slot = direction(toggle.inward[0] * toggle.slot[0], toggle.inward[1] * toggle.slot[0], toggle.slot[1]);
+    toggleMeshes.push({ quadrant: toggle.quadrant, axle, along, sign, turned, faces, intoTheField, slot,
       turn: new THREE.Quaternion() });
   }
 }
@@ -364,6 +365,7 @@ function restingBox(part, color) {
 
 function pieceColor(part, stageShares) {
   if (part.jaw_side || part.name === "carriage") return COLORS.robot;
+  if (part.name === "roller flap") return COLORS.rubber;
   if (part.name === "lift") return stageShares.indexOf(part.rise_share) % 2 ? COLORS.metal : COLORS.rail;
   return COLORS.metal;
 }
@@ -372,8 +374,9 @@ function pieceColor(part, stageShares) {
 // cascade_drawing() in fields.py), each drawn the size it collides at. The
 // frame is drawn as FRC-style bumpers around its outline, into the bite,
 // and the frame inside them; the wheels are hidden inside. Posing moves
-// each piece as vexsim moves it: up by its share of the claw's rise, and a
-// jaw toward the middle as the claw closes.
+// each piece as vexsim moves it: up by its share of the claw's rise, a jaw
+// toward the middle as the claw closes, and a roller piece around each of
+// its hinges.
 function buildRobot(lengthIn, widthIn) {
   const shape = drawing.robot;
   const group = new THREE.Group();
@@ -387,6 +390,7 @@ function buildRobot(lengthIn, widthIn) {
     if (part.name === "drivetrain") continue;
     const color = pieceColor(part, stageShares);
     const mesh = part.profile.length ? sideProfile(part, color) : restingBox(part, color);
+    mesh.matrixAutoUpdate = false;
     group.add(mesh);
     pieces.push({ part, mesh });
   }
@@ -394,19 +398,34 @@ function buildRobot(lengthIn, widthIn) {
   return { group, lengthIn, widthIn, frame: [bumpers, inside], pieces };
 }
 
+// Turns `degrees` about a hinge across the robot. Positive takes what is
+// behind the hinge up, as in vexsim; the 3D view's z points backward.
+function hingeTurn(hinge, degrees) {
+  const pivot = new THREE.Vector3(0, hinge.up_in, -hinge.forward_in);
+  return new THREE.Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z)
+    .multiply(new THREE.Matrix4().makeRotationX(-degrees * Math.PI / 180))
+    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+}
+
 function poseRobot(frame) {
   const claw = drawing.robot.claw;
-  const rise = frame.lift_height_in - claw.lowest_in;
   const closing = (claw.open_gap_in - frame.claw_gap_in) / 2;
-  for (const { part, mesh } of robot.pieces) mesh.position.set(part.jaw_side * closing, part.rise_share * rise, 0);
+  const stageRises = [0, ...frame.stage_rises_in];
+  const turns = { roller: frame.roller_deg, ...frame.flap_bends_deg };
+  for (const { part, mesh } of robot.pieces) {
+    mesh.matrix.makeTranslation(part.jaw_side * closing, stageRises[part.stage], 0);
+    for (const hinge of part.hinges) mesh.matrix.multiply(hingeTurn(hinge, turns[hinge.name]));
+  }
   robot.group.position.copy(at(frame.true_x, frame.true_y, 0));
   robot.group.rotation.y = -frame.true_heading * Math.PI / 180;
 }
 
 // Each drawn piece's box in the robot frame, inches, as posed now.
 function robotFrameBox(mesh) {
-  const box = new THREE.Box3().setFromBufferAttribute(mesh.geometry.attributes.position);
-  box.translate(mesh.position);
+  const box = new THREE.Box3();
+  const corner = new THREE.Vector3();
+  const positions = mesh.geometry.attributes.position;
+  for (let i = 0; i < positions.count; i++) box.expandByPoint(corner.fromBufferAttribute(positions, i).applyMatrix4(mesh.matrix));
   return { back: -box.max.z, front: -box.min.z, right: -box.max.x, left: -box.min.x, bottom: box.min.y, top: box.max.y };
 }
 
@@ -418,8 +437,9 @@ window.drawnRobotPieces = () => robot && {
 function showToggles(frame) {
   for (const toggle of toggleMeshes) {
     const angle = frame?.toggles?.[toggle.quadrant]?.angle_deg ?? 0;
+    const raised = toggle.slot.clone().multiplyScalar(frame?.toggles?.[toggle.quadrant]?.lift_in ?? 0);
     toggle.turn.setFromAxisAngle(toggle.along, -toggle.sign * angle * Math.PI / 180);
-    const aboutTheAxle = new THREE.Matrix4().makeTranslation(toggle.axle)
+    const aboutTheAxle = new THREE.Matrix4().makeTranslation(toggle.axle.clone().add(raised))
       .multiply(new THREE.Matrix4().makeRotationFromQuaternion(toggle.turn))
       .multiply(new THREE.Matrix4().makeTranslation(toggle.axle.clone().negate()));
     for (const { mesh, rest } of toggle.turned) mesh.matrix.copy(aboutTheAxle.clone().multiply(rest));
@@ -450,7 +470,8 @@ function showFrame(frame, pieces, playing, live) {
   statusLine.textContent = `Override field · ${live ? "live" : playing ? "replay" : "paused"} · ${frame.t.toFixed(2)} s${holding} · 1–5 camera views`;
   tellParent({ type: "mclib-vexsim-applied", t: frame.t, available: true,
     robot: { x: frame.true_x, y: frame.true_y, heading: frame.true_heading, lift_height_in: frame.lift_height_in,
-      claw_gap_in: frame.claw_gap_in, raised_loaders: frame.raised_loaders },
+      stage_rises_in: frame.stage_rises_in, claw_gap_in: frame.claw_gap_in, roller_deg: frame.roller_deg,
+      flap_bends_deg: frame.flap_bends_deg, raised_loaders: frame.raised_loaders },
     toggles: Object.fromEntries(toggleMeshes.map((toggle) => [toggle.quadrant, shownInnerColor(toggle)])) });
 }
 

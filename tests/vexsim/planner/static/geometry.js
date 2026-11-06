@@ -114,6 +114,7 @@ function stepEndPose(step, pose, trackWidth) {
     case "turn": return { x: pose.x, y: pose.y, heading: step.heading };
     case "lift":
     case "claw":
+    case "roller":
     case "match_load":
     case "wait":
       return { ...pose };
@@ -302,6 +303,11 @@ function telemetryRows(frame, target) {
       ...("air_psi" in f ? [["Air in the tank", num(f.air_psi, " psi", 1)]] : []),
       ["Holding", f.holding ?? "nothing"],
       ["Score red / blue", pair(f.score_red, f.score_blue, "", 0)],
+    ]]] : []),
+    ...("roller_deg" in f ? [["Toggle roller", [
+      ["Turned", num(f.roller_deg, "°", 0)],
+      ["Speed", num(f.roller_rpm, " rpm", 0)],
+      ["Motor current", num(f.roller_amps, " A", 2)],
     ]]] : []),
     ["Controller", [
       ["Phase", typeof f.controller_phase === "string" ? f.controller_phase : "—"],

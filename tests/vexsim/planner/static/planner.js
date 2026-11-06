@@ -612,6 +612,7 @@
       case "wall_reset": return `set odometry to ${p(step.x, step.y)}, ${trim(step.heading)}°`;
       case "lift": return `to ${state.config.fields.lift_preset.choices[step.lift_preset]}`;
       case "claw": return state.config.fields.claw_preset.choices[step.claw_preset];
+      case "roller": return `${trim(step.roller_deg)}° at ${trim(step.roller_volts)} V, pressing back at ${trim(step.press_volts)} V`;
       case "match_load": return `${state.config.fields.loader.choices[step.loader]}: ${state.config.fields.match_load_pin.choices[step.match_load_pin]}`;
       case "wait": return `${fmt(step.wait_ms / 1000, 2)} s`;
       default: return "";
@@ -1145,6 +1146,8 @@
       groupForm("path_defaults", config.path_defaults),
       element("h3", { text: "Simulated conditions" }),
       groupForm("conditions", config.conditions),
+      element("h3", { text: "Speed-up and slow-down" }),
+      groupForm("slew", config.slew),
       element("h3", { text: "Controller gains (PID)" }),
       element("p", { class: "muted small", text: "Used by drive, turn, point, boomerang, arc and swing steps, and by the settle at the end of a path." }),
       element("div", { class: "form three" }, ...Object.entries(config.gains).map(([key, info]) =>
@@ -1277,7 +1280,7 @@
     return state.shown?.result?.pieces ?? state.shown?.live?.pieces ?? null;
   }
 
-  // The preload lies on the floor touching the robot (SG5).
+  // The preload hangs in the closed claw by its flange (SG5).
   function designPreload(drawing) {
     if (state.project.preload === "none") return [];
     const start = state.project.start;
@@ -1371,10 +1374,10 @@
   }
 
   // The cascade robot seen from above, from vexsim's parts: the frame around
-  // the bite, the lift stages, the Toggle arms, the carriage, the plate behind
-  // the jaws and the jaws, which close by `gapIn`.
-  const CASCADE_FILL = { drivetrain: "#d5d9df", lift: "#9aa1ab", "toggle arm": "#6f7783", claw: "#3a414c",
-    carriage: "rgba(179,38,46,.55)" };
+  // the bite, the lift stages, the Toggle roller, the carriage, the plate
+  // behind the jaws and the jaws, which close by `gapIn`.
+  const CASCADE_FILL = { drivetrain: "#d5d9df", lift: "#9aa1ab", "roller post": "#9aa1ab", "roller axle": "#3a414c",
+    roller: "#6f7783", "roller flap": "#1c1e22", claw: "#3a414c", carriage: "rgba(179,38,46,.55)" };
 
   function drawCascade(ctx, pose, gapIn) {
     const robot = fieldDrawing()?.robot;
