@@ -369,7 +369,9 @@ view is vexsim's, as before.
 ## Override scoring
 
 The score is worked out from where the Pins and Cups are, as the manual's
-<SC1> to <SC8> say. The score panel on the field shows it at the playback
+<SC1> to <SC8> say. A Pin half nested in a Goal or in a Cup's gray half is
+not visible and does not score (<SC3>): the bottom half of the Pin in a
+Goal never scores, and each Cup hides one half. The score panel on the field shows it at the playback
 time. After the run it also shows:
 
 - the score at 15 s, when autonomous ends, and who gets the Autonomous Bonus;
@@ -498,9 +500,9 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and run again to compare |
-| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal. Adding the bottom Toggle and carrying the stack to the bottom Goal instead takes 21 s, past the end of the autonomous |
+| [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal: red 20, and 2 of the 6 Pin halves the Autonomous Win Point needs. Turning the bottom Toggle as well only starts at 18 s, past the end of the autonomous |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.1 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
-| [override_roller.json](examples/override_roller.json) | turn the left Toggle two faces with the roller, blue then red, pushing back at 3 V; 20 points and the Autonomous Bonus |
+| [override_roller.json](examples/override_roller.json) | turn the left Toggle two faces with the roller, blue then red, pushing back at 3 V; 10 points, for the top half of the neutral left Goal's yellow Pin, and the Autonomous Bonus |
 | [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall, turn at 6 V and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 26.5 s. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin |
 
 ## Files

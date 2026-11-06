@@ -2,7 +2,7 @@
   "format": "mclib-path-planner",
   "version": 1,
   "name": "Override: autonomous with the left Toggle and a stack",
-  "description": "Starts with its back 1 in off red's wall in the middle of the left Toggle and rolls it to red, pushing back at 3 V. Then it takes the yellow stack at (23.5, -23.5) as the stack example does, and sets it on the Pin in the neutral left Goal. The left Toggle is red, so the yellow Pins in the left quadrant score for red. Drives speed up at 0.3 V per 10 ms so the wheels don't spin at launch. Turning the bottom Toggle as well takes the robot past the end of the 15 s autonomous.",
+  "description": "Starts with its back 1 in off red's wall in the middle of the left Toggle and rolls it to red, pushing back at 3 V. Then it takes the yellow stack at (23.5, -23.5) as the stack example does, and sets it on the Pin in the neutral left Goal. The left Toggle is red, so red scores 20: both halves of the stack's yellow Pin. The Goal's own Pin shows nothing, its bottom half in the Goal and its top half in the stack Cup's gray half (SC3). That is 2 of the 6 Pin halves the Autonomous Win Point needs, on 1 of the 2 Goals; the partner robot has to place the other 4, on a second Goal as well. Drives speed up at 0.3 V per 10 ms so the wheels don't spin at launch. Turning the bottom Toggle as well takes the robot past the end of the 15 s autonomous.",
   "field": "override",
   "preload": "none",
   "robot": {"preset": "override_cascade", "tracking": "horizontal"},

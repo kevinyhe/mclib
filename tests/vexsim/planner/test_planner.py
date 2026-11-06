@@ -807,7 +807,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result["summary"]["skipped_steps"], 0)
         self.assertLessEqual(result["summary"]["simulated_s"], 13.0)
         autonomous = result["autonomous"]
-        self.assertEqual((autonomous["red"], autonomous["blue"]), (30, 0))
+        self.assertEqual((autonomous["red"], autonomous["blue"]), (20, 0))
         self.assertEqual(autonomous["bonus"], dict(red=12, blue=0))
         self.assertEqual(autonomous["toggles"], dict(left="red", bottom="yellow", top="yellow", right="yellow"))
         self.assertFalse(autonomous["win_point"]["earned"])

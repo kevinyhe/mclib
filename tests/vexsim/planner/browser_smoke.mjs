@@ -333,11 +333,11 @@ try {
   await page.waitForFunction(finished, null, { timeout: 600000 });
   assert.match(await page.locator("#run-summary").innerText(), /ran all 10 steps/);
   await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
-  assert.match(await page.locator("#score-panel").innerText(), /Red 30\s+Blue 0/);
+  assert.match(await page.locator("#score-panel").innerText(), /Red 20\s+Blue 0/);
   const score = await page.locator("#run-summary").innerText();
-  assert.match(score, /Autonomous ended at 12\.\d\d s: red 30, blue 0/);
+  assert.match(score, /Autonomous ended at 12\.\d\d s: red 20, blue 0/);
   assert.match(score, /Autonomous Bonus: red 12/);
-  assert.match(score, /Win Point: red owns 3 of 6 Pin halves needed[\s\S]*Not earned/);
+  assert.match(score, /Win Point: red owns 2 of 6 Pin halves needed[\s\S]*Not earned/);
   pass(`The Override autonomous scores: ${score.split("\n").find((line) => line.startsWith("Autonomous ended"))}`);
   await shot("10-override-score");
 
