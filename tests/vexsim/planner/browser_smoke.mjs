@@ -477,7 +477,7 @@ try {
   assert.match(cascadeCode, /cascade::Rig cascade_rig/);
   assert.match(cascadeCode, /cascade_rig\.beginActions\(/);
   assert.match(cascadeCode, /cascade::ClawPreset::Closed/);
-  assert.match(cascadeCode, /cascade_rig\.moveLift\(cascade::LiftPreset::OnNeutralGoal, 800\)/);
+  assert.match(cascadeCode, /cascade_rig\.moveLift\(cascade::LiftPreset::OnNeutralGoal, 1500\)/);
   assert.match(cascadeCode, /cascade::Action::When::AfterDistance/);
   assert.match(cascadeCode, /cascade_rig\.spinRoller\(\*drive, 470, 12, 3, 2000\)/);
   await page.locator("#cpp-dialog .dialog-foot button.primary").click();
