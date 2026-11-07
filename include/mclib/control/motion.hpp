@@ -317,6 +317,15 @@ mclib::control::MotionResult turnToPoint(QLength x,
  * through the target perpendicular to its own heading within 8 in, so it does
  * not orbit a point it has already passed.
  *
+ * Stopping, it drives a straight line through the target for the last 8 in.
+ * If the target is more than 30 deg off the nose there, it first turns in
+ * place until the target is within 10 deg. If it passes the target, it backs
+ * up along the line instead of turning around, and if it drifts so the target
+ * is more than 30 deg off the line, it turns in place again. Farther out, if
+ * it turns 90 deg without getting 1 in closer, it turns in place until the
+ * target is within 10 deg. @p min_speed stops applying once it turns in place
+ * within 8 in, or comes within 0.5 in of the target along its line.
+ *
  * @param x          Field X of the target.
  * @param y          Field Y of the target.
  * @param dir        +1 arrives forward, -1 arrives backward. A sign flag.

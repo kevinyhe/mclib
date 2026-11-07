@@ -82,6 +82,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   that disagreed with the code now match it, including `followTrajectory()`'s
   settle steps and how `driveTo()` and `curveCircle()` measure distance. The
   example `src/main.cpp` now sets its starting pose with `Chassis::setPose()`.
+- A stopping `moveToPoint()` still circled its target on drives whose inner
+  wheel stalls below its friction voltage or that slide sideways, such as
+  all-omni bases. For the last 8 in it now drives a straight line through
+  the target: it turns in place first when the target is more than 30° off
+  the nose, backs up along the line if it passes the target, and turns in
+  place again if the target drifts more than 30° off the line. Farther out,
+  if it turns 90° without getting 1 in closer, it turns in place to face the
+  target. An explicit voltage floor stops applying once it turns in place
+  within 8 in, or comes within 0.5 in of the target along its line. The
+  physics simulator ran 16 drivetrains (100-600 rpm; 2.75, 3.25 and 4 in
+  wheels; 4 and 6 motors; all-omni, center traction and all-traction; one
+  on 5.5 W motors), each with two tunings, on 13 routes at five voltage
+  floors. Stops ended Reached within 1.5 in in 1726 of 1760 runs, up from
+  1040. Timeouts fell from 652 to 23,
+  and 21 of those are a 100 rpm drive that needs more than the 4 s limit.
+  Runs that turned more than a full circle fell from 694 to 6, and the most
+  any run turned fell from 1290° to 528°. The cost: with a 4 V floor on the
+  stop, 15 of 293 short or behind-the-robot moves take 0.5-0.8 s longer,
+  because the robot turns in place first and then runs without the floor.
 - `moveToPoint()` could circle its target until the time limit. Inside 8 in
   it let the heading correction reach the full voltage cap, so a target
   passed a few inches to the side pulled the robot round it (455° and a

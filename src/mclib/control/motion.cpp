@@ -215,6 +215,36 @@ bool validEarlyExit(double range, bool exit) {
 // the physics simulator.
 constexpr double kChainPassRadiusIn = 8.0;
 
+// Inside kSettleRadiusIn a stopping point move drives a straight line through
+// the target, either way along it. When the target is more than kAimLimitRad
+// off that line, or off the nose before the first line, it turns in place
+// until the target is within kAimedRad and starts a new line. Steering
+// toward the target along an arc circled it until the time limit in the
+// physics simulator: the inner wheel stalled below its friction voltage, and
+// an all-omni drive slid out of the turn. The voltage floor stops applying
+// once the robot turns in place in here, or comes within
+// distance_exit.small_error of the target along its line. With the floor on
+// until the target, a 450 rpm drive slid 16 in past it. With the floor off
+// from 8 in, a 200 rpm drive took 1 s longer.
+constexpr double kSettleRadiusIn = 8.0;
+constexpr double kAimLimitRad = M_PI / 6.0;
+constexpr double kAimedRad = M_PI / 18.0;
+
+// Farther out, a stopping point move that turns kCirclingTurnRad without
+// getting kProgressStepIn closer is circling, and turns in place until the
+// target is within kAimedRad. In the physics simulator drives circled 9-11 in
+// from the target for the whole time limit, outside kSettleRadiusIn.
+constexpr double kProgressStepIn = 1.0;
+constexpr double kCirclingTurnRad = M_PI / 2.0;
+
+// The angle between two lines that differ by @p angle_rad, in [-pi/2, pi/2].
+double angleBetweenLines(double angle_rad) {
+  const double wrapped = mclib::wrapAngle(angle_rad);
+  if (wrapped > M_PI / 2.0) return wrapped - M_PI;
+  if (wrapped < -M_PI / 2.0) return wrapped + M_PI;
+  return wrapped;
+}
+
 /**
  * @brief True once someone has asked correctHeading() to stop.
  *
@@ -1249,6 +1279,16 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
   double prev_right_output = state().prevRightOutput();
   double exittolerance = 1;
   bool perpendicular_line = false, prev_perpendicular_line = true;
+  const double position_band = std::max(cfg().distance_exit.small_error,
+                                        cfg().distance_exit.big_error);
+  bool aiming = false;
+  bool on_line = false;
+  bool may_back_up = false;
+  bool floor_off = false;
+  double line_heading_deg = 0;
+  double progress_mark_in = hypot(x_in - pose.x, y_in - pose.y);
+  double turned_since_progress_rad = 0;
+  double previous_angle = safety.heading();
 
   double current_angle = 0;
   // Main PID loop for moving to point
@@ -1256,28 +1296,55 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
   {
     // Continuously update targets as robot moves
     pose = safety.pose();
-    telemetry.target(pid_heading, safety.normalize(radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add));
-    pid_distance.setTarget(hypot(x_in - pose.x, y_in - pose.y));
     current_angle = safety.heading();
+    const double remaining = hypot(x_in - pose.x, y_in - pose.y);
+    const double target_bearing_deg = radToDeg(atan2(x_in - pose.x, y_in - pose.y)) + add;
+    const double bearing_error = mclib::wrapAngle(degToRad(target_bearing_deg - current_angle));
+    const bool settle_zone = exit && remaining <= kSettleRadiusIn;
+    turned_since_progress_rad += fabs(mclib::wrapAngle(degToRad(current_angle - previous_angle)));
+    previous_angle = current_angle;
+    if (remaining <= progress_mark_in - kProgressStepIn)
+    {
+      progress_mark_in = remaining;
+      turned_since_progress_rad = 0;
+    }
+    if (on_line && remaining > position_band &&
+        fabs(angleBetweenLines(degToRad(target_bearing_deg - line_heading_deg))) > kAimLimitRad)
+    {
+      on_line = false;
+      aiming = true;
+    }
+    const double facing_deg =
+        may_back_up && fabs(bearing_error) > M_PI / 2.0 ? target_bearing_deg + 180 : target_bearing_deg;
+    const double facing_error = mclib::wrapAngle(degToRad(facing_deg - current_angle));
+    if (settle_zone && !on_line && fabs(facing_error) > kAimLimitRad) aiming = true;
+    if (exit && !settle_zone && turned_since_progress_rad > kCirclingTurnRad) aiming = true;
+    if (!on_line && fabs(facing_error) <= kAimedRad) aiming = false;
+    if (settle_zone && !on_line && !aiming)
+    {
+      on_line = true;
+      may_back_up = true;
+      line_heading_deg = facing_deg;
+    }
+    const bool reached_along_line =
+        may_back_up && remaining * cos(bearing_error) <= cfg().distance_exit.small_error;
+    if ((settle_zone && aiming) || reached_along_line) floor_off = true;
+    telemetry.target(pid_heading, safety.normalize(on_line ? line_heading_deg : facing_deg));
+    pid_distance.setTarget(remaining);
     telemetry.value.heading_error_deg = telemetry.value.target_heading_deg - current_angle;
     // Calculate drive output based on heading and distance
-    const double along = cos(degToRad(atan2(x_in - pose.x, y_in - pose.y) * 180 / M_PI + add - current_angle));
+    const double along = cos(bearing_error);
     left_output = pid_distance.update(0) * along * dir;
     if (exit)
     {
       // The part of the distance left that lies along the heading; see
       // MotionConfig::settle_min_voltage.
-      left_output = settleFloor(left_output, hypot(x_in - pose.x, y_in - pose.y) * along * dir,
+      left_output = settleFloor(left_output, remaining * along * dir,
                                 cfg().distance_exit.small_error);
     }
     right_output = left_output;
     if (exit && pid_distance.targetArrived()) break;
-    const double remaining = hypot(x_in - pose.x, y_in - pose.y);
     telemetry.value.remaining_in = remaining;
-    const double position_band = std::max(cfg().distance_exit.small_error,
-                                          cfg().distance_exit.big_error);
-    const double bearing_error = mclib::wrapAngle(
-        atan2(x_in - pose.x, y_in - pose.y) + degToRad(add - current_angle));
     // A chained move inside the band has arrived. Without this, a distance
     // PID that settles just short of the crossing tolerance below sat there
     // until the time limit.
@@ -1292,10 +1359,13 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
       break;
     }
     prev_perpendicular_line = perpendicular_line;
+    const bool pivot = settle_zone ? !on_line : aiming || fabs(facing_error) > M_PI / 3.0;
     // A nearby target beside/behind the robot still needs steering. Allow a
     // symmetric pivot before translating, without the distance-oriented slew
     // turning (+yaw,-yaw) into a lopsided drive command.
-    if (remaining > position_band && fabs(bearing_error) > M_PI / 3.0) {
+    if (remaining > position_band && pivot) {
+      progress_mark_in = remaining;
+      turned_since_progress_rad = 0;
       const double requested_yaw = telemetry.heading(pid_heading, current_angle);
       correction_output = clampSymmetric(requested_yaw, max_output);
       prev_left_output = correction_output;
@@ -1315,14 +1385,20 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
       correction_output = telemetry.heading(pid_heading, current_angle);
       requested_yaw = correction_output;
       // Cap correction so it can't overwhelm the forward drive and cause a pivot.
-      // Inside 8 in, cap it at the arc through the target: more than that
-      // circled the target until the time limit.
-      double max_correction =
-          remaining > 8 ? fabs(left_output) * 0.75
-                        : fmin(max_output, arcCorrectionLimit(left_output, max_output,
-                                                              halfTrackWidthIn(),
-                                                              bearing_error, remaining));
-      heading_voltage_limited = remaining <= 8 && fabs(correction_output) > max_output;
+      // A chained move inside 8 in caps it at the arc through the target: more
+      // than that circled the target until the time limit. A stopping move
+      // there holds a fixed line, so it gets the full voltage, as driveTo() does.
+      double max_correction = fabs(left_output) * 0.75;
+      if (on_line)
+      {
+        max_correction = max_output;
+      }
+      else if (remaining <= kSettleRadiusIn)
+      {
+        max_correction = fmin(max_output, arcCorrectionLimit(left_output, max_output, halfTrackWidthIn(),
+                                                             facing_error, remaining));
+      }
+      heading_voltage_limited = remaining <= kSettleRadiusIn && fabs(correction_output) > max_output;
       if (fabs(correction_output) > max_correction)
       {
         correction_output = (correction_output > 0) ? max_correction : -max_correction;
@@ -1334,7 +1410,7 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     }
 
     // Minimum Output Check
-    if (apply_min_speed_floor && min_speed_output > 0)
+    if (apply_min_speed_floor && min_speed_output > 0 && !floor_off)
     {
       scaleToMin(left_output, right_output, min_speed_output);
     }

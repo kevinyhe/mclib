@@ -1176,6 +1176,113 @@ int main() {
     }
   }
 
+  // A stopping moveToPoint() on a drive that slides sideways, like an all-omni
+  // base: wheel speed follows the voltage above 1 V of friction with a 60 ms
+  // lag, and sideways speed dies away over 0.3 s. Arcing toward a target well
+  // off the nose circled it until the time limit, turning 645-751 deg. With
+  // an 8 V floor the robot could not slow down for the target at all.
+  {
+    struct SlideCase {
+      double x, y, start_speed_ips;
+      int dir;
+      QVoltage floor;
+    };
+    const SlideCase cases[] = {{4, 4, 0, 1, -1_V},   {-5, 5, 0, 1, -1_V},
+                               {3, -5, 0, -1, -1_V}, {4, 30, 50, 1, -1_V},
+                               {10, 30, 50, 1, -1_V}, {6, 30, 0, 1, 8_V}};
+    for (const SlideCase& c : cases) {
+      mclib::Pose2D pose{0, c.start_speed_ips > 0 ? 22.0 : 0.0, 0};
+      double wheel_l = c.start_speed_ips, wheel_r = c.start_speed_ips;
+      double vx = 0, vy = c.start_speed_ips, turned_deg = 0;
+      resetOdometry(pose);
+      hw.heading = 0;
+      now_ms = 0;
+      clearCancel();
+      on_delay = [&] {
+        auto wheelSpeed = [](double volts) {
+          const double push = std::fabs(volts) - 1.0;
+          return push <= 0 ? 0.0 : std::copysign(push, volts) / 0.15;
+        };
+        const double dt = 0.01;
+        wheel_l += (wheelSpeed(hw.left) - wheel_l) * dt / 0.06;
+        wheel_r += (wheelSpeed(hw.right) - wheel_r) * dt / 0.06;
+        const double turn = (wheel_l - wheel_r) / 12.0 * dt;
+        pose.theta = mclib::wrapAngle(pose.theta + turn);
+        hw.heading += turn * 180 / M_PI;
+        turned_deg += std::fabs(turn) * 180 / M_PI;
+        const double fx = std::sin(pose.theta), fy = std::cos(pose.theta);
+        const double forward = (wheel_l + wheel_r) / 2;
+        const double sideways = (vx * fy - vy * fx) * std::exp(-dt / 0.3);
+        vx = forward * fx + sideways * fy;
+        vy = forward * fy - sideways * fx;
+        pose.x += vx * dt;
+        pose.y += vy * dt;
+        resetOdometry(pose);
+      };
+      const MotionResult result =
+          moveToPoint(c.x * 1_in, c.y * 1_in, c.dir, 4_s, true, 12_V, true, c.floor);
+      on_delay = {};
+      const double miss_in = std::hypot(pose.x - c.x, pose.y - c.y);
+      std::printf("moveToPoint(%.0f, %.0f) on a sliding drive, starting at %.0f in/s, floor "
+                  "%.0f V: %s, %u ms, miss %.2f in, turned %.0f deg\n",
+                  c.x, c.y, c.start_speed_ips, c.floor.volts(), toString(result),
+                  static_cast<unsigned>(now_ms), miss_in, turned_deg);
+      CHECK(result == MotionResult::Reached);
+      CHECK(miss_in <= motionConfig().distance_exit.big_error);
+      CHECK(turned_deg < 360);
+    }
+  }
+
+  // Outside 8 in, a stopping moveToPoint() that keeps turning without getting
+  // closer turns in place to face the target. This plant holds the robot
+  // 10 in from the target, 50 deg off the nose, and walks it around the
+  // target 2 deg per tick for as long as both sides drive the same way. The
+  // first command with the sides opposed hands it to a plain drive model.
+  {
+    const double orbit_radius_in = 10.0;
+    const double target_off_nose_rad = 50.0 * M_PI / 180.0;
+    double orbit_rad = 0;
+    bool orbiting = true;
+    double orbit_turned_deg = 0;
+    auto orbitPose = [&] {
+      return mclib::Pose2D{-orbit_radius_in * std::sin(orbit_rad),
+                           -orbit_radius_in * std::cos(orbit_rad),
+                           mclib::wrapAngle(orbit_rad - target_off_nose_rad)};
+    };
+    mclib::Pose2D pose = orbitPose();
+    resetOdometry(pose);
+    hw.heading = pose.theta * 180 / M_PI;
+    now_ms = 0;
+    clearCancel();
+    on_delay = [&] {
+      if (orbiting && hw.left * hw.right < 0) orbiting = false;
+      if (orbiting) {
+        const double step_rad = 2.0 * M_PI / 180.0;
+        orbit_rad += step_rad;
+        orbit_turned_deg += step_rad * 180 / M_PI;
+        pose = orbitPose();
+        hw.heading += step_rad * 180 / M_PI;
+      } else {
+        const double dt = 0.01, inches_per_volt_second = 5.0;
+        const double turn = (hw.left - hw.right) * inches_per_volt_second / 12.0 * dt;
+        const double forward = (hw.left + hw.right) / 2 * inches_per_volt_second * dt;
+        pose.theta = mclib::wrapAngle(pose.theta + turn);
+        hw.heading += turn * 180 / M_PI;
+        pose.x += forward * std::sin(pose.theta);
+        pose.y += forward * std::cos(pose.theta);
+      }
+      resetOdometry(pose);
+    };
+    const MotionResult result = moveToPoint(0_in, 0_in, 1, 4_s);
+    on_delay = {};
+    std::printf("moveToPoint() held in an orbit 10 in out: %s, %u ms, turned %.0f deg in "
+                "the orbit, miss %.2f in\n",
+                toString(result), static_cast<unsigned>(now_ms), orbit_turned_deg,
+                std::hypot(pose.x, pose.y));
+    CHECK(result == MotionResult::Reached);
+    CHECK(orbit_turned_deg < 120);
+  }
+
   bindDrive(nullptr);
 
   // With no drive bound there is nothing to move, and the caller has to be
