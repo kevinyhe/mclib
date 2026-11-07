@@ -5,6 +5,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+## 0.4.0
+
+Upgrading from 0.3.0:
+
+- `.until()` on a `Routine` no longer compiles. Put `.until()` on the motion
+  step, or use `waitUntil()`.
+- A `Routine` with a configuration error, such as a motion added with no
+  `setChassis()`, no longer runs at all. It prints why and finishes.
+- A `VelocityMechanism` ratio or an `Inertial` gain that is not a finite
+  number above 0 is a configuration error instead of being replaced with
+  1.0. The mechanism outputs 0 V; the IMU reads NaN, so motions refuse to
+  run. Check `hasConfigurationError()` if one stopped working.
+- Chained `moveToPoint()` and `boomerang()` hand off sooner: inside
+  `distance_exit.big_error` (1.5 in) of the target, or when they pass it
+  within 8 in. Routes that chain them reach the next move earlier.
+- A stopping `moveToPoint()` turns in place when the target is more than
+  30° off the nose within 8 in, and an explicit `min_speed` stops applying
+  near the target. With a 4 V floor, some short or behind-the-robot moves
+  take 0.5-0.8 s longer.
+
 ### Added
 
 - Owning forms of the command decorators: `Command::andThen(a, b)`,
