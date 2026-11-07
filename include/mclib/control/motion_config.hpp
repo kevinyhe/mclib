@@ -123,7 +123,10 @@ struct MotionConfig {
    *
    * The blocking routines apply it on their chained (`exit == false`)
    * branches and whenever the caller passes an explicit `min_speed`; the
-   * scheduler-driven driveDistance() applies it whenever it is non-zero.
+   * scheduler-driven driveDistance() applies it whenever it is non-zero. A
+   * stopping moveToPoint() stops applying it once it turns in place within
+   * 8 in of the target, or comes within distance_exit.small_error of the
+   * target along its line, so it can slow down there.
    */
   QVoltage min_voltage = 1.5 * units::volt;
 
