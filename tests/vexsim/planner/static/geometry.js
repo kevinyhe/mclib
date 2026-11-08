@@ -251,6 +251,38 @@ function planStateNearest(states, point) {
   return best;
 }
 
+// Where along @p route the robot first gets @p reach inches, in a straight
+// line, from the route's first point: the rule a step's distance actions run
+// by. Null when the route never gets that far.
+function firstReach(route, reach) {
+  const origin = route[0];
+  if (reach <= 0) return { x: origin.x, y: origin.y };
+  for (let i = 1; i < route.length; i++) {
+    const a = route[i - 1], b = route[i];
+    if (Math.hypot(b.x - origin.x, b.y - origin.y) < reach) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, ox = a.x - origin.x, oy = a.y - origin.y;
+    const qa = dx * dx + dy * dy, qb = 2 * (ox * dx + oy * dy), qc = ox * ox + oy * oy - reach * reach;
+    const s = qa > 0 ? (-qb + Math.sqrt(Math.max(0, qb * qb - 4 * qa * qc))) / (2 * qa) : 1;
+    const f = Math.min(1, Math.max(0, s));
+    return { x: a.x + dx * f, y: a.y + dy * f };
+  }
+  return null;
+}
+
+function nearestOnRoute(route, point) {
+  let best = { x: route[0].x, y: route[0].y }, bestGap = Math.hypot(point.x - best.x, point.y - best.y);
+  for (let i = 1; i < route.length; i++) {
+    const a = route[i - 1], b = route[i];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const span = dx * dx + dy * dy;
+    const f = span > 0 ? Math.min(1, Math.max(0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / span)) : 0;
+    const at = { x: a.x + dx * f, y: a.y + dy * f };
+    const gap = Math.hypot(point.x - at.x, point.y - at.y);
+    if (gap < bestGap) { best = at; bestGap = gap; }
+  }
+  return best;
+}
+
 function unwrapSeries(values) {
   let previous = null;
   return values.map((value) => {
@@ -336,7 +368,7 @@ function telemetryRows(frame, target) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     wrapDegrees, bearing, along, pathLayout, bezierPoint, sectionSamples, pathSpacingProblem, arcPoints,
-    stepEndPose, designedPoses, stepPreview, mirrorProject, frameIndexAt, planStateAt, planStateNearest, unwrapSeries,
-    telemetryRows,
+    stepEndPose, designedPoses, stepPreview, mirrorProject, frameIndexAt, planStateAt, planStateNearest, firstReach,
+    nearestOnRoute, unwrapSeries, telemetryRows,
   };
 }

@@ -10,12 +10,21 @@
   const HEADING_KNOB_IN = 14;
   const PATH_PROBE_REACH_PX = 9;
   const STEP_TAG_MERGE_PX = 22;
+  const ACTION_MARK_PX = 5;
+  const ACTION_COLOR = "#1c2024";
+  const ACTION_LATE_COLOR = "#94600a";
+  const ACTION_MENU_REACH_PX = 12;
+  const AIM_REACH_PX = 14;
+  const AUTONOMOUS_S = 15;
   const SPEED_STOPS = [[0, [44, 95, 214]], [0.35, [20, 163, 163]], [0.7, [230, 180, 0]], [1, [216, 67, 47]]];
   const SHORTCUTS = [
     ["Click the field", "Add a point to the end of the selected path, or place the selected step's target"],
     ["Click the selected path's line", "Insert a point there"],
     ["Hover over a planned path", "Show how far along the path that point is, how long the robot takes to reach it, and its planned speed"],
     ["Drag a point, handle or target", "Move it. Hold Shift to snap to a 6 in grid and headings to 15°"],
+    ["Click near a Goal or a stack (Turn to face a point)", "Aim at its centre. Hold Shift for the 6 in grid instead"],
+    ["Right-click a step's line (Override)", "Add a lift or claw action there"],
+    ["Drag an action's diamond", "Change where it runs"],
     ["Drag empty space · scroll", "Pan · zoom"],
     ["Double-click a point", "Put its heading and curve handles back on automatic"],
     ["Right-click a point", "Delete it"],
@@ -26,6 +35,7 @@
     ["Space", "Play or pause"],
     [", and .", "Step playback 0.1 s back or forward"],
     ["[ and ]", "Select the previous or next step"],
+    ["Drag a step in the list · Alt+↑ and Alt+↓", "Move the step earlier or later"],
     ["F", "Fit the routine in view"],
     ["Esc", "Deselect the point"],
     ["?", "Show the help"],
@@ -38,6 +48,8 @@
     project: null,
     selected: 0,
     point: null,
+    action: null,
+    draggedStep: null,
     history: [],
     future: [],
     plan: null,
@@ -49,11 +61,10 @@
     engine: null,
     engineTimer: null,
     runs: [],
-    activeRun: null,
+    activeRuns: new Map(),
     shown: null,
     compare: null,
     frames: [],
-    pollTimer: null,
     time: 0,
     playing: false,
     speed: 1,
@@ -71,6 +82,12 @@
     viewer: { ready: false, error: "" },
     log: [],
     graphCache: null,
+    graphKind: "speed",
+    graphOpen: false,
+    descriptionOpen: false,
+    toastTimer: null,
+    trackKey: null,
+    scrubFrom: null,
     pieceCache: null,
   };
 
@@ -87,6 +104,7 @@
       if (value === undefined || value === null || value === false) continue;
       if (key === "class") node.className = value;
       else if (key === "text") node.textContent = value;
+      else if (key === "style") for (const [name, setting] of Object.entries(value)) node.style.setProperty(name, setting);
       else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
       else node.setAttribute(key, value === true ? "" : value);
     }
@@ -117,6 +135,143 @@
     state.log.unshift({ time: now.toTimeString().slice(0, 8), message, kind });
     state.log.length = Math.min(state.log.length, 60);
     renderLog();
+  }
+
+  function notify(message, kind = "") {
+    log(message, kind);
+    const toast = $("toast");
+    toast.textContent = message;
+    toast.className = `toast ${kind}`;
+    toast.hidden = false;
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => { toast.hidden = true; }, kind === "error" ? 7000 : 3500);
+  }
+
+  const popover = { anchor: null, at: null };
+
+  function openPopover(anchor, children, label, role = "menu") {
+    const box = $("popover");
+    const reopening = popover.anchor === anchor;
+    closePopover();
+    if (reopening) return;
+    box.replaceChildren(...children);
+    box.setAttribute("role", role);
+    box.setAttribute("aria-label", label);
+    box.hidden = false;
+    popover.anchor = anchor;
+    anchor.setAttribute("aria-expanded", "true");
+    const at = anchor.getBoundingClientRect();
+    popover.at = { left: at.left, top: at.top };
+    const fitsBelow = at.bottom + 4 + box.offsetHeight <= window.innerHeight - 8;
+    box.style.left = `${Math.max(8, Math.min(at.left, window.innerWidth - box.offsetWidth - 8))}px`;
+    box.style.top = `${fitsBelow ? at.bottom + 4 : Math.max(8, at.top - box.offsetHeight - 4)}px`;
+    box.querySelector("input, [role=menuitem]:not(:disabled)")?.focus();
+  }
+
+  function closePopover({ restoreFocus = false } = {}) {
+    const box = $("popover");
+    if (box.hidden) return;
+    box.hidden = true;
+    box.replaceChildren();
+    popover.anchor.setAttribute("aria-expanded", "false");
+    if (restoreFocus && popover.anchor.isConnected) popover.anchor.focus();
+    popover.anchor = null;
+  }
+
+  function anchorMoved() {
+    const at = popover.anchor.getBoundingClientRect();
+    return !popover.anchor.isConnected || Math.abs(at.left - popover.at.left) > 1 || Math.abs(at.top - popover.at.top) > 1;
+  }
+
+  function popoverKeys(event) {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePopover({ restoreFocus: true });
+    } else if (event.key === "Tab") {
+      closePopover();
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const items = [...$("popover").querySelectorAll("[role=menuitem]")].filter((item) => !item.disabled && item.offsetParent);
+      if (!items.length) return;
+      const at = items.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown" ? (at + 1) % items.length : (at <= 0 ? items.length : at) - 1;
+      items[next].focus();
+    }
+  }
+
+  function menuItem({ label, detail = "", hint = "", onSelect, disabled = false, danger = false, data = {} }) {
+    return element("button", { role: "menuitem", class: `menu-item${danger ? " danger" : ""}`, disabled, ...data,
+      onclick: () => { closePopover(); onSelect(); } },
+    element("span", { class: "menu-label" }, element("span", { text: label }), hint ? element("span", { class: "menu-hint", text: hint }) : null),
+    detail ? element("span", { class: "menu-detail", text: detail }) : null);
+  }
+
+  function menuGroup(title, items) {
+    return element("div", { class: "menu-group", role: "group", "aria-label": title }, element("div", { class: "menu-head", text: title }), ...items);
+  }
+
+  function openExamples() {
+    openPopover($("example-picker"), state.config.examples.map((item) => menuItem({
+      label: item.name, detail: item.description, data: { "data-example": item.id }, onSelect: () => openExample(item.id),
+    })), "Examples");
+  }
+
+  async function openExample(id) {
+    const answer = await api(`/api/examples/${id}`);
+    if (!answer.ok) return notify(answer.data.error, "error");
+    replaceProject(answer.data, `Opened the example "${answer.data.name}". Press Run simulation to try it.`);
+  }
+
+  function openMirror() {
+    const flip = "Headings flip and arcs bend the other way.";
+    openPopover($("mirror-picker"), [
+      menuItem({ label: "Left ↔ right", detail: `x becomes −x. ${flip}`, data: { "data-axis": "x" }, onSelect: () => mirror("x") }),
+      menuItem({ label: "Front ↔ back", detail: `y becomes −y. ${flip}`, data: { "data-axis": "y" }, onSelect: () => mirror("y") }),
+    ], "Mirror the routine");
+  }
+
+  function mirror(axis) {
+    edit((project) => Object.assign(project, mirrorProject(project, axis)));
+    notify(axis === "x" ? "Mirrored the routine left ↔ right: x and headings flipped, arcs bend the other way." : "Mirrored the routine front ↔ back: y and headings flipped, arcs bend the other way.", "ok");
+  }
+
+  function openStepMenu(anchor, index) {
+    const last = state.project.steps.length - 1;
+    openPopover(anchor, [
+      menuItem({ label: "Duplicate", onSelect: () => duplicateStep(index), disabled: state.project.steps[index].type === "wall_reset" }),
+      menuItem({ label: "Move up", hint: "Alt+↑", onSelect: () => moveStep(index, index - 1), disabled: index === 0 }),
+      menuItem({ label: "Move down", hint: "Alt+↓", onSelect: () => moveStep(index, index + 1), disabled: index === last }),
+      menuItem({ label: "Delete", hint: "Del", danger: true, onSelect: () => deleteStep(index) }),
+    ], `Step ${index + 1}`);
+  }
+
+  function openAddStep() {
+    const types = Object.entries(state.config.step_types);
+    const item = ([type, info]) => menuItem({
+      label: info.label, hint: info.call, detail: `${info.description.split(". ")[0].replace(/\.$/, "")}.`,
+      data: { "data-type": type, "data-search": `${info.label} ${info.call} ${info.description}`.toLowerCase() }, onSelect: () => addStep(type),
+    });
+    const search = element("input", { type: "search", id: "add-step-search", placeholder: "Search step types", "aria-label": "Search step types", autocomplete: "off" });
+    search.addEventListener("input", () => filterStepTypes(search.value));
+    search.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      document.querySelector("#add-step-menu [role=menuitem]:not([hidden])")?.click();
+    });
+    openPopover($("add-step"), [
+      element("div", { class: "menu-title", text: `Add after step ${state.selected + 1}` }),
+      search,
+      element("div", { id: "add-step-menu", class: "menu-scroll" },
+        menuGroup("Drive", types.filter(([, info]) => !info.still).map(item)),
+        menuGroup("Mechanisms and waiting", types.filter(([, info]) => info.still).map(item))),
+    ], "Add a step", "dialog");
+  }
+
+  function filterStepTypes(query) {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    for (const item of document.querySelectorAll("#add-step-menu [role=menuitem]")) item.hidden = !words.every((word) => item.dataset.search.includes(word));
+    for (const group of document.querySelectorAll("#add-step-menu .menu-group")) group.hidden = !group.querySelector("[role=menuitem]:not([hidden])");
   }
 
   const preset = () => state.config.presets[state.project.robot.preset];
@@ -168,7 +323,7 @@
   }
 
   function undo() {
-    if (!state.history.length) return log("Nothing to undo.");
+    if (!state.history.length) return notify("Nothing to undo.");
     state.future.push(JSON.stringify(state.project));
     state.project = JSON.parse(state.history.pop());
     keepSelectionValid();
@@ -176,7 +331,7 @@
   }
 
   function redo() {
-    if (!state.future.length) return log("Nothing to redo.");
+    if (!state.future.length) return notify("Nothing to redo.");
     state.history.push(JSON.stringify(state.project));
     state.project = JSON.parse(state.future.pop());
     keepSelectionValid();
@@ -187,6 +342,7 @@
     state.selected = Math.max(0, Math.min(state.selected, state.project.steps.length - 1));
     const step = selectedStep();
     if (step.type !== "path" || state.point === null || state.point >= step.points.length) state.point = null;
+    if (state.action !== null && state.action >= (step.actions ?? []).length) state.action = null;
   }
 
   function replaceProject(project, message) {
@@ -198,7 +354,7 @@
     state.plan = null;
     state.planFor = null;
     state.planError = null;
-    if (!state.activeRun) {
+    if (!state.activeRuns.size) {
       state.shown = null;
       state.compare = null;
       state.time = 0;
@@ -207,12 +363,13 @@
     fitView();
     changed();
     checkEngine();
-    if (message) log(message, "ok");
+    if (message) notify(message, "ok");
   }
 
-  function selectStep(index, point = null) {
+  function selectStep(index, point = null, action = null) {
     state.selected = index;
     state.point = point;
+    state.action = action;
     state.tab = "step";
     renderAll();
   }
@@ -240,9 +397,9 @@
     let index = state.selected + 1;
     if (steps.at(-1)?.type === "wall_reset" && index >= steps.length) index = steps.length - 1;
     if (type === "wall_reset" && steps.some((s) => s.type === "wall_reset")) {
-      return log("There is already a wall reset. A routine can have one, as its last step.", "error");
+      return notify("There is already a wall reset. A routine can have one, as its last step.", "error");
     }
-    if (steps.length >= state.config.limits.max_steps) return log(`A routine holds up to ${state.config.limits.max_steps} steps.`, "error");
+    if (steps.length >= state.config.limits.max_steps) return notify(`A routine holds up to ${state.config.limits.max_steps} steps.`, "error");
     const step = newStep(type, index - 1);
     edit((project) => project.steps.splice(type === "wall_reset" ? project.steps.length : index, 0, step));
     state.selected = type === "wall_reset" ? steps.length - 1 : index;
@@ -253,21 +410,23 @@
   }
 
   function deleteStep(index) {
-    if (state.project.steps.length === 1) return log("A routine needs at least one step. Change this one, or start a new routine.", "error");
+    if (state.project.steps.length === 1) return notify("A routine needs at least one step. Change this one, or start a new routine.", "error");
     const label = stepInfo(state.project.steps[index]).label;
     edit((project) => project.steps.splice(index, 1));
     state.selected = Math.min(index, state.project.steps.length - 1);
     state.point = null;
     renderAll();
-    log(`Deleted step ${index + 1} (${label}). Ctrl+Z brings it back.`);
+    notify(`Deleted step ${index + 1} (${label}). Ctrl+Z brings it back.`);
   }
 
-  function moveStep(index, delta) {
-    const target = index + delta;
+  function moveStep(index, target) {
     const steps = state.project.steps;
-    if (target < 0 || target >= steps.length) return;
-    if (steps[index].type === "wall_reset" || steps[target].type === "wall_reset") {
-      return log("The wall reset has to stay last: it moves the odometry frame.", "error");
+    if (target < 0 || target >= steps.length || target === index) return;
+    const moved = [...steps];
+    moved.splice(target, 0, ...moved.splice(index, 1));
+    const reset = moved.findIndex((step) => step.type === "wall_reset");
+    if (reset !== -1 && reset !== moved.length - 1) {
+      return notify("The wall reset has to stay last: it moves the odometry frame.", "error");
     }
     edit((project) => {
       const [step] = project.steps.splice(index, 1);
@@ -277,10 +436,36 @@
     renderAll();
   }
 
+  function dropsBefore(event) {
+    const box = event.currentTarget.getBoundingClientRect();
+    return event.clientY < box.top + box.height / 2;
+  }
+
+  function showDropSide(event) {
+    const before = dropsBefore(event);
+    event.currentTarget.classList.toggle("drop-before", before);
+    event.currentTarget.classList.toggle("drop-after", !before);
+  }
+
+  function clearDropSides() {
+    for (const item of document.querySelectorAll("#step-list .drop-before, #step-list .drop-after")) {
+      item.classList.remove("drop-before", "drop-after");
+    }
+  }
+
+  function dropStep(onto, before) {
+    const from = state.draggedStep;
+    state.draggedStep = null;
+    clearDropSides();
+    if (from === null) return;
+    const slot = before ? onto : onto + 1;
+    moveStep(from, slot > from ? slot - 1 : slot);
+  }
+
   function addPoint(position) {
     const step = selectedStep();
     if (step.points.length >= state.config.limits.max_points) {
-      return log(`A path holds up to ${state.config.limits.max_points} points. Add another path step for more.`, "error");
+      return notify(`A path holds up to ${state.config.limits.max_points} points. Add another path step for more.`, "error");
     }
     edit(() => {
       step.points.push({ x: position.x, y: position.y, heading: null, handle_in: null, handle_out: null });
@@ -293,7 +478,7 @@
   function insertPoint(sectionIndex, position) {
     const step = selectedStep();
     if (step.points.length >= state.config.limits.max_points) {
-      return log(`A path holds up to ${state.config.limits.max_points} points.`, "error");
+      return notify(`A path holds up to ${state.config.limits.max_points} points.`, "error");
     }
     edit(() => {
       step.points.splice(sectionIndex, 0, { x: position.x, y: position.y, heading: null, handle_in: null, handle_out: null });
@@ -406,62 +591,68 @@
     renderActivity();
   }
 
+  function shownIsRunning() {
+    return state.activeRuns.has(state.shown?.id);
+  }
+
   async function runSimulation() {
-    if (state.activeRun) return log("A run is already going. Wait for it, or cancel it.", "error");
     const answer = await api("/api/runs", { method: "POST", body: clone(state.project) }).catch((error) => ({ ok: false, data: { error: error.message } }));
     if (!answer.ok) {
       const step = answer.data.step;
       if (Number.isInteger(step)) selectStep(step);
-      log(`Run not started. ${answer.data.error}`, "error");
+      notify(`Run not started. ${answer.data.error}`, "error");
       return;
     }
     const job = answer.data;
-    state.activeRun = job.id;
-    state.frames = [];
-    state.shown = { ...job, live: { steps: [], frames: [] } };
+    const run = { frames: [], timer: null };
+    state.activeRuns.set(job.id, run);
+    state.frames = run.frames;
+    state.shown = { ...job, live: { steps: [], frames: run.frames } };
     state.time = 0;
     state.graphCache = null;
     log(`Run ${job.number} started.`);
-    pollRun();
+    pollRun(job.id);
     renderAll();
   }
 
   async function cancelRun() {
-    if (!state.activeRun) return;
-    await api(`/api/runs/${state.activeRun}/cancel`, { method: "POST", body: {} });
-    log("Cancelling the run.");
+    if (!shownIsRunning()) return;
+    const { id, number } = state.shown;
+    await api(`/api/runs/${id}/cancel`, { method: "POST", body: {} });
+    log(`Cancelling run ${number}.`);
   }
 
-  async function pollRun() {
-    clearTimeout(state.pollTimer);
-    const id = state.activeRun;
-    if (!id) return;
+  async function pollRun(id) {
+    const run = state.activeRuns.get(id);
+    if (!run) return;
+    clearTimeout(run.timer);
     let answer;
     try {
-      answer = await api(`/api/runs/${id}?frames_from=${state.frames.length}`);
+      answer = await api(`/api/runs/${id}?frames_from=${run.frames.length}`);
     } catch (error) {
-      state.pollTimer = setTimeout(pollRun, 1000);
+      run.timer = setTimeout(() => pollRun(id), 1000);
       return;
     }
-    if (!answer.ok || state.activeRun !== id) return;
+    if (!answer.ok || !state.activeRuns.has(id)) return;
     const job = answer.data;
     if (job.live) {
-      state.frames.push(...job.live.frames);
-      job.live.frames = state.frames;
+      run.frames.push(...job.live.frames);
+      job.live.frames = run.frames;
     }
     const finished = ["finished", "broke_rule", "cancelled", "error"].includes(job.status);
     if (state.shown?.id === id) {
       state.shown = job;
-      if (!finished) state.time = state.frames.at(-1)?.t ?? 0;
+      state.frames = run.frames;
+      if (!finished) state.time = run.frames.at(-1)?.t ?? 0;
       state.graphCache = null;
     }
     if (finished) {
-      state.activeRun = null;
+      state.activeRuns.delete(id);
       reportRun(job);
       if (state.shown?.id === id) state.time = trace().at(-1)?.t ?? 0;
       refreshRuns();
     } else {
-      state.pollTimer = setTimeout(pollRun, 250);
+      run.timer = setTimeout(() => pollRun(id), state.shown?.id === id ? 250 : 1000);
     }
     renderAll();
   }
@@ -469,13 +660,13 @@
   function reportRun(job) {
     const summary = job.result?.summary ?? job.summary;
     if (job.status === "error") {
-      log(`Run ${job.number} stopped with an error${job.error_stage ? ` while it was in "${stageLabel(job, job.error_stage)}"` : ""}: ${job.error}`, "error");
+      notify(`Run ${job.number} stopped with an error${job.error_stage ? ` while it was in "${stageLabel(job, job.error_stage)}"` : ""}: ${job.error}`, "error");
       if (Number.isInteger(job.error_step)) selectStep(job.error_step);
       return;
     }
     if (job.status === "cancelled") return log(`Run ${job.number} was cancelled.`);
     const wall = (job.finished_at - job.started_at).toFixed(1);
-    log(`Run ${job.number}: ${ranSteps(summary)}, ${fmt(summary.simulated_s, 2)} s of robot time (took ${wall} s).`, job.status === "finished" ? "ok" : "error");
+    notify(`Run ${job.number}: ${ranSteps(summary)}, ${fmt(summary.simulated_s, 2)} s of robot time (took ${wall} s).`, job.status === "finished" ? "ok" : "error");
     for (const row of job.result.steps) {
       for (const text of row.rule_breaks) log(`Step ${row.index + 1} (${state.config.step_types[row.type].label}) broke a rule: ${text}`, "error");
     }
@@ -544,7 +735,7 @@
 
   function play(on = !state.playing) {
     const end = timeline().end;
-    if (!end) return log("Nothing to play yet. Run a simulation, or select a planned path to preview it.");
+    if (!end) return notify("Nothing to play yet. Run a simulation, or select a planned path to preview it.");
     if (on && state.time >= end - 1e-6) state.time = 0;
     state.playing = on;
     state.lastTick = performance.now();
@@ -619,20 +810,97 @@
     }
   }
 
-  function actionsSummary(step) {
-    const rules = state.config.actions;
-    return (step.actions ?? []).map((action) => {
-      const mechanism = rules.mechanisms[action.mechanism];
-      const when = { start: "at the start", end: "when the motion ends", distance: `after ${trim(action.value)} in`, time: `after ${trim(action.value)} ms` }[action.when];
-      return `${mechanism.label} to ${mechanism.presets[action.preset]} ${when}`;
-    }).join("; ");
+  function actionWhen(action) {
+    return { start: "at the start", end: "when the motion ends", distance: `after ${trim(action.value)} in`, time: `after ${trim(action.value)} ms` }[action.when];
+  }
+
+  function actionText(action) {
+    const mechanism = state.config.actions.mechanisms[action.mechanism];
+    return `${mechanism.label} to ${mechanism.presets[action.preset]} ${actionWhen(action)}`;
+  }
+
+  function actionLabel(action) {
+    const mechanism = state.config.actions.mechanisms[action.mechanism];
+    return `${mechanism.label}: ${mechanism.presets[action.preset].split(":")[0]}`;
+  }
+
+  function stepRoute(step, index, start) {
+    if (step.type === "path") {
+      const plan = planFor(index);
+      if (plan) return plan.states.map((s) => ({ x: s[3], y: s[4], t: s[1] }));
+      if (!step.points.length) return [{ x: start.x, y: start.y }];
+      return pathLayout(step, start).sections.flatMap((section) => sectionSamples(section, 40));
+    }
+    const preview = stepPreview(step, start, trackWidth());
+    return preview.length ? preview : [{ x: start.x, y: start.y }];
+  }
+
+  function plannedActionSpot(action, route) {
+    const last = route.at(-1);
+    if (action.when === "start") return { at: route[0], late: false };
+    if (action.when === "end") return { at: last, late: false };
+    if (action.when === "distance") {
+      const at = firstReach(route, action.value);
+      return at ? { at, late: false } : { at: last, late: true };
+    }
+    if (!Number.isFinite(last.t)) return null;
+    const seconds = action.value / 1000;
+    if (seconds > last.t) return { at: last, late: true };
+    const i = route.findIndex((point) => point.t >= seconds);
+    const a = route[Math.max(0, i - 1)], b = route[i];
+    const f = b.t > a.t ? (seconds - a.t) / (b.t - a.t) : 0;
+    return { at: { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f }, late: false };
+  }
+
+  function plannedActionSpots(index, all = poses()) {
+    const step = state.project.steps[index];
+    if (!step.actions?.length || stepInfo(step).still) return [];
+    const route = stepRoute(step, index, all[index].start);
+    return step.actions.map((action, i) => ({ step: index, action: i, route, ...plannedActionSpot(action, route) }))
+      .filter((spot) => spot.at);
+  }
+
+  function firedActionSpots() {
+    const job = state.shown;
+    const frames = trace();
+    if (!job?.project || !frames.length) return [];
+    if (state.firedCache?.job === job && state.firedCache.frames === frames.length) return state.firedCache.spots;
+    const motion = new Map();
+    for (const frame of frames) {
+      if (frame.phase !== "motion") continue;
+      if (!motion.has(frame.step)) motion.set(frame.step, []);
+      motion.get(frame.step).push(frame);
+    }
+    const finished = new Set(stepRows(job).filter((row) => Number.isFinite(row.return_time_s)).map((row) => row.index));
+    const spots = [];
+    job.project.steps.forEach((step, index) => {
+      const ran = motion.get(index);
+      if (!step.actions?.length || !ran) return;
+      const first = ran[0];
+      step.actions.forEach((action, i) => {
+        const due = {
+          start: () => first,
+          end: () => (finished.has(index) ? ran.at(-1) : null),
+          distance: () => ran.find((f) => Math.hypot(f.estimated_x - first.estimated_x, f.estimated_y - first.estimated_y) >= action.value),
+          time: () => ran.find((f) => (f.t - first.t) * 1000 >= action.value),
+        }[action.when]();
+        const late = !due && finished.has(index);
+        const frame = due ?? (late ? ran.at(-1) : null);
+        if (frame) {
+          spots.push({ step: index, action: i, mechanism: action.mechanism, preset: action.preset, text: actionText(action), late, t: frame.t,
+            at: { x: frame.true_x, y: frame.true_y } });
+        }
+      });
+    });
+    state.firedCache = { job, frames: frames.length, spots };
+    return spots;
   }
 
   function resultBadge(row) {
     if (!row) return null;
     if (row.executed === false) return element("span", { class: "badge skip", text: "skipped" });
     if (!Array.isArray(row.rule_breaks)) return element("span", { class: "badge run", text: "running" });
-    if (row.rule_breaks.length) return element("span", { class: "badge fail", title: row.rule_breaks.join(" "), text: "✗ broke a rule" });
+    if (row.rule_breaks.length) return element("span", { class: "badge fail", title: row.rule_breaks.join(" "), text: "broke a rule" });
     const miss = row.position_error_in ?? null;
     const turn = row.heading_error_deg ?? null;
     const detail = Number.isFinite(miss) ? `${fmt(miss, 1)} in off` : Number.isFinite(turn) ? `${fmt(turn, 1)}° off` : "";
@@ -641,36 +909,43 @@
   }
 
   function renderSteps() {
+    if (state.draggedStep !== null) return;
     const start = state.project.start;
     const card = $("start-card");
     card.replaceChildren(element("b", { text: "Start" }), ` at (${trim(start.x)}, ${trim(start.y)}) facing ${trim(start.heading)}°`);
     $("step-count").textContent = `${state.project.steps.length} step${state.project.steps.length === 1 ? "" : "s"}`;
     const rows = stepRows();
     const live = stepAtTime();
+    const all = poses();
     const items = state.project.steps.map((step, index) => {
       const selected = index === state.selected;
-      const problem = poses()[index]?.problem || (state.planError?.step === index ? state.planError.message : null);
+      const problem = all[index]?.problem || (state.planError?.step === index ? state.planError.message : null);
       const row = rows.find((item) => item.index === index);
-      const actions = selected ? element("div", { class: "step-actions" },
-        element("button", { class: "small", title: "Move this step earlier", onclick: (e) => { e.stopPropagation(); moveStep(index, -1); }, disabled: index === 0 }, "↑"),
-        element("button", { class: "small", title: "Move this step later", onclick: (e) => { e.stopPropagation(); moveStep(index, 1); }, disabled: index === state.project.steps.length - 1 }, "↓"),
-        element("button", { class: "small", title: "Add a copy of this step after it", onclick: (e) => { e.stopPropagation(); duplicateStep(index); }, disabled: step.type === "wall_reset" }, "Duplicate"),
-        element("button", { class: "small danger", title: "Delete this step (Ctrl+Z undoes it)", onclick: (e) => { e.stopPropagation(); deleteStep(index); } }, "Delete")) : null;
+      const label = stepInfo(step).label;
+      const menu = element("button", { class: "row-menu", "aria-label": `Step ${index + 1}: duplicate, move or delete`, title: "Duplicate, move or delete",
+        "aria-haspopup": "menu", "aria-expanded": "false", onclick: (event) => { event.stopPropagation(); openStepMenu(event.currentTarget, index); } }, "⋯");
       return element("li", {
         class: `step${selected ? " selected" : ""}${live === index && state.shown ? " playing" : ""}`,
-        onclick: () => selectStep(index), "data-step": index,
+        onclick: () => selectStep(index), "data-step": index, draggable: "true", title: "Drag to move this step",
+        ondragstart: (event) => { state.draggedStep = index; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); },
+        ondragover: (event) => { if (state.draggedStep !== null) { event.preventDefault(); showDropSide(event); } },
+        ondragleave: (event) => event.currentTarget.classList.remove("drop-before", "drop-after"),
+        ondrop: (event) => { event.preventDefault(); dropStep(index, dropsBefore(event)); },
+        ondragend: () => { state.draggedStep = null; clearDropSides(); renderSteps(); },
       },
       element("div", { class: "step-top" },
         element("span", { class: "step-number", text: index + 1 }),
-        element("span", { class: "step-title", text: step.note ? `${stepInfo(step).label}: ${step.note}` : stepInfo(step).label }),
-        resultBadge(row)),
-      element("div", { class: "step-sub", text: stepSummary(step, index) }),
+        element("span", { class: "step-title", text: step.note || label }),
+        resultBadge(row),
+        menu),
+      element("div", { class: "step-sub", text: step.note ? `${label} · ${stepSummary(step, index)}` : stepSummary(step, index) }),
       step.chain ? element("div", { class: "step-chain", text: `Keeps moving into step ${index + 2}` }) : null,
-      step.actions?.length ? element("div", { class: "step-actions-list", text: actionsSummary(step) }) : null,
-      problem ? element("div", { class: "step-problem", text: problem }) : null,
-      actions);
+      step.actions?.length ? element("div", { class: "step-actions-list" },
+        step.actions.map((action) => element("div", { text: `${actionLabel(action)}, ${actionWhen(action)}` }))) : null,
+      problem ? element("div", { class: "step-problem", text: problem }) : null);
     });
     $("step-list").replaceChildren(...items);
+    $("add-step").title = `Add a step after step ${state.selected + 1}`;
   }
 
   function duplicateStep(index) {
@@ -684,10 +959,15 @@
     const pill = $("engine-pill");
     const engine = state.engine;
     let text = "Connecting to the planner…", kind = "";
-    if (state.activeRun && state.shown?.progress) {
+    const running = state.activeRuns.size;
+    if (shownIsRunning() && state.shown?.progress) {
       const step = state.shown.progress.step;
       const active = state.shown.progress.stages.find((stage) => stage.status === "active");
       text = step ? `Run ${state.shown.number}: step ${step.index + 1} of ${step.total}` : `Run ${state.shown.number}: ${active?.label ?? "waiting"}`;
+      if (running > 1) text += ` · ${running - 1} more running`;
+      kind = "busy";
+    } else if (running) {
+      text = `${running} run${running === 1 ? "" : "s"} going`;
       kind = "busy";
     } else if (engine?.error) {
       text = `Planner not reachable: ${engine.error}`;
@@ -707,8 +987,7 @@
     pill.textContent = text;
     pill.className = `pill ${kind}`;
     pill.title = text;
-    $("run").hidden = !!state.activeRun;
-    $("cancel-run").hidden = !state.activeRun;
+    $("cancel-run").hidden = !shownIsRunning();
   }
 
   function autonomousLines(auton) {
@@ -795,22 +1074,66 @@
     slider.max = String(Math.max(0.001, Math.ceil(span.end * 1000) / 1000));
     slider.value = String(state.time);
     slider.disabled = !span.end;
+    slider.setAttribute("aria-valuetext", `${fmt(state.time, 2)} s`);
     $("play").disabled = !span.end;
     $("play").textContent = state.playing ? "❚❚" : "▶";
     $("play").setAttribute("aria-label", state.playing ? "Pause" : "Play");
     $("clock").textContent = `${fmt(state.time, 2)} / ${fmt(span.end, 2)} s`;
-    const marks = [];
-    if (span.kind === "run" && span.end) {
-      for (const row of stepRows()) {
-        if (!Number.isFinite(row.start_time_s)) continue;
-        const mark = element("i", { class: row.rule_breaks?.length ? "fail" : "", title: `Step ${row.index + 1}` });
-        mark.style.left = `${(row.start_time_s / span.end) * 100}%`;
-        marks.push(mark);
-      }
-    }
-    $("timeline-marks").replaceChildren(...marks);
+    $("playhead").hidden = !span.end;
+    $("playhead").style.left = `${span.end ? (Math.min(state.time, span.end) / span.end) * 100 : 0}%`;
+    renderTrack(span);
+    const current = span.kind === "run" ? stepAtTime() : null;
+    for (const block of $("timeline-blocks").querySelectorAll(".block")) block.classList.toggle("current", Number(block.dataset.step) === current);
     const stale = state.shown?.project && projectKey(state.shown.project) !== projectKey();
     $("stale-badge").hidden = !stale;
+    $("open-run-routine").hidden = !stale;
+  }
+
+  function trackBlocks(span) {
+    if (span.kind === "plan") {
+      const step = selectedStep();
+      return [{ index: state.selected, start: 0, end: span.end, title: step.note || stepInfo(step).label, failed: false }];
+    }
+    if (span.kind !== "run") return [];
+    const steps = state.shown.project?.steps ?? [];
+    return stepRows().filter((row) => Number.isFinite(row.start_time_s)).map((row) => {
+      const step = steps[row.index];
+      return {
+        index: row.index, start: row.start_time_s, end: Number.isFinite(row.end_time_s) ? row.end_time_s : span.end,
+        title: step ? step.note || state.config.step_types[step.type].label : "", failed: Boolean(row.rule_breaks?.length),
+      };
+    });
+  }
+
+  function renderTrack(span) {
+    const blocks = trackBlocks(span);
+    const actions = span.kind === "run" ? firedActionSpots() : [];
+    const key = JSON.stringify([span.kind, span.end, state.shown?.id, state.selected, blocks.length, actions.length, blocks.at(-1)?.end]);
+    if (state.trackKey === key) return;
+    state.trackKey = key;
+    const at = (t) => `${(t / span.end) * 100}%`;
+    const ticks = [];
+    if (span.end) {
+      const every = span.end > 20 ? 5 : span.end > 8 ? 2 : span.end > 3 ? 1 : 0.5;
+      for (let t = 0; t <= span.end + 1e-6; t += every) ticks.push(element("span", { class: "tick", style: { left: at(t) }, text: `${trim(t)} s` }));
+    }
+    $("timeline-ruler").replaceChildren(...ticks);
+    const children = blocks.map((block) => element("div", {
+      class: `block${block.failed ? " fail" : ""}${block.index === state.selected ? " selected" : ""}`, "data-step": block.index,
+      style: { left: at(block.start), width: at(block.end - block.start) },
+      title: `Step ${block.index + 1}: ${block.title} · ${fmt(block.start, 2)} to ${fmt(block.end, 2)} s`,
+    }, element("b", { text: block.index + 1 }), " ", block.title));
+    for (const spot of actions) children.push(element("i", { class: "action-mark", style: { left: at(spot.t) } }));
+    const field = state.shown?.project?.field;
+    if (span.kind === "run" && field === "override" && span.end > AUTONOMOUS_S) {
+      children.push(element("span", { class: "auton-end", style: { left: at(AUTONOMOUS_S) }, title: `Autonomous ends at ${AUTONOMOUS_S} s` }));
+    }
+    if (!span.end) children.push(element("span", { class: "track-empty", text: "Run the simulation to see each step here." }));
+    $("timeline-blocks").replaceChildren(...children);
+  }
+
+  function blockAt(time) {
+    return trackBlocks(timeline()).find((block) => block.start <= time && time < block.end + 1e-6) ?? null;
   }
 
   function renderHint() {
@@ -823,9 +1146,12 @@
     else if (state.probe) hint = "";
     else if (step.type === "path" && !step.points.length) hint = `Click on the field to add points to step ${state.selected + 1}. The path starts where the robot is.`;
     else if (step.type === "path") hint = `Click to add a point to the end of step ${state.selected + 1}. Click its line to insert one. Drag points and handles to shape it.`;
-    else if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
+    else if (step.type === "turn_to_point") hint = `Click or drag to place what step ${state.selected + 1} faces. Near a Goal, Loader or stack it aims at the centre; hold Shift for the grid.`;
+    else if (["point", "boomerang", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
     else if (["turn", "arc", "reverse_arc", "swing"].includes(step.type)) hint = `Drag the round knob to set the heading of step ${state.selected + 1}.`;
     else if (step.type === "drive") hint = `Drag the round knob to set how far step ${state.selected + 1} drives.`;
+    const takesActions = state.project.field === "override" && !stepInfo(step).still && !(step.type === "path" && !step.points.length);
+    if (hint && takesActions && !state.hover && !state.drag) hint += " Right-click its line to add a lift or claw action.";
     $("field-hint").textContent = hint;
   }
 
@@ -833,31 +1159,43 @@
     return element("span", { class: "help tip", text });
   }
 
-  function numberInput({ label, unit = "", value, min, max, step = 1, help, onCommit, disabled = false, placeholder }) {
+  const SUFFIX_MAX_CHARS = 5;
+
+  function propName(label, unit = "") {
+    return element("span", { class: "prop-name" }, label,
+      unit.length > SUFFIX_MAX_CHARS ? element("span", { class: "unit", text: ` (${unit})` }) : null);
+  }
+
+  function numberControl({ label, unit = "", value, min, max, step = 1, disabled = false, placeholder, onCommit }) {
     const input = element("input", { type: "number", min, max, step, value: Number.isFinite(value) ? String(value) : "", disabled, placeholder });
-    const wrapper = element("label", { class: "field-label", title: help },
-      element("span", {}, label, unit ? element("span", { class: "unit", text: ` (${unit})` }) : null),
-      input, help ? helpTip(help) : null);
+    const suffix = unit && unit.length <= SUFFIX_MAX_CHARS ? unit : "";
+    const box = element("span", { class: "input-unit", "data-unit": suffix || null, style: suffix ? { "--unit-chars": String(suffix.length) } : null }, input);
     const message = element("span", { class: "help" });
     input.addEventListener("change", () => {
+      const row = box.closest(".field-label");
       const parsed = Number(input.value);
       if (input.value.trim() === "" || !Number.isFinite(parsed) || parsed < min || parsed > max) {
-        wrapper.classList.add("invalid");
+        row.classList.add("invalid");
         message.textContent = `${label} must be a number from ${min} to ${max}${unit ? ` ${unit}` : ""}. Not saved.`;
-        wrapper.append(message);
+        row.append(message);
         return;
       }
-      wrapper.classList.remove("invalid");
+      row.classList.remove("invalid");
       message.remove();
       onCommit(parsed);
     });
-    return wrapper;
+    return box;
+  }
+
+  function numberInput({ label, unit = "", value, min, max, step = 1, help, onCommit, disabled = false, placeholder }) {
+    return element("label", { class: "field-label", title: help }, propName(label, unit),
+      numberControl({ label, unit, value, min, max, step, disabled, placeholder, onCommit }), help ? helpTip(help) : null);
   }
 
   function fieldInput(step, key) {
     const info = state.config.fields[key];
     if (info.choices) {
-      return selectInput(info.label, String(step[key]), Object.entries(info.choices), info.help,
+      return choiceInput(info.label, String(step[key]), Object.entries(info.choices), info.help,
         (value) => edit(() => { step[key] = key === "direction" ? Number(value) : value; }));
     }
     return numberInput({ label: info.label, unit: info.unit, value: step[key], min: info.low, max: info.high, step: info.step,
@@ -877,14 +1215,29 @@
     const select = element("select", {}, ...choices.map(([key, text]) => element("option", { value: key, text })));
     select.value = value;
     select.addEventListener("change", () => onChange(select.value));
-    return element("label", { class: "field-label", title: help }, label, select, help ? helpTip(help) : null);
+    return element("label", { class: "field-label", title: help }, propName(label), select, help ? helpTip(help) : null);
+  }
+
+  const SEGMENT_MAX_CHARS = 12;
+  const choiceName = (text) => text.split(":")[0];
+
+  function choiceInput(label, value, choices, help, onChange) {
+    if (choices.length > 3 || choices.some(([, text]) => choiceName(text).length > SEGMENT_MAX_CHARS)) return selectInput(label, value, choices, help, onChange);
+    const chosen = choices.find(([key]) => key === value)[1];
+    const detail = chosen.slice(choiceName(chosen).length + 1).trim();
+    return element("div", { class: "field-label", title: help, role: "radiogroup", "aria-label": label }, propName(label),
+      element("span", { class: "segmented-input" }, ...choices.map(([key, text]) => element("button", {
+        type: "button", role: "radio", "aria-checked": String(key === value), title: text, onclick: () => { if (key !== value) onChange(key); },
+      }, choiceName(text)))),
+      detail ? element("span", { class: "choice-detail", text: detail }) : null,
+      help ? helpTip(help) : null);
   }
 
   function checkInput(label, checked, help, onChange) {
-    const input = element("input", { type: "checkbox" });
+    const input = element("input", { type: "checkbox", role: "switch" });
     input.checked = checked;
     input.addEventListener("change", () => onChange(input.checked));
-    return element("label", { class: "check", title: help }, input, element("span", {}, label, help ? helpTip(help) : null));
+    return element("label", { class: "check switch", title: help }, element("span", { class: "check-text" }, label, help ? helpTip(help) : null), input);
   }
 
   function chainReason(step, index) {
@@ -905,9 +1258,24 @@
 
   function autoNumber({ label, unit, value, automatic, min, max, step, help, autoLabel, onCommit }) {
     const isAuto = value === null || value === undefined;
-    const number = numberInput({ label, unit, value: isAuto ? Number(automatic.toFixed(1)) : value, min, max, step, help, disabled: isAuto, onCommit });
-    const toggle = checkInput(autoLabel, isAuto, null, (on) => onCommit(on ? null : round(automatic, step)));
-    return element("div", { class: "auto-row" }, number, toggle);
+    const toggle = element("input", { type: "checkbox" });
+    toggle.checked = isAuto;
+    toggle.addEventListener("change", () => onCommit(toggle.checked ? null : round(automatic, step)));
+    return element("div", { class: "field-label auto-row", title: help }, propName(label, unit),
+      element("span", { class: "prop-control" },
+        numberControl({ label, unit, value: isAuto ? Number(automatic.toFixed(1)) : value, min, max, step, disabled: isAuto, onCommit }),
+        element("label", { class: "check auto-toggle", title: isAuto ? `${autoLabel}. Untick to set your own value.` : `Back to ${autoLabel.toLowerCase()}` },
+          toggle, element("span", { text: autoLabel }))),
+      help ? helpTip(help) : null);
+  }
+
+  function descriptionBlock(text) {
+    const [first, ...rest] = text.split(/(?<=\.) /);
+    if (!rest.length) return element("p", { class: "description", text });
+    const box = element("details", { class: "description", open: state.descriptionOpen },
+      element("summary", {}, first, " ", element("span", { class: "more", text: "More" })), rest.join(" "));
+    box.addEventListener("toggle", () => { state.descriptionOpen = box.open; });
+    return box;
   }
 
   function renderPane() {
@@ -977,23 +1345,23 @@
     const info = stepInfo(step);
     const pane = $("pane-step");
     const children = [
-      element("div", { class: "pane-title" }, element("h2", { text: `Step ${index + 1} · ${info.label}` }), element("span", { class: "call", text: info.call })),
-      element("p", { class: "description", text: info.description }),
+      element("div", { class: "pane-title" }, element("h2", { text: `Step ${index + 1} · ${info.label}` }), element("code", { class: "call", text: info.call })),
+      descriptionBlock(info.description),
     ];
-    const note = element("input", { type: "text", maxlength: 80, value: step.note || "", placeholder: "e.g. grab the goal" });
+    const note = element("input", { type: "text", maxlength: 80, value: step.note || "", placeholder: "Optional, e.g. grab the goal" });
     note.addEventListener("change", () => edit(() => { step.note = note.value; }, { replan: false }));
     const noteHelp = "Shown in the step list and as a comment in the exported C++.";
-    children.push(element("label", { class: "field-label", title: noteHelp }, "Label (optional)", note, helpTip(noteHelp)));
+    children.push(element("div", { class: "form" }, element("label", { class: "field-label", title: noteHelp }, propName("Label"), note, helpTip(noteHelp))));
     const result = resultCard(index);
     if (result) children.push(result);
     if (step.type === "path") children.push(...pathPane(step, index));
     else {
       const fields = info.fields.map((key) => fieldInput(step, key));
-      children.push(element("div", { class: "form two" }, ...fields));
+      children.push(element("h3", { text: info.still ? "Settings" : "Motion" }), element("div", { class: "form" }, ...fields));
       const limits = "fixed_ms" in info || info.timed_by ? [] : [fieldInput(step, "timeout_ms")];
       if (!info.still && step.type !== "turn_to_point") limits.push(fieldInput(step, "volts"));
       if ("min_volts" in info.defaults) limits.push(minVoltsInput(step));
-      if (limits.length) children.push(element("h3", { text: "Limits" }), element("div", { class: "form two" }, ...limits));
+      if (limits.length) children.push(element("h3", { text: "Limits" }), element("div", { class: "form" }, ...limits));
       if (!info.still) {
         children.push(...actionsPane(step));
         children.push(element("h3", { text: "When it ends" }), chainInput(step, index));
@@ -1024,7 +1392,6 @@
     });
     out.push(list);
     out.push(element("h3", { text: "Whole path" }));
-    out.push(element("p", { class: "muted small", text: `Sections without their own limit use the default speed limit, ${defaults.speed_percent}% of top speed${top ? ` (${fmt(defaults.speed_percent / 100 * top)} in/s)` : ""}. Change it under Robot & settings.` }));
     const plan = planFor(index);
     const limits = state.config.limits;
     const allowanceMs = step.chain ? limits.chain_allowance_ms : limits.settle_allowance_ms;
@@ -1038,6 +1405,7 @@
       autoNumber({ label: "Time limit", unit: "ms", value: step.timeout_ms, automatic: automaticTimeout, min: 50, max: 60000, step: 100,
         help: timeoutHelp, autoLabel: "Automatic", onCommit: (value) => edit(() => { step.timeout_ms = value === null ? null : Math.round(value); }) }),
       fieldInput(step, "volts")));
+    out.push(element("p", { class: "muted small", text: `Sections without their own limit use the default speed limit, ${defaults.speed_percent}% of top speed${top ? ` (${fmt(defaults.speed_percent / 100 * top)} in/s)` : ""}. Change it under Robot & settings.` }));
     out.push(...actionsPane(step));
     out.push(element("h3", { text: "When it ends" }), chainInput(step, index));
     return out;
@@ -1047,26 +1415,161 @@
     if (state.project.field !== "override") return [];
     const rules = state.config.actions;
     const actions = step.actions ?? [];
-    const firstValue = { start: 0, distance: 12, time: 500, end: 0 };
-    const rows = actions.map((action, i) => {
-      const mechanism = rules.mechanisms[action.mechanism];
-      const what = selectInput("Move", action.mechanism, Object.entries(rules.mechanisms).map(([key, item]) => [key, item.label]), null,
-        (value) => edit(() => { action.mechanism = value; action.preset = Object.keys(rules.mechanisms[value].presets)[0]; }));
-      const preset = selectInput("To", action.preset, Object.entries(mechanism.presets), null, (value) => edit(() => { action.preset = value; }));
-      const when = selectInput("When", action.when, Object.entries(rules.times), null,
-        (value) => edit(() => { action.when = value; action.value = firstValue[value]; }));
-      const amount = action.when === "start" || action.when === "end" ? null : numberInput({
-        label: action.when === "distance" ? "Distance from the step start" : "Time", unit: rules.units[action.when], value: action.value, min: 0,
-        max: action.when === "distance" ? rules.max_distance_in : rules.max_time_ms, step: action.when === "distance" ? 1 : 50,
-        onCommit: (value) => edit(() => { action.value = action.when === "time" ? Math.round(value) : value; }) });
-      return element("div", { class: "section-box action-box", "data-action": i },
-        element("div", { class: "form two" }, what, preset, when, amount),
-        element("button", { class: "small danger", onclick: () => edit(() => { step.actions.splice(i, 1); }) }, "Remove"));
-    });
+    const spots = plannedActionSpots(state.selected);
     const add = element("button", { class: "small", id: "add-action", disabled: actions.length >= rules.max,
-      onclick: () => edit(() => { step.actions = [...(step.actions ?? []), { when: "start", value: 0, mechanism: "lift", preset: "over_alliance_goal" }]; }) },
-    "Add a mechanism action");
-    return [element("h3", { text: rules.label }), element("p", { class: "muted small", text: rules.help }), ...rows, add];
+      title: actions.length >= rules.max ? `A step holds up to ${rules.max} actions.` : "Add a lift or claw action to this step",
+      onclick: () => {
+        state.action = actions.length;
+        edit(() => { step.actions = [...actions, { when: "start", value: 0, mechanism: "lift", preset: "over_alliance_goal" }]; });
+      } }, "Add");
+    const head = element("div", { class: "section-head" }, element("h3", { text: rules.label }), add);
+    if (!actions.length) return [head, element("p", { class: "muted small", text: `${rules.help} Right-click the step's line on the field to add one at that spot.` })];
+    return [head, ...actions.map((action, i) => actionBox(step, action, i, spots.find((spot) => spot.action === i)))];
+  }
+
+  function actionBox(step, action, i, spot) {
+    const rules = state.config.actions;
+    const selected = i === state.action;
+    const note = actionNote(action, spot);
+    const head = element("div", { class: "action-head" },
+      element("button", { class: "action-summary", "aria-expanded": String(selected), title: selected ? "Close" : "Edit this action",
+        onclick: () => { state.action = selected ? null : i; renderStepPane(); drawField(); showAction(); } },
+      element("i", { class: "diamond" }),
+      element("span", { class: "action-name", text: actionLabel(action) }),
+      element("span", { class: `action-when${spot?.late ? " late" : ""}`, text: actionWhen(action), title: spot?.late ? note : null })),
+      element("button", { class: "icon-button remove", "aria-label": `Remove ${actionLabel(action)}`, title: "Remove",
+        onclick: () => {
+          state.action = state.action === i ? null : state.action > i ? state.action - 1 : state.action;
+          edit(() => { step.actions.splice(i, 1); });
+        } }, "×"));
+    if (!selected) return element("div", { class: "action-box", "data-action": i }, head);
+    const firstValue = { start: 0, distance: 12, time: 500, end: 0 };
+    const mechanism = rules.mechanisms[action.mechanism];
+    const amount = action.when === "start" || action.when === "end" ? null : numberInput({
+      label: action.when === "distance" ? "Distance" : "Time", unit: rules.units[action.when], value: action.value, min: 0,
+      max: action.when === "distance" ? rules.max_distance_in : rules.max_time_ms, step: action.when === "distance" ? 1 : 50,
+      help: action.when === "distance" ? "Straight-line distance from where the step started." : "Time since the step started.",
+      onCommit: (value) => edit(() => { action.value = action.when === "time" ? Math.round(value) : value; }) });
+    return element("div", { class: "action-box selected", "data-action": i }, head,
+      element("div", { class: "form" },
+        choiceInput("Move", action.mechanism, Object.entries(rules.mechanisms).map(([key, item]) => [key, item.label]), null,
+          (value) => edit(() => { action.mechanism = value; action.preset = Object.keys(rules.mechanisms[value].presets)[0]; })),
+        selectInput("To", action.preset, Object.entries(mechanism.presets), null, (value) => edit(() => { action.preset = value; })),
+        selectInput("When", action.when, Object.entries(rules.times), null, (value) => edit(() => { action.when = value; action.value = firstValue[value]; })),
+        amount),
+      note ? element("p", { class: `muted small${spot?.late ? " late-note" : ""}`, text: note }) : null);
+  }
+
+  function actionNote(action, spot) {
+    if (!spot) return "It shows on the field after a run.";
+    if (!spot.late) return null;
+    return action.when === "distance"
+      ? "The robot never gets this far from where the step starts, so it runs when the motion ends."
+      : "The planned path ends sooner, so it runs when the motion ends.";
+  }
+
+  function actionAt(route, on) {
+    if (route.length === 1) return { when: "start", value: 0 };
+    const rules = state.config.actions;
+    const reach = Math.hypot(on.x - route[0].x, on.y - route[0].y);
+    const lands = firstReach(route, Math.max(0, reach - 1e-6));
+    if (Number.isFinite(route[0].t) && Math.hypot(lands.x - on.x, lands.y - on.y) > 1) {
+      const seconds = planStateNearest(planFor(state.selected).states, on).state[1];
+      return { when: "time", value: Math.min(rules.max_time_ms, Math.round(seconds * 100) * 10) };
+    }
+    return { when: "distance", value: Math.min(rules.max_distance_in, round(reach, 0.5)) };
+  }
+
+  function openActionMenu(at, position) {
+    const step = selectedStep();
+    if (state.project.field !== "override" || stepInfo(step).still || (step.type === "path" && !step.points.length)) return false;
+    const route = stepRoute(step, state.selected, poses()[state.selected].start);
+    const on = nearestOnRoute(route, position);
+    const p = toScreen(on);
+    if (Math.hypot(p.x - at.x, p.y - at.y) > ACTION_MENU_REACH_PX) return false;
+    const action = actionAt(route, on);
+    const rules = state.config.actions;
+    const full = (step.actions ?? []).length >= rules.max;
+    const groups = Object.entries(rules.mechanisms).map(([mechanism, item]) => element("div", { class: "field-menu-group" },
+      element("div", { class: "field-menu-head", text: item.label }),
+      Object.entries(item.presets).map(([preset, text]) => element("button", {
+        role: "menuitem", disabled: full, title: text, onclick: () => addActionAt(action, mechanism, preset),
+      }, text.split(":")[0]))));
+    const menu = $("field-menu");
+    const title = element("div", { class: "field-menu-title", text: `Add to step ${state.selected + 1}, ${actionWhen(action)}` });
+    const note = full ? [element("div", { class: "field-menu-note", text: `A step holds up to ${rules.max} actions.` })] : [];
+    menu.replaceChildren(title, ...note, ...groups);
+    menu.hidden = false;
+    const wrap = $("field-wrap");
+    menu.style.left = `${Math.max(4, Math.min(at.x + 6, wrap.clientWidth - menu.offsetWidth - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(at.y + 6, wrap.clientHeight - menu.offsetHeight - 4))}px`;
+    menu.querySelector("button:not(:disabled)")?.focus();
+    return true;
+  }
+
+  function closeActionMenu() {
+    $("field-menu").hidden = true;
+  }
+
+  function addActionAt(action, mechanism, preset) {
+    const step = selectedStep();
+    closeActionMenu();
+    state.action = (step.actions ?? []).length;
+    edit(() => { step.actions = [...(step.actions ?? []), { ...action, mechanism, preset }]; });
+    notify(`Added to step ${state.selected + 1}: ${actionText(step.actions[state.action])}.`);
+    showAction();
+  }
+
+  function fieldTargets() {
+    const drawing = fieldDrawing();
+    if (state.project.field !== "override" || !drawing?.goals) return [];
+    const named = (name, kind) => `${name[0].toUpperCase()}${name.slice(1)} ${kind}`;
+    const targets = [
+      ...drawing.goals.map((goal) => ({ x: goal.center[0], y: goal.center[1], name: named(goal.name, "Goal") })),
+      ...(drawing.loaders ?? []).map((loader) => ({ x: loader.center[0], y: loader.center[1], name: named(loader.name, "Loader") })),
+    ];
+    const piles = new Map();
+    for (const piece of drawing.pieces ?? []) {
+      const [x, y] = piece.pose;
+      if (targets.some((target) => Math.hypot(target.x - x, target.y - y) < 1)) continue;
+      const key = `${x.toFixed(1)},${y.toFixed(1)}`;
+      if (!piles.has(key)) piles.set(key, { x, y, kinds: new Set() });
+      piles.get(key).kinds.add(piece.kind);
+    }
+    for (const pile of piles.values()) {
+      targets.push({ x: pile.x, y: pile.y, name: pile.kinds.size > 1 ? "Stack" : pile.kinds.has("cup") ? "Cup" : "Pin" });
+    }
+    return targets;
+  }
+
+  function targetNear(position) {
+    const at = toScreen(position);
+    let best = null, bestGap = AIM_REACH_PX;
+    for (const target of fieldTargets()) {
+      const p = toScreen(target);
+      const gap = Math.hypot(p.x - at.x, p.y - at.y);
+      if (gap <= bestGap) { best = target; bestGap = gap; }
+    }
+    return best;
+  }
+
+  function aimedOrSnapped(step, position, shift) {
+    const aimed = step.type === "turn_to_point" && !shift ? targetNear(position) : null;
+    return aimed ? { x: aimed.x, y: aimed.y } : snap(position, shift);
+  }
+
+  function openRunRoutine() {
+    const run = state.shown;
+    state.history.push(JSON.stringify(state.project));
+    state.history.length = Math.min(state.history.length, 300);
+    state.future = [];
+    state.project = clone(run.project);
+    state.point = null;
+    state.action = null;
+    keepSelectionValid();
+    changed();
+    checkEngine();
+    notify(`Opened the routine run ${run.number} used. Ctrl+Z goes back to yours.`, "ok");
   }
 
   function pointBody(step, i, layout, top) {
@@ -1091,10 +1594,10 @@
     const speed = section.speed_percent;
     const box = element("div", { class: `section-box${section.reverse ? " reverse" : ""}` },
       element("strong", { text: `Section ${i + 1}: from ${i === 0 ? "the start" : `point ${i}`} to point ${i + 1}` }),
-      autoNumber({ label: "Speed limit", unit: "% of top speed", value: speed, automatic: defaults.speed_percent, min: 5, max: 100, step: 1,
-        help: top ? `100% is ${fmt(top)} in/s on this robot.` : "Top speed is measured in the simulator.", autoLabel: "Default",
+      autoNumber({ label: "Speed limit", unit: "%", value: speed, automatic: defaults.speed_percent, min: 5, max: 100, step: 1,
+        help: `Percent of top speed.${top ? ` 100% is ${fmt(top)} in/s on this robot.` : " Top speed is measured in the simulator."}`, autoLabel: "Default",
         onCommit: (value) => edit(() => { section.speed_percent = value === null ? null : Math.round(value); }) }),
-      checkInput("Reverse: back up along this section", section.reverse, "The robot stops before a section that changes direction.",
+      checkInput("Back up along this section", section.reverse, "The robot stops before a section that changes direction.",
         (on) => edit(() => { section.reverse = on; })));
     body.append(box);
     body.append(element("div", { class: "row" },
@@ -1113,7 +1616,7 @@
     const project = state.project;
     const config = state.config;
     const robot = project.robot;
-    const groupForm = (group, schema) => element("div", { class: "form two" }, ...Object.entries(schema).map(([key, info]) =>
+    const groupForm = (group, schema) => element("div", { class: "form" }, ...Object.entries(schema).map(([key, info]) =>
       numberInput({ label: info.label, unit: info.unit, value: project[group][key], min: info.low ?? 0, max: info.high ?? 100, step: info.step ?? 0.01, help: info.help,
         onCommit: (value) => edit(() => { project[group][key] = key === "noise_seed" ? Math.round(value) : value; }) })));
     const robotChanged = () => { checkEngine(); };
@@ -1575,7 +2078,7 @@
     return runs.map(([first, last]) => (first === last ? `${first}` : last === first + 1 ? `${first}, ${last}` : `${first}–${last}`)).join(", ");
   }
 
-  function drawStepTags(ctx, all) {
+  function drawStepTags(ctx, all, placed) {
     const groups = [];
     state.project.steps.forEach((step, index) => {
       if (stepInfo(step).still || (step.type === "path" && !step.points.length)) return;
@@ -1584,7 +2087,6 @@
       if (group) group.numbers.push(index + 1);
       else groups.push({ at, point: all[index].end, numbers: [index + 1] });
     });
-    const placed = [];
     for (const group of groups) {
       const text = `${group.numbers.length > 1 ? "Steps" : "Step"} ${stepNumbers(group.numbers)}`;
       stepTag(ctx, group.point, text, group.numbers.includes(state.selected + 1), placed);
@@ -1601,12 +2103,108 @@
     placed.push({ x, y });
     ctx.fillStyle = selected ? "#2563eb" : "rgba(51,65,85,.88)";
     ctx.beginPath();
-    ctx.roundRect(x, y - 8, width, 16, 8);
+    ctx.rect(x, y - 8, width, 16);
     ctx.fill();
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#fff";
     ctx.fillText(text, x + 5, y + 0.5);
     ctx.restore();
+  }
+
+  function drawActionMark(ctx, point, { filled, color, size = ACTION_MARK_PX, alpha = 1 }) {
+    const p = toScreen(point);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - size);
+    ctx.lineTo(p.x + size, p.y);
+    ctx.lineTo(p.x, p.y + size);
+    ctx.lineTo(p.x - size, p.y);
+    ctx.closePath();
+    ctx.fillStyle = filled ? color : "#fff";
+    ctx.fill();
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function actionTag(ctx, point, text, color, placed) {
+    const p = toScreen(point);
+    ctx.save();
+    ctx.font = "11px system-ui, sans-serif";
+    const width = ctx.measureText(text).width + 10;
+    const x = p.x + 9;
+    let y = p.y - 12;
+    while (placed.some((other) => Math.abs(other.x - x) < Math.max(width, other.width ?? 0) && Math.abs(other.y - y) < 16)) y -= 17;
+    placed.push({ x, y, width });
+    ctx.fillStyle = "rgba(255,255,255,.94)";
+    ctx.fillRect(x, y - 8, width, 16);
+    ctx.strokeStyle = "#c9cdd2";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y - 7.5, width - 1, 15);
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = color;
+    ctx.fillText(text, x + 5, y + 0.5);
+    ctx.restore();
+  }
+
+  function drawActions(ctx, all, placed) {
+    if (state.layers.plan) {
+      state.project.steps.forEach((step, index) => {
+        const selected = index === state.selected;
+        for (const spot of plannedActionSpots(index, all)) {
+          const chosen = selected && spot.action === state.action;
+          const color = spot.late ? ACTION_LATE_COLOR : chosen ? "#2563eb" : selected ? ACTION_COLOR : "#6b7484";
+          drawActionMark(ctx, spot.at, { filled: false, color, size: chosen ? ACTION_MARK_PX + 1.5 : ACTION_MARK_PX, alpha: selected ? 1 : 0.8 });
+          if (selected) actionTag(ctx, spot.at, actionLabel(step.actions[spot.action]), spot.late ? ACTION_LATE_COLOR : ACTION_COLOR, placed);
+        }
+      });
+    }
+    if (state.layers.truth) {
+      for (const spot of firedActionSpots()) {
+        if (spot.t <= state.time + 1e-9) drawActionMark(ctx, spot.at, { filled: true, color: spot.late ? ACTION_LATE_COLOR : ACTION_COLOR, size: ACTION_MARK_PX - 1 });
+      }
+    }
+  }
+
+  function actionDraggable(spot) {
+    const action = state.project.steps[spot.step].actions[spot.action];
+    return action.when === "distance" || (action.when === "time" && Number.isFinite(spot.route[0].t));
+  }
+
+  function actionHit(sx, sy, all) {
+    const near = (point) => {
+      const p = toScreen(point);
+      return Math.hypot(p.x - sx, p.y - sy) <= ACTION_MARK_PX + 3;
+    };
+    if (state.layers.plan) {
+      for (const spot of plannedActionSpots(state.selected, all)) {
+        if (near(spot.at)) return { kind: "action", ...spot, draggable: actionDraggable(spot) };
+      }
+    }
+    if (state.layers.truth) {
+      for (const spot of firedActionSpots()) {
+        if (spot.t <= state.time + 1e-9 && near(spot.at)) return { kind: "fired-action", ...spot };
+      }
+    }
+    if (!state.layers.plan) return null;
+    for (let index = 0; index < state.project.steps.length; index++) {
+      if (index === state.selected) continue;
+      for (const spot of plannedActionSpots(index, all)) {
+        if (near(spot.at)) return { kind: "other-action", ...spot };
+      }
+    }
+    return null;
+  }
+
+  function clickOnly(hit) {
+    return ["other-anchor", "curve", "other-action", "fired-action"].includes(hit.kind) || (hit.kind === "action" && !hit.draggable);
+  }
+
+  function showAction() {
+    if (state.action === null) return;
+    document.querySelector(`#pane-step [data-action="${state.action}"]`)?.scrollIntoView({ block: "nearest" });
   }
 
   function draggableKnobsInHitOrder() {
@@ -1649,6 +2247,8 @@
       if (Math.hypot(p.x - sx, p.y - sy) <= reach) return knob;
     }
     const all = poses();
+    const action = actionHit(sx, sy, all);
+    if (action) return action;
     for (let s = 0; s < state.project.steps.length; s++) {
       const step = state.project.steps[s];
       if (s === state.selected || step.type !== "path") continue;
@@ -1809,7 +2409,8 @@
     const step = selectedStep();
     if (step.type === "path") drawPath(ctx, step, state.selected, all[state.selected].start, true);
     else drawOtherStep(ctx, step, state.selected, all[state.selected].start, all[state.selected].end, true);
-    if (state.project.steps.length > 1) drawStepTags(ctx, all);
+    const placed = [];
+    if (state.project.steps.length > 1) drawStepTags(ctx, all, placed);
     const start = state.project.start;
     drawRobot(ctx, start, { stroke: "#2563eb", dash: [5, 3], width: 1.6, fill: "rgba(37,99,235,.06)" });
     if (!state.shown && state.project.field === "override") {
@@ -1824,6 +2425,18 @@
       drawRobot(ctx, { x: at[3], y: at[4], heading: at[5] }, { fill: "rgba(255,255,255,.75)", stroke: "#2563eb", width: 2 });
     }
     drawRunOverlay(ctx);
+    drawActions(ctx, all, placed);
+    if (state.aim && selectedStep().type === "turn_to_point") {
+      const p = toScreen(state.aim);
+      ctx.save();
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, AIM_REACH_PX, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     if (state.hover?.kind === "curve") {
       drawKnob(ctx, state.hover.at, "#2563eb", false, 6);
       drawLabel(ctx, state.hover.at, "+", "#2563eb");
@@ -1840,7 +2453,7 @@
   }
 
   function graphSeries() {
-    const kind = $("graph-kind").value;
+    const kind = state.graphKind;
     const span = timeline();
     const series = [];
     const marks = [];
@@ -1879,6 +2492,15 @@
       series.push({ color: "#e07b00", dash: [5, 3], points: frames.map((f, i) => [f.t, odometry[i]]), label: "Odometry" });
       series.push({ color: "#2563eb", points: frames.map((f, i) => [f.t, target[i]]), label: "Target" });
       caption = "Heading in degrees. Black: simulated. Orange: odometry. Blue: the controller's target.";
+    } else if (kind === "mechanism") {
+      if (!frames.some((f) => Number.isFinite(f.lift_height_in))) {
+        return { series, marks, caption: "Only the Override robot has a lift and a claw.", end: span.end };
+      }
+      series.push({ color: "#2563eb", dash: [5, 3], points: liftTargets(frames), label: "Lift sent to" });
+      series.push({ color: "#18202c", points: frames.map((f) => [f.t, f.lift_height_in]), label: "Claw height" });
+      series.push({ color: "#e07b00", points: frames.map((f) => [f.t, f.claw_gap_in]), label: "Jaw gap" });
+      for (const spot of firedActionSpots()) marks.push({ t: spot.t, action: true });
+      caption = "Inches. Black: claw height. Dashed blue: the height the lift was sent to. Orange: gap between the jaws. Ticks along the top: actions running.";
     } else {
       series.push({ color: "#e07b00", points: frames.map((f) => [f.t, f.odometry_error_in]), label: "Odometry error" });
       caption = "Distance between odometry and the simulated robot, in inches.";
@@ -1886,10 +2508,42 @@
     return { series, marks, caption, end: span.end };
   }
 
+  function liftTargets(frames) {
+    const heights = state.config.actions.lift_heights_in;
+    const steps = state.shown.project.steps;
+    const changes = [
+      ...stepRows().filter((row) => row.type === "lift" && Number.isFinite(row.start_time_s))
+        .map((row) => ({ t: row.start_time_s, height: heights[steps[row.index].lift_preset] })),
+      ...firedActionSpots().filter((spot) => spot.mechanism === "lift").map((spot) => ({ t: spot.t, height: heights[spot.preset] })),
+    ].sort((a, b) => a.t - b.t);
+    let height = heights.down;
+    const points = [[0, height]];
+    for (const change of changes) {
+      points.push([change.t, height], [change.t, change.height]);
+      height = change.height;
+    }
+    points.push([frames.at(-1).t, height]);
+    return points;
+  }
+
+  function renderGraphTabs() {
+    for (const tab of document.querySelectorAll("#graph-kind [data-kind]")) tab.setAttribute("aria-selected", String(state.graphOpen && tab.dataset.kind === state.graphKind));
+    $("graph-body").hidden = !state.graphOpen;
+    $("graph-toggle").textContent = state.graphOpen ? "Hide" : "Show";
+    $("graph-toggle").setAttribute("aria-expanded", String(state.graphOpen));
+  }
+
+  function relayout() {
+    state.graphCache = null;
+    if (state.viewMovedByUser) drawField(); else fitView();
+    drawGraph();
+  }
+
   function drawGraph() {
+    if (!state.graphOpen) return;
     const canvas = $("graph");
     const { ctx, width, height } = resizeCanvas(canvas, 150);
-    const key = `${$("graph-kind").value}|${state.shown?.id}|${state.shown?.status}|${state.frames.length}|${state.compare?.id}|${state.planFor}|${state.selected}|${width}|${timeline().kind}`;
+    const key = `${state.graphKind}|${state.shown?.id}|${state.shown?.status}|${state.frames.length}|${state.compare?.id}|${state.planFor}|${state.selected}|${width}|${timeline().kind}`;
     if (!state.graphCache || state.graphCache.key !== key) state.graphCache = { key, ...graphSeries() };
     const { series, marks, caption, end } = state.graphCache;
     $("graph-caption").textContent = caption;
@@ -1897,12 +2551,7 @@
     const left = 38, right = 8, top = 10, bottom = 20;
     const plotW = width - left - right, plotH = height - top - bottom;
     const values = series.flatMap((s) => s.points.map((p) => p[1])).filter(Number.isFinite);
-    if (!end || !values.length) {
-      ctx.fillStyle = "#8a93a1";
-      ctx.font = "12px system-ui, sans-serif";
-      ctx.fillText("No data to show yet.", left, top + 20);
-      return;
-    }
+    if (!end || !values.length) return;
     let low = Math.min(0, ...values), high = Math.max(...values);
     if (high - low < 1e-6) high = low + 1;
     const pad = (high - low) * 0.08;
@@ -1923,9 +2572,18 @@
     ctx.textAlign = "center";
     const stepSeconds = end > 20 ? 5 : end > 8 ? 2 : end > 3 ? 1 : 0.5;
     for (let t = 0; t <= end + 1e-6; t += stepSeconds) ctx.fillText(`${trim(t)} s`, x(t), height - 5);
-    for (const mark of marks) {
+    let labelEnd = -Infinity;
+    for (const mark of marks.filter((item) => item.action)) {
+      ctx.strokeStyle = "#18202c";
+      ctx.beginPath(); ctx.moveTo(x(mark.t), top); ctx.lineTo(x(mark.t), top + 6); ctx.stroke();
+    }
+    for (const mark of marks.filter((item) => !item.action)) {
       ctx.strokeStyle = mark.failed ? "rgba(194,54,47,.55)" : "#d5d9e0";
       ctx.beginPath(); ctx.moveTo(x(mark.t), top); ctx.lineTo(x(mark.t), top + plotH); ctx.stroke();
+      const width = ctx.measureText(mark.label).width;
+      const left = x(mark.t) + 8 - width / 2;
+      if (left < labelEnd + 4) continue;
+      labelEnd = left + width;
       ctx.fillStyle = mark.failed ? "#c2362f" : "#8a93a1";
       ctx.fillText(mark.label, x(mark.t) + 8, top + 9);
     }
@@ -1998,7 +2656,7 @@
     status.hidden = !message;
     if (state.viewer.ready) {
       $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-frame", frame: state.shown ? frame : null,
-        pieces: override ? piecesNow() : undefined, playing: state.playing, live: !!state.activeRun }, location.origin);
+        pieces: override ? piecesNow() : undefined, playing: state.playing, live: shownIsRunning() }, location.origin);
     }
   }
 
@@ -2025,6 +2683,19 @@
 
   function hoverHint(hit) {
     if (!hit) return null;
+    if (hit.kind === "action" || hit.kind === "other-action") {
+      const action = state.project.steps[hit.step].actions[hit.action];
+      const late = !hit.late ? "" : action.when === "distance"
+        ? " The robot never gets that far from where the step starts, so it runs when the motion ends."
+        : " The planned path ends sooner, so it runs when the motion ends.";
+      const how = hit.kind === "other-action" ? " Click to select that step."
+        : hit.draggable ? ` Drag along the path to change the ${action.when}.` : "";
+      return `Step ${hit.step + 1}: ${actionText(action)}.${late}${how}`;
+    }
+    if (hit.kind === "fired-action") {
+      const when = hit.late ? `had not run when the motion ended, so it ran then, at ${fmt(hit.t, 2)} s` : `ran at ${fmt(hit.t, 2)} s`;
+      return `In this run, step ${hit.step + 1}: ${hit.text} ${when}. Click to jump there.`;
+    }
     const names = {
       anchor: `Point ${hit.point + 1}: drag to move, double-click for automatic heading, right-click to delete.`,
       "handle-in": `Curve handle of ${hit.point === -1 ? "the start" : `point ${hit.point + 1}`}: drag to set the heading there and how wide the curve is.`,
@@ -2106,7 +2777,7 @@
         break;
       }
       case "target":
-        Object.assign(step, snapped);
+        Object.assign(step, aimedOrSnapped(step, position, shift));
         break;
       case "target-heading":
         step.heading = snapAngle(bearing(step, position), shift);
@@ -2114,6 +2785,19 @@
       case "step-heading": {
         const pivot = step.type === "turn" ? poses()[state.selected].start : poses()[state.selected].end;
         step.heading = snapAngle(bearing(pivot, position), shift);
+        break;
+      }
+      case "action": {
+        const action = step.actions[drag.hit.action];
+        const route = drag.hit.route;
+        const rules = state.config.actions;
+        if (action.when === "distance") {
+          const on = nearestOnRoute(route, position);
+          action.value = Math.min(rules.max_distance_in, round(Math.hypot(on.x - route[0].x, on.y - route[0].y), shift ? 6 : 0.5));
+        } else {
+          const seconds = planStateNearest(planFor(state.selected).states, position).state[1];
+          action.value = Math.min(rules.max_time_ms, round(seconds * 1000, shift ? 100 : 10));
+        }
         break;
       }
       case "drive-end": {
@@ -2141,23 +2825,25 @@
       canvas.setPointerCapture(event.pointerId);
       const at = canvasPoint(event);
       const hit = event.button === 0 ? hitTest(at.x, at.y) : null;
-      const draggable = hit && !["other-anchor", "curve"].includes(hit.kind);
+      const draggable = hit && !clickOnly(hit);
       state.drag = {
         kind: draggable ? hit.kind : "pan", hit, point: hit?.point, start: at, moved: false,
         before: beginDrag(), view: { ...state.view },
       };
       if (hit?.kind === "anchor") { state.point = hit.point; renderPane(); }
+      if (hit?.kind === "action") { state.action = hit.action; renderPane(); showAction(); }
     });
     canvas.addEventListener("pointermove", (event) => {
       const at = canvasPoint(event);
       const field = toField(at.x, at.y);
-      $("cursor-readout").textContent = `x ${fmt(field.x)} in · y ${fmt(field.y)} in`;
+      state.aim = targetNear(field);
+      $("cursor-readout").textContent = `x ${fmt(field.x)} in · y ${fmt(field.y)} in${state.aim ? ` · ${state.aim.name}` : ""}`;
       const drag = state.drag;
       if (!drag) {
         const hit = hitTest(at.x, at.y);
         state.hover = hit ? { ...hit, hint: hoverHint(hit) } : null;
-        state.probe = pathProbeAt(field);
-        canvas.className = hit ? (hit.kind === "curve" || hit.kind === "other-anchor" ? "pointer" : "grab") : "";
+        state.probe = ["action", "other-action", "fired-action"].includes(hit?.kind) ? null : pathProbeAt(field);
+        canvas.className = hit ? (clickOnly(hit) ? "pointer" : "grab") : "";
         renderHint();
         renderPathProbe(at);
         drawField();
@@ -2198,6 +2884,7 @@
     canvas.addEventListener("pointerup", release);
     canvas.addEventListener("pointercancel", () => { state.drag = null; drawField(); });
     canvas.addEventListener("pointerleave", () => {
+      state.aim = null;
       $("cursor-readout").textContent = "";
       state.hover = null;
       state.probe = null;
@@ -2216,11 +2903,17 @@
       if (hit?.kind === "anchor") {
         event.preventDefault();
         deletePoint(hit.point);
-        log(`Deleted point ${hit.point + 1} of step ${state.selected + 1}.`);
+        notify(`Deleted point ${hit.point + 1} of step ${state.selected + 1}.`);
+        return;
       }
+      if (openActionMenu(at, toField(at.x, at.y))) event.preventDefault();
     });
+    document.addEventListener("pointerdown", (event) => {
+      if (!$("field-menu").hidden && !$("field-menu").contains(event.target)) closeActionMenu();
+    }, true);
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
+      closeActionMenu();
       const at = canvasPoint(event);
       const before = toField(at.x, at.y);
       state.view.scale = Math.max(0.8, Math.min(60, state.view.scale * Math.exp(-event.deltaY * 0.0015)));
@@ -2235,13 +2928,23 @@
   function clickField(hit, position, shift) {
     const step = selectedStep();
     if (hit?.kind === "other-anchor") return selectStep(hit.step, hit.point);
+    if (hit?.kind === "other-action") {
+      selectStep(hit.step, null, hit.action);
+      return showAction();
+    }
+    if (hit?.kind === "fired-action") {
+      const step = state.project.steps[hit.step];
+      if (step) selectStep(hit.step, null, hit.action < (step.actions?.length ?? 0) ? hit.action : null);
+      setTime(hit.t);
+      return showAction();
+    }
     if (hit?.kind === "curve") return insertPoint(hit.section, snap(hit.at, shift));
     if (hit?.kind === "anchor") return;
     if (hit) return;
     const snapped = snap(position, shift);
     if (step.type === "path") return addPoint(snapped);
     if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
-      edit(() => Object.assign(step, snapped));
+      edit(() => Object.assign(step, aimedOrSnapped(step, position, shift)));
       return;
     }
     if (state.point !== null) {
@@ -2271,6 +2974,11 @@
       if (mod && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redo() : undo(); return; }
       if (mod && event.key.toLowerCase() === "y") { event.preventDefault(); redo(); return; }
       if (mod) return;
+      if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        event.preventDefault();
+        moveStep(state.selected, state.selected + (event.key === "ArrowUp" ? -1 : 1));
+        return;
+      }
       const big = event.shiftKey ? 6 : 0.5;
       switch (event.key) {
         case " ":
@@ -2282,7 +2990,7 @@
           event.preventDefault();
           if (state.point !== null) deletePoint(state.point); else deleteStep(state.selected);
           break;
-        case "Escape": state.point = null; renderAll(); break;
+        case "Escape": closeActionMenu(); closePopover(); state.point = null; state.action = null; renderAll(); break;
         case "f": case "F": fitView(); break;
         case "?": $("help-dialog").showModal(); break;
         case "[": if (state.selected > 0) selectStep(state.selected - 1); break;
@@ -2336,7 +3044,7 @@
     try {
       raw = JSON.parse(text);
     } catch (error) {
-      return log(`${source} is not valid JSON: ${error.message}`, "error");
+      return notify(`${source} is not valid JSON: ${error.message}`, "error");
     }
     let note = "";
     if (raw && raw.start_pose && raw.preset && Array.isArray(raw.steps)) {
@@ -2344,7 +3052,7 @@
       note = " It came from the old motion builder: follow steps became paths, and their curves can differ slightly from the old splines.";
     }
     const answer = await api("/api/validate", { method: "POST", body: raw });
-    if (!answer.ok) return log(`Could not open ${source}: ${answer.data.error}`, "error");
+    if (!answer.ok) return notify(`Could not open ${source}: ${answer.data.error}`, "error");
     replaceProject(answer.data, `Opened ${source}.${note}`);
   }
 
@@ -2352,7 +3060,7 @@
     const answer = await api("/api/export", { method: "POST", body: clone(state.project) });
     if (!answer.ok) {
       if (Number.isInteger(answer.data.step)) selectStep(answer.data.step);
-      return log(`Could not export: ${answer.data.error}`, "error");
+      return notify(`Could not export: ${answer.data.error}`, "error");
     }
     $("cpp-code").value = answer.data.code;
     $("cpp-note").textContent = answer.data.measured
@@ -2382,23 +3090,20 @@
     });
     $("save-project").addEventListener("click", () => {
       download(fileName("json"), `${JSON.stringify(state.project, null, 2)}\n`, "application/json");
-      log(`Saved ${fileName("json")} to your downloads.`, "ok");
+      notify(`Saved ${fileName("json")} to your downloads.`, "ok");
     });
-    $("example-picker").addEventListener("change", async () => {
-      const id = $("example-picker").value;
-      $("example-picker").value = "";
-      if (!id) return;
-      const answer = await api(`/api/examples/${id}`);
-      if (!answer.ok) return log(answer.data.error, "error");
-      replaceProject(answer.data, `Opened the example "${answer.data.name}". Press Run simulation to try it.`);
-    });
-    $("mirror-picker").addEventListener("change", () => {
-      const axis = $("mirror-picker").value;
-      $("mirror-picker").value = "";
-      if (!axis) return;
-      edit((project) => Object.assign(project, mirrorProject(project, axis)));
-      log(axis === "x" ? "Mirrored the routine left ↔ right: x and headings flipped, arcs bend the other way." : "Mirrored the routine front ↔ back: y and headings flipped, arcs bend the other way.", "ok");
-    });
+    $("example-picker").addEventListener("click", openExamples);
+    $("mirror-picker").addEventListener("click", openMirror);
+    $("add-step").addEventListener("click", openAddStep);
+    $("help").addEventListener("click", () => $("help-dialog").showModal());
+    $("popover").addEventListener("keydown", popoverKeys);
+    document.addEventListener("pointerdown", (event) => {
+      if ($("popover").hidden || $("popover").contains(event.target) || popover.anchor?.contains(event.target)) return;
+      closePopover();
+    }, true);
+    document.addEventListener("scroll", (event) => {
+      if (!$("popover").hidden && !$("popover").contains(event.target) && anchorMoved()) closePopover();
+    }, true);
     $("undo").addEventListener("click", undo);
     $("redo").addEventListener("click", redo);
     $("export-cpp").addEventListener("click", exportCpp);
@@ -2409,6 +3114,20 @@
     $("view-top").addEventListener("click", () => setMode("top"));
     $("view-3d").addEventListener("click", () => setMode("3d"));
     $("play").addEventListener("click", () => play());
+    $("timeline").addEventListener("pointerdown", (event) => { state.scrubFrom = event.clientX; });
+    $("timeline").addEventListener("pointerup", (event) => {
+      const clicked = state.scrubFrom !== null && Math.abs(event.clientX - state.scrubFrom) < 4;
+      state.scrubFrom = null;
+      const block = clicked ? blockAt(state.time) : null;
+      if (block && block.index < state.project.steps.length && block.index !== state.selected) selectStep(block.index);
+    });
+    $("timeline").addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      play(false);
+      setTime(state.time + (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 1 : 0.1));
+    });
     $("timeline").addEventListener("input", () => {
       const chosen = Number($("timeline").value);
       play(false);
@@ -2416,8 +3135,22 @@
     });
     $("speed").addEventListener("change", () => { state.speed = Number($("speed").value); });
     $("run-picker").addEventListener("change", () => loadRun($("run-picker").value, "shown"));
+    $("open-run-routine").addEventListener("click", openRunRoutine);
     $("compare-picker").addEventListener("change", () => loadRun($("compare-picker").value, "compare"));
-    $("graph-kind").addEventListener("change", () => { state.graphCache = null; drawGraph(); });
+    for (const tab of document.querySelectorAll("#graph-kind [data-kind]")) {
+      tab.addEventListener("click", () => {
+        state.graphKind = tab.dataset.kind;
+        state.graphOpen = true;
+        state.graphCache = null;
+        renderGraphTabs();
+        drawGraph();
+      });
+    }
+    $("graph-toggle").addEventListener("click", () => {
+      state.graphOpen = !state.graphOpen;
+      renderGraphTabs();
+      drawGraph();
+    });
     $("graph").addEventListener("click", (event) => {
       const geometry = state.graphCache?.geometry;
       if (!geometry) return;
@@ -2435,18 +3168,15 @@
     $("cpp-copy").addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText($("cpp-code").value);
-        log("Copied the C++ to the clipboard.", "ok");
+        notify("Copied the C++ to the clipboard.", "ok");
       } catch {
         $("cpp-code").select();
-        log("The browser blocked the clipboard. The code is selected: press Ctrl+C.", "error");
+        notify("The browser blocked the clipboard. The code is selected: press Ctrl+C.", "error");
       }
     });
     $("cpp-download").addEventListener("click", () => download("autonomous.cpp", $("cpp-code").value, "text/x-c++src"));
-    window.addEventListener("resize", () => {
-      state.graphCache = null;
-      if (state.viewMovedByUser) drawField(); else fitView();
-      drawGraph();
-    });
+    window.addEventListener("resize", () => closePopover());
+    new ResizeObserver(() => relayout()).observe($("field-wrap"));
     window.addEventListener("message", (event) => {
       if (event.origin !== location.origin || event.source !== $("viewer3d").contentWindow) return;
       const type = event.data?.type;
@@ -2463,12 +3193,6 @@
         sync3d();
       }
     });
-    const menu = $("add-step-menu");
-    menu.replaceChildren(...Object.entries(state.config.step_types).map(([type, info]) =>
-      element("button", { onclick: () => addStep(type), "data-type": type }, `${info.label}`, element("span", { text: `${info.call} · ${info.description.split(". ")[0]}.` }))));
-    $("shortcut-strip").replaceChildren(
-      element("kbd", { text: "Click" }), " add point · ", element("kbd", { text: "Ctrl+Z" }), " undo · ",
-      element("kbd", { text: "?" }), " all shortcuts");
     $("shortcut-table").replaceChildren(...SHORTCUTS.map(([keys, action]) => element("tr", {}, element("td", {}, element("kbd", { text: keys })), element("td", { text: action }))));
   }
 
@@ -2494,8 +3218,8 @@
     const answer = await api("/api/config");
     state.config = answer.data;
     state.project = clone(state.config.default_project);
-    $("example-picker").append(...state.config.examples.map((item) => element("option", { value: item.id, text: item.name, title: item.description })));
     bindControls();
+    renderGraphTabs();
     bindField();
     bindKeys();
     if (!(await restoreDraft())) log("New routine. Click on the field to add points, then press Run simulation.");

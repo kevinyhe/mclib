@@ -11,32 +11,26 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19c4 0 5-14 9-14s5 14 9 14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="3" cy="19" r="2.2"/><circle cx="21" cy="19" r="2.2"/></svg>
-      <span>Path Planner</span>
-    </div>
+    <div class="brand">Path Planner</div>
     <label class="routine-name"><span class="sr-only">Routine name</span><input id="routine-name" maxlength="80" autocomplete="off" title="Name of this routine. It goes into saved files and the exported C++."></label>
     <nav class="toolbar" aria-label="Project">
       <button id="new-project" title="Start a new routine with one empty path (keeps the robot settings)">New</button>
       <button id="open-project" title="Open a routine saved as JSON">Open…</button>
       <button id="save-project" title="Download this routine as a JSON file">Save</button>
-      <select id="example-picker" title="Load an example routine"><option value="">Examples…</option></select>
+      <button id="example-picker" class="menu-button" aria-haspopup="menu" aria-expanded="false" title="Open an example routine">Examples</button>
       <span class="divider"></span>
       <button id="undo" title="Undo the last change (Ctrl+Z)">Undo</button>
       <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
       <span class="divider"></span>
-      <select id="mirror-picker" title="Flip the whole routine for the other side of the field">
-        <option value="">Mirror…</option>
-        <option value="x">Mirror left ↔ right (x → −x)</option>
-        <option value="y">Mirror front ↔ back (y → −y)</option>
-      </select>
+      <button id="mirror-picker" class="menu-button" aria-haspopup="menu" aria-expanded="false" title="Flip the whole routine for the other side of the field">Mirror</button>
       <button id="export-cpp" title="Show the routine as mclib C++ for autonomous()">Export C++</button>
       <input id="open-file" type="file" accept="application/json,.json" hidden>
     </nav>
     <div class="run-area">
       <div id="engine-pill" class="pill" role="status" title="Planning needs mclib compiled and the robot measured">Starting…</div>
       <button id="cancel-run" class="danger" hidden title="Stop the simulation that is running">Cancel</button>
-      <button id="run" class="primary" title="Simulate the whole routine in vexsim with mclib's C++ (Ctrl+Enter)">▶ Run simulation</button>
+      <button id="help" class="icon-button" aria-label="Keyboard and mouse help" title="Keyboard and mouse help (?)">?</button>
+      <button id="run" class="primary" title="Simulate the whole routine in vexsim with mclib's C++ (Ctrl+Enter)">Run simulation</button>
     </div>
   </header>
 
@@ -46,16 +40,13 @@
         <div class="panel-head"><h2 id="routine-title">Routine</h2><span id="step-count" class="muted small"></span></div>
         <button id="start-card" class="start-card" title="Where the robot starts. Drag the outlined robot on the field, or edit it in the Robot tab."></button>
         <ol id="step-list" class="step-list" aria-label="Steps, in the order they run"></ol>
-        <details id="add-step" class="add-step">
-          <summary title="Add a step after the selected one">+ Add a step</summary>
-          <div id="add-step-menu" class="add-step-menu"></div>
-        </details>
+        <button id="add-step" class="add-step" aria-haspopup="menu" aria-expanded="false">Add a step</button>
       </section>
       <section class="panel activity-panel" aria-labelledby="activity-title">
         <div class="panel-head"><h2 id="activity-title">Activity</h2><span id="activity-clock" class="muted small"></span></div>
         <div id="run-summary" class="run-summary" hidden></div>
         <details id="activity-details" class="activity-details">
-          <summary>Details: each stage and every message</summary>
+          <summary>Stages and messages</summary>
           <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
           <ol id="log" class="log" aria-label="Messages" aria-live="polite"></ol>
         </details>
@@ -84,35 +75,45 @@
         <div id="cursor-readout" class="cursor-readout mono"></div>
         <div id="path-probe" class="path-probe" role="status" hidden></div>
         <div id="speed-legend" class="speed-legend" hidden><span>0</span><i></i><span id="speed-legend-max"></span></div>
-        <div id="stale-badge" class="stale-badge" hidden>The routine changed after this run</div>
+        <div id="toast" class="toast" aria-hidden="true" hidden></div>
         <div id="score-panel" class="score-panel" hidden></div>
+        <div id="field-menu" class="menu field-menu" role="menu" hidden></div>
       </div>
       <div class="playback">
-        <button id="play" class="icon" title="Play or pause (Space)" aria-label="Play">▶</button>
-        <div class="scrub">
-          <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Playback time">
-          <div id="timeline-marks" class="timeline-marks"></div>
+        <div class="transport">
+          <button id="play" class="icon-button" title="Play or pause (Space)" aria-label="Play">▶</button>
+          <output id="clock" class="mono">0.00 / 0.00 s</output>
+          <select id="speed" title="Playback speed" aria-label="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+          <div class="run-pickers">
+            <label class="inline" title="Which run is shown on the field">Showing <select id="run-picker"><option value="">the plan (no run yet)</option></select></label>
+            <span id="stale-badge" class="stale-badge" hidden title="The routine changed after this run">Routine changed</span>
+            <button id="open-run-routine" class="small" hidden title="Put the routine this run used in the editor. Ctrl+Z goes back to yours.">Open its routine</button>
+            <label class="inline" title="Draw another run in purple to compare">Compare <select id="compare-picker"><option value="">nothing</option></select></label>
+          </div>
         </div>
-        <output id="clock" class="mono">0.00 / 0.00 s</output>
-        <select id="speed" title="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
-        <div class="run-pickers">
-          <label class="inline" title="Which run is shown on the field">Showing <select id="run-picker"><option value="">the plan (no run yet)</option></select></label>
-          <label class="inline" title="Draw another run in purple to compare">Compare with <select id="compare-picker"><option value="">nothing</option></select></label>
+        <div class="track" id="track">
+          <div id="timeline-ruler" class="ruler" aria-hidden="true"></div>
+          <div id="timeline-blocks" class="blocks" aria-hidden="true"></div>
+          <div id="playhead" class="playhead" aria-hidden="true"></div>
+          <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" aria-label="Playback time. Click a step's block to select that step.">
         </div>
       </div>
       <div class="graph-panel">
         <div class="graph-head">
-          <select id="graph-kind" title="What the graph shows">
-            <option value="speed">Speed: planned and simulated</option>
-            <option value="voltage">Motor voltage, left and right</option>
-            <option value="heading">Heading: simulated, odometry, target</option>
-            <option value="gap">Odometry error over time</option>
-          </select>
-          <span id="graph-caption" class="muted small"></span>
+          <div id="graph-kind" class="graph-tabs" role="tablist" aria-label="What the graph shows">
+            <button role="tab" data-kind="speed" aria-selected="false" title="Speed: planned and simulated">Speed</button>
+            <button role="tab" data-kind="voltage" aria-selected="false" title="Motor voltage, left and right">Voltage</button>
+            <button role="tab" data-kind="heading" aria-selected="false" title="Heading: simulated, odometry, target">Heading</button>
+            <button role="tab" data-kind="gap" aria-selected="false" title="Odometry error over time">Odometry error</button>
+            <button role="tab" data-kind="mechanism" aria-selected="false" title="Lift height and claw gap">Lift and claw</button>
+          </div>
+          <button id="graph-toggle" class="small quiet" aria-expanded="false" aria-controls="graph-body">Show</button>
         </div>
-        <canvas id="graph" aria-label="Graph over time. Click to jump playback there."></canvas>
+        <div id="graph-body" hidden>
+          <p id="graph-caption" class="muted small"></p>
+          <canvas id="graph" aria-label="Graph over time. Click to jump playback there."></canvas>
+        </div>
       </div>
-      <p class="shortcuts" id="shortcut-strip"></p>
     </section>
 
     <aside class="right">
@@ -126,6 +127,8 @@
       <div id="pane-telemetry" class="pane" hidden></div>
     </aside>
   </main>
+
+  <div id="popover" class="menu popover" hidden></div>
 
   <dialog id="cpp-dialog" class="dialog wide">
     <div class="dialog-head"><h2>Routine as C++</h2><button class="close" data-close aria-label="Close">×</button></div>

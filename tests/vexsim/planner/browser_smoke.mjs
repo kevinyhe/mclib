@@ -39,6 +39,12 @@ try {
   page.on("request", (request) => requests.push(request.url()));
   const shot = (name) => page.screenshot({ path: `${output}/${name}.png` });
   const draft = () => page.evaluate(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")));
+  const onScreen = (fieldPoints) => page.evaluate((points) => {
+    const view = JSON.parse(document.querySelector("#field").dataset.view);
+    const box = document.querySelector("#field").getBoundingClientRect();
+    return points.map((p) => ({ x: box.left + (p.x - view.x) * view.scale + box.width / 2, y: box.top + box.height / 2 - (p.y - view.y) * view.scale }));
+  }, fieldPoints);
+  const fieldHint = () => page.locator("#field-hint").innerText();
 
   async function fieldPoint(x, y) {
     const box = await page.locator("#field").boundingBox();
@@ -59,12 +65,16 @@ try {
     await page.mouse.up();
   }
   const near = (a, b, tolerance = 1) => Math.abs(a - b) <= tolerance;
+  const openExample = async (id) => {
+    await page.locator("#example-picker").click();
+    await page.locator(`#popover [data-example="${id}"]`).click();
+  };
+  const showGraph = (kind) => page.locator(`#graph-kind [data-kind="${kind}"]`).click();
 
   await page.goto(url.href);
   await page.waitForFunction(() => document.querySelector("#step-list li"));
   assert.match(await page.locator("#log").textContent(), /Click on the field/);
   assert.match(await page.locator("#field-hint").innerText(), /Click on the field to add points/);
-  assert.match(await page.locator("#shortcut-strip").innerText(), /Ctrl\+Z/);
   pass("A new routine opens with one empty path and tells the user to click the field");
 
   await page.waitForFunction(() => /Ready/.test(document.querySelector("#engine-pill").textContent), null, { timeout: 600000 });
@@ -95,7 +105,7 @@ try {
   assert.match(summary, /3 points · \d+\.\d+ s · top \d+\.\d in\/s/);
   assert.match(await page.locator("#pane-step").innerText(), /Plan from mclib[\s\S]*Planned time[\s\S]*Top speed/i);
   pass(`mclib planned the path: ${summary}`);
-  await page.locator("#graph-kind").selectOption("speed");
+  await showGraph("speed");
   assert.match(await page.locator("#graph-caption").innerText(), /Planned speed/);
   pass("The graph shows the planned speed before any run");
   await shot("02-planned");
@@ -150,7 +160,7 @@ try {
   await shot("03-speed-zone");
 
   await page.keyboard.press("Escape");
-  await page.locator("#add-step summary").click();
+  await page.locator("#add-step").click();
   await page.locator('#add-step-menu button[data-type="turn"]').click();
   assert.equal(await page.locator("#step-list li").count(), 2);
   assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Turn/);
@@ -209,7 +219,7 @@ try {
   assert.match(telemetry, /Position/i);
   assert.match(telemetry, /Motors and battery/i);
   pass(`Scrubbing to ${clock} shows telemetry at that time`);
-  await page.locator("#graph-kind").selectOption("voltage");
+  await showGraph("voltage");
   await shot("05-playback-telemetry");
 
   await page.locator("#play").click();
@@ -226,7 +236,7 @@ try {
   await page.waitForFunction((previous) => document.querySelector("#run-picker").value !== previous, firstRun);
   await page.waitForFunction(finished, null, { timeout: 300000 });
   const secondSummary = (await page.locator("#run-summary").innerText()).replace(/\n/g, " ");
-  await page.locator("#graph-kind").selectOption("speed");
+  await showGraph("speed");
   await page.locator("#compare-picker").selectOption(firstRun);
   await page.waitForFunction(() => /Purple: compared run/.test(document.querySelector("#graph-caption").textContent));
   pass(`A second run with an extra point (${secondSummary}) can be compared with the first`);
@@ -245,13 +255,15 @@ try {
   await page.locator("#cpp-dialog .dialog-foot button.primary").click();
 
   const unmirrored = await draft();
-  await page.locator("#mirror-picker").selectOption("x");
+  await page.locator("#mirror-picker").click();
+  await page.locator('#popover [data-axis="x"]').click();
+  assert.match(await page.locator("#toast").innerText(), /Mirrored the routine left ↔ right/);
   project = await draft();
   assert.equal(project.steps[0].points[0].x, -unmirrored.steps[0].points[0].x);
   assert.equal(project.steps[1].heading, -unmirrored.steps[1].heading);
   await page.keyboard.press("Control+z");
   assert.deepEqual(await draft(), unmirrored);
-  pass("Mirror left ↔ right negates x; Ctrl+Z puts it back");
+  pass("Mirror, Left ↔ right negates x and says so in a toast; Ctrl+Z puts it back");
 
   const builderFile = `${output}/old-builder-routine.json`;
   await writeFile(builderFile, JSON.stringify({
@@ -267,7 +279,7 @@ try {
   assert.deepEqual(project.steps[0].points.map((point) => [point.x, point.y]), [[12, 24], [0, 48]]);
   pass("Opening an old motion builder file turns its follow step into a path");
 
-  await page.locator("#example-picker").selectOption("mixed_steps");
+  await openExample("mixed_steps");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent));
   await page.locator("#run").click();
   await page.locator("#cancel-run").waitFor({ state: "visible" });
@@ -289,7 +301,10 @@ try {
   assert((await page.locator("#shortcut-table tr").count()) >= 12);
   await shot("08-help");
   await page.locator("#help-dialog .dialog-foot button.primary").click();
-  pass("? opens the help with the full shortcut list");
+  await page.locator("#help").click();
+  await page.locator("#help-dialog[open]").waitFor();
+  await page.locator("#help-dialog .dialog-foot button.primary").click();
+  pass("? and the ? button open the help with the full shortcut list");
 
   await page.locator("#run-picker").selectOption({ index: 1 });
   await page.locator("#view-3d").click();
@@ -304,7 +319,7 @@ try {
   await shot("09-3d");
 
   await page.locator("#view-top").click();
-  await page.locator("#example-picker").selectOption("override_autonomous");
+  await openExample("override_autonomous");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
     /the left Toggle and a stack/.test(document.querySelector("#routine-name").value));
   project = await draft();
@@ -312,21 +327,102 @@ try {
   assert.equal(project.preload, "none");
   assert.match(await page.locator("#step-list li").first().innerText(), /470° at 12 V, pressing back at 3 V/);
   assert.match(await page.locator("#step-list li").nth(6).innerText(),
-               /Lift to Over a stack on a Neutral Goal: claw 22\.66 in up after 3 in/);
+               /Lift: Over a stack on a Neutral Goal, after 3 in/);
   await page.locator("#tab-robot").click();
   const chosen = await page.locator("#pane-robot select").evaluateAll((selects) => selects.map((select) => select.selectedOptions[0]?.text));
   assert(chosen.includes("Override (2026-27)") && chosen.includes("No preload"), JSON.stringify(chosen));
   await page.locator("#tab-step").click();
   pass("The Override example opens on the Override field with no preload, a roller step and a lift action");
 
+  await page.locator("#step-list li").nth(6).click();
+  const liftAlongTheDrive = await page.evaluate(async () => {
+    const config = await (await fetch("/api/config")).json();
+    const project = JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1"));
+    const track = config.presets[project.robot.preset].track_width_in;
+    const route = stepPreview(project.steps[6], designedPoses(project, track)[6].start, track);
+    const start = route[0], end = route.at(-1);
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    return [firstReach(route, 3), { x: start.x + (end.x - start.x) * 13 / length, y: start.y + (end.y - start.y) * 13 / length }];
+  });
+  const [liftMark, liftFurther] = await onScreen(liftAlongTheDrive);
+  await page.mouse.move(liftMark.x, liftMark.y);
+  assert.match(await fieldHint(), /^Step 7: Lift to Over a stack on a Neutral Goal: claw 22\.66 in up after 3 in\. Drag along the path to change the distance\.$/);
+  await shot("09b-action-mark");
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(liftMark.x + (liftFurther.x - liftMark.x) * i / 10, liftMark.y + (liftFurther.y - liftMark.y) * i / 10);
+  await page.mouse.up();
+  assert.match(await page.locator("#step-list li").nth(6).innerText(), /Lift: Over a stack on a Neutral Goal, after 13 in/);
+  assert.equal(await page.locator('#pane-step .action-box.selected input[type="number"]').inputValue(), "13");
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(() => /after 3 in/.test(document.querySelectorAll("#step-list li")[6].textContent));
   await page.locator("#step-list li").first().click();
-  await page.locator("#add-step summary").click();
-  await page.locator('#add-step-menu button[data-type="claw"]').click();
+  pass("Step 7's lift action is marked on its drive 3 in from the start; dragging the mark 10 in along the drive makes it after 13 in");
+
+  const stepItem = (n) => page.locator("#step-list li").nth(n - 1);
+  const undoOnField = async () => { await page.locator("#field").focus(); await page.keyboard.press("Control+z"); };
+  const typesNow = async () => (await draft()).steps.map((s) => s.type);
+  const typesBefore = await typesNow();
+  assert.equal(await stepItem(7).locator(".step-title").innerText(), (await draft()).steps[6].note);
+  assert.match(await stepItem(7).locator(".step-sub").innerText(), /^Drive straight · 43\.53 in forward$/);
+  const thirdBox = await stepItem(3).boundingBox();
+  await stepItem(2).dragTo(stepItem(3), { targetPosition: { x: 40, y: thirdBox.height - 4 } });
+  assert.deepEqual((await typesNow()).slice(0, 3), [typesBefore[0], typesBefore[2], typesBefore[1]]);
+  await undoOnField();
+  await stepItem(2).click();
+  await page.keyboard.press("Alt+ArrowDown");
+  assert.deepEqual((await typesNow()).slice(0, 3), [typesBefore[0], typesBefore[2], typesBefore[1]]);
+  await undoOnField();
+  assert.deepEqual(await typesNow(), typesBefore);
+  await stepItem(2).hover();
+  await stepItem(2).locator(".row-menu").click();
+  await page.locator("#popover [role=menuitem]", { hasText: "Move down" }).click();
+  assert.deepEqual((await typesNow()).slice(0, 3), [typesBefore[0], typesBefore[2], typesBefore[1]]);
+  await undoOnField();
+  assert.deepEqual(await typesNow(), typesBefore);
+  pass("Step labels show in full; dragging step 2 below step 3 moves it, and so do Alt+↓ and the step's ⋯ menu");
+
+  await stepItem(4).click();
+  const twentyIn = await page.evaluate(async () => {
+    const config = await (await fetch("/api/config")).json();
+    const project = JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1"));
+    const track = config.presets[project.robot.preset].track_width_in;
+    return firstReach(stepPreview(project.steps[3], designedPoses(project, track)[3].start, track), 20);
+  });
+  const [onStepFour] = await onScreen([twentyIn]);
+  await page.mouse.click(onStepFour.x, onStepFour.y, { button: "right" });
+  await page.locator("#field-menu").waitFor();
+  assert.equal(await page.locator(".field-menu-title").innerText(), "Add to step 4, after 20 in");
+  await shot("09c-action-menu");
+  await page.locator("#field-menu button", { hasText: /^Open$/ }).click();
+  assert.match(await stepItem(4).innerText(), /Claw: Open, after 20 in/);
+  await undoOnField();
+  await page.waitForFunction(() => !JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[3].actions.length);
+  pass("Right-clicking step 4's drive 20 in from its start offers the lift and claw presets; Open adds Claw: Open, after 20 in");
+
+  await stepItem(3).click();
+  const redLeft = (await page.evaluate(async () => (await (await fetch("/api/config")).json()).field_drawings.override.goals))
+    .find((goal) => goal.name === "red left");
+  const [nearRedLeft] = await onScreen([{ x: redLeft.center[0] + 1, y: redLeft.center[1] - 1 }]);
+  await page.mouse.move(nearRedLeft.x, nearRedLeft.y);
+  assert.match(await page.locator("#cursor-readout").innerText(), /· Red left Goal$/);
+  await page.mouse.click(nearRedLeft.x, nearRedLeft.y);
+  const aimedStep = (await draft()).steps[2];
+  assert.deepEqual([aimedStep.x, aimedStep.y], redLeft.center);
+  await undoOnField();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[2].x === 24);
+  await stepItem(1).click();
+  pass(`Clicking 1.4 in from the red left Goal aims the turn at its centre, (${redLeft.center.join(", ")})`);
+
+  await page.locator("#step-list li").first().click();
+  await page.locator("#add-step").click();
+  await page.locator("#add-step-search").fill("claw");
+  assert.deepEqual(await page.locator("#add-step-menu [role=menuitem]:visible").evaluateAll((items) => items.map((item) => item.dataset.type)), ["claw"]);
+  await page.locator("#add-step-search").press("Enter");
   assert.match(await page.locator("#pane-step").innerText(), /Step 2 · Open or close the claw/);
   assert.match(await page.locator("#step-list li").nth(1).innerText(), /Closed/);
   await page.keyboard.press("Control+z");
   await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.length === 10);
-  pass("A claw step can be added after the first step; Ctrl+Z removes it");
+  pass("Typing claw in Add a step leaves only the claw step; Enter adds it after the first step; Ctrl+Z removes it");
 
   await page.locator("#run").click();
   await page.waitForFunction(() => /Run \d+ is/.test(document.querySelector("#run-summary").textContent));
@@ -339,7 +435,47 @@ try {
   assert.match(score, /Autonomous Bonus: red 12/);
   assert.match(score, /Win Point: red owns 2 of 6 Pin halves needed[\s\S]*Not earned/);
   pass(`The Override autonomous scores: ${score.split("\n").find((line) => line.startsWith("Autonomous ended"))}`);
+  const blocks = await page.locator("#timeline-blocks .block").evaluateAll((items) => items.map((item) => Number(item.dataset.step)));
+  assert.deepEqual(blocks, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const fifth = await page.locator('#timeline-blocks .block[data-step="4"]').boundingBox();
+  await page.mouse.click(fifth.x + fifth.width / 2, fifth.y + fifth.height / 2);
+  assert.match(await page.locator("#pane-step").innerText(), /^Step 5 · Open or close the claw/);
+  assert(await page.locator('#timeline-blocks .block[data-step="4"]').evaluate((block) => block.classList.contains("selected")));
+  await page.locator("#timeline").evaluate((input) => { input.value = input.max; input.dispatchEvent(new Event("input")); });
+  await page.locator("#step-list li").first().click();
+  pass("The timeline shows a block for each of the 10 steps; clicking step 5's block selects step 5");
   await shot("10-override-score");
+
+  const liftRan = await page.evaluate(async (id) => {
+    const job = await (await fetch(`/api/runs/${id}`)).json();
+    const frames = job.result.trace.filter((f) => f.step === 6 && f.phase === "motion");
+    const first = frames[0];
+    const frame = frames.find((f) => Math.hypot(f.estimated_x - first.estimated_x, f.estimated_y - first.estimated_y) >= 3);
+    return { t: frame.t, at: { x: frame.true_x, y: frame.true_y } };
+  }, await page.locator("#run-picker").inputValue());
+  const [liftRanMark] = await onScreen([liftRan.at]);
+  await page.mouse.move(liftRanMark.x, liftRanMark.y);
+  assert.match(await fieldHint(), new RegExp(`^In this run, step 7: Lift to Over a stack on a Neutral Goal: claw 22\\.66 in up after 3 in ran at ${liftRan.t.toFixed(2)} s\\.`));
+  await page.mouse.click(liftRanMark.x, liftRanMark.y);
+  assert.match(await page.locator("#clock").innerText(), new RegExp(`^${liftRan.t.toFixed(2)} /`));
+  assert.match(await page.locator("#pane-step").innerText(), /Step 7 · Drive straight/);
+  pass(`The run marks where step 7's lift action ran, at ${liftRan.t.toFixed(2)} s; clicking the mark selects step 7 and jumps there`);
+
+  await showGraph("mechanism");
+  assert.match(await page.locator("#graph-caption").innerText(), /Black: claw height\. Dashed blue: the height the lift was sent to/);
+  await shot("10b-lift-and-claw-graph");
+  await showGraph("speed");
+  assert(await page.locator("#open-run-routine").isHidden());
+  await page.locator("#step-list li").nth(1).click();
+  const driveDistance = page.locator('#pane-step label:has-text("Distance") input');
+  await driveDistance.fill("5");
+  await driveDistance.press("Enter");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps[1].distance === 5);
+  assert(await page.locator("#open-run-routine").isVisible());
+  await page.locator("#open-run-routine").click();
+  assert.equal((await draft()).steps[1].distance, 4);
+  assert(await page.locator("#open-run-routine").isHidden());
+  pass("The lift and claw graph draws; after a change, Open its routine puts back the routine the run used");
 
   const turnedIn = async (index, pattern) => {
     await page.locator("#step-list li").nth(index).click();
@@ -483,7 +619,7 @@ try {
   await page.locator("#cpp-dialog .dialog-foot button.primary").click();
   pass("Export C++ writes the lift, claw, roller and actions with the same helpers the simulator ran");
 
-  await page.locator("#example-picker").selectOption("override_match_load");
+  await openExample("override_match_load");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
     /take a Match Load/.test(document.querySelector("#routine-name").value));
   await page.locator("#step-list li").first().click();

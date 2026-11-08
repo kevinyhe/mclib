@@ -5,7 +5,7 @@ import json
 import math
 
 from fields import GAME_FIELDS, NEW_ROUTINE_FIELD, OLD_FILE_FIELD
-from mechanisms import (ACTION_TIMES, ACTION_UNITS, CLAW_PRESETS, LIFT_PRESETS, LOADERS,
+from mechanisms import (ACTION_TIMES, ACTION_UNITS, CLAW_PRESETS, LIFT_HEIGHTS_IN, LIFT_PRESETS, LOADERS,
                         MATCH_LOAD_PINS, MECHANISMS, PRELOADS, RETIRED_LIFT_PRESETS, RETIRED_MECHANISMS,
                         RETIRED_PRELOADS)
 
@@ -196,7 +196,7 @@ ACTIONS = dict(
     help="Moves the lift or the claw while the robot drives. Anything not run by the end of the motion runs then.",
     times=ACTION_TIMES, units=ACTION_UNITS,
     mechanisms={key: dict(label=item["label"], presets=item["presets"]) for key, item in MECHANISMS.items()},
-    max=6, max_distance_in=500, max_time_ms=20000,
+    max=6, max_distance_in=500, max_time_ms=20000, lift_heights_in=LIFT_HEIGHTS_IN,
 )
 PRELOAD = dict(label="Preload", choices=PRELOADS,
                help="The red/yellow Pin each robot must touch at the start (SG5). It hangs in the closed claw "

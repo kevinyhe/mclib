@@ -45,13 +45,13 @@ stops the run on screen.
 
 | Part | What it does |
 | --- | --- |
-| Top bar | name, New, Open, Save, Examples, Undo, Redo, Mirror, Export C++, status, Run |
-| Routine (left) | the start pose and the steps in order, with each step's plan or result. **+ Add a step** adds one after the selected step. |
+| Top bar | name, New, Open, Save, Examples (a menu with each example's description), Undo, Redo, Mirror (left ↔ right or front ↔ back), Export C++, status, ? for help, Run. Short messages such as "Saved" or "Mirrored" show at the bottom of the field for a few seconds. |
+| Routine (left) | the start pose and the steps in order, with each step's label in full, its plan or result, and its lift and claw actions. **Add a step** opens a list of step types with a search box: type part of a name, then Enter adds the first match after the selected step. Drag a step to move it. Its ⋯ button duplicates, moves or deletes it. |
 | Activity (left) | each stage of the current job with its time, then a log of what happened |
 | Field (centre) | the routine on a 144 in field. Drag to edit. Top view or vexsim's 3D view. |
-| Playback | play, scrub, playback speed, which run to show, which run to compare with |
-| Graph | planned and simulated speed, motor voltage, heading, or odometry error over time. Click it to jump there. |
-| Step tab (right) | the selected step's settings, its plan, and what it did in the last run |
+| Playback | play, playback speed, which run to show, which run to compare with. Under them, a timeline with one block per step, from when the step started to when it ended (red underline: it broke a rule), diamonds where lift and claw actions ran, and a dashed red line at 15 s, when autonomous ends. Click or drag on it to move playback; clicking a block also selects that step. Before a run it shows the selected path's plan. When the routine has changed since the run shown, **Open its routine** puts the routine that run used back in the editor; Ctrl+Z goes back to yours. |
+| Graph | hidden until you pick a tab: Speed (planned and simulated), Voltage, Heading, Odometry error, or Lift and claw (claw height, the height the lift was sent to and the jaw gap, on the Override robot). Its time axis lines up with the timeline above it. Click it to jump there. Hide closes it again. |
+| Step tab (right) | the selected step's settings, its plan, and what it did in the last run. Each setting has its name on the left and its value on the right, with the unit inside the box. **Automatic** (or **Default**) next to a value means the planner works it out; click it to set your own. Lift and claw actions show one line each; click one to edit it. |
 | Robot & settings tab | drivetrain, odometry sensors, start pose, path defaults, simulated battery and grip, PID gains |
 | Telemetry tab | every recorded value at the playback time: position, speeds, controller, motors, sensors |
 
@@ -265,7 +265,18 @@ Four ways to use them:
   claw when the step starts, after the robot has gone some inches, some
   milliseconds after the step started, or when the motion ends. The step
   does not wait for it. An action that has not run when the motion ends
-  runs then, and the step says so.
+  runs then, and the step says so. "Some inches" is the straight-line
+  distance from where the step started, not the distance along the path.
+  Each action is a diamond on the field, where the plan says it will run;
+  the selected step's diamonds are labelled. Drag a distance action's
+  diamond along the path to change the distance, or, on a path step, a
+  time action's to change the time. After a run, a filled diamond on the
+  simulated path marks where each action ran; click one to jump playback
+  there. A time action on a step that is not a path has no plan to place
+  it by, so only its filled diamond shows, after a run. Right-click a
+  step's line to add an action at that spot: a distance action, or, on a
+  path that comes back towards its start, a time action, so it runs where
+  you clicked.
 - **Preload**: a red/yellow Pin hanging in the closed claw by its flange,
   as <SG5> asks, with its yellow half up (the default) or its red half up,
   or none. The claw holds it until a step opens the claw.
@@ -481,6 +492,9 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | Click the selected path's line | insert a point |
 | Hover over a planned path | show the distance and time from the path's start to that point, out of the path's total, and the planned speed there |
 | Drag a point, handle or target | move it (Shift: 6 in grid and 15° headings) |
+| Click near a Goal, Loader or stack, on a Turn to face a point step | aim at its centre (Shift: the 6 in grid instead) |
+| Right-click a step's line (Override) | add a lift or claw action there |
+| Drag an action's diamond | change where it runs |
 | Drag empty space, scroll | pan, zoom |
 | Double-click a point | heading and handles back to automatic |
 | Right-click a point | delete it |
@@ -489,8 +503,9 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 | Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y | undo, redo |
 | Ctrl+Enter | run the simulation |
 | Space | play or pause |
-| `,` and `.` | step playback 0.1 s back or forward |
+| `,` and `.`, or ← and → on the timeline | step playback 0.1 s back or forward (on the timeline, Shift: 1 s) |
 | `[` and `]` | select the previous or next step |
+| Drag a step in the list, Alt+↑ and Alt+↓ | move the step earlier or later |
 | F | fit the routine in view |
 | Esc | deselect the point |
 | ? | help and this list |

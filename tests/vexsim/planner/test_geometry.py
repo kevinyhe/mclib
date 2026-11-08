@@ -161,5 +161,39 @@ class PathProbeTests(unittest.TestCase):
         self.assertAlmostEqual(after["gap_in"], 6.0)
 
 
+FIRST_REACH_SCRIPT = """
+const geometry = require(process.argv[1]);
+const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
+process.stdout.write(JSON.stringify(input.reaches.map((reach) => geometry.firstReach(input.route, reach))))
+"""
+
+
+def first_reaches(route, reaches):
+    done = subprocess.run(["node", "-e", FIRST_REACH_SCRIPT, str(GEOMETRY_JS)],
+                          input=json.dumps(dict(route=route, reaches=reaches)), capture_output=True, text=True,
+                          check=True)
+    return json.loads(done.stdout)
+
+
+class ActionPlaceTests(unittest.TestCase):
+    """A distance action runs once the robot is that far, in a straight line,
+    from where its step started (cascade::Rig::tick), not that far along the path."""
+    RIGHT_THEN_UP = [dict(x=0, y=0), dict(x=10, y=0), dict(x=10, y=10)]
+
+    def test_a_reach_past_the_first_corner_lands_where_the_straight_line_distance_first_gets_there(self):
+        at = first_reaches(self.RIGHT_THEN_UP, [12])[0]
+        self.assertAlmostEqual(at["x"], 10.0)
+        self.assertAlmostEqual(at["y"], math.sqrt(12 ** 2 - 10 ** 2))
+
+    def test_no_reach_lands_at_the_start_and_one_the_route_never_gets_is_none(self):
+        start, beyond = first_reaches(self.RIGHT_THEN_UP, [0, 15])
+        self.assertEqual(start, dict(x=0, y=0))
+        self.assertIsNone(beyond)
+
+    def test_a_route_that_comes_back_counts_its_first_reach(self):
+        out_and_back = [dict(x=0, y=0), dict(x=20, y=0), dict(x=0, y=0)]
+        self.assertEqual(first_reaches(out_and_back, [5])[0], dict(x=5, y=0))
+
+
 if __name__ == "__main__":
     unittest.main()
