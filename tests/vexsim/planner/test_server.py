@@ -210,9 +210,9 @@ class QueueTests(unittest.TestCase):
                 self.wait_for(planner, job["id"], {"running"})
                 started = time.monotonic()
                 planner.cancel(job["id"])
-                while planner.process is not None and time.monotonic() - started < 5:
+                while planner.processes and time.monotonic() - started < 5:
                     time.sleep(.05)
-                self.assertIsNone(planner.process)
+                self.assertEqual(planner.processes, {})
                 self.assertLess(time.monotonic() - started, 3)
                 self.assertEqual(planner.get(job["id"])["status"], "cancelled")
             finally:
@@ -220,11 +220,25 @@ class QueueTests(unittest.TestCase):
 
     def test_queue_is_bounded(self):
         with mock.patch.object(server, "engine_command", sleeping_engine):
-            planner = server.Planner(self.output, self.output)
+            planner = server.Planner(self.output, self.output, parallel_runs=2)
             try:
                 with self.assertRaises(server.BusyError):
-                    for _ in range(LIMITS["queue_size"] + 2):
+                    for _ in range(2 + LIMITS["queue_size"] + 1):
                         planner.submit(ONE_POINT)
+            finally:
+                planner.close()
+
+    def test_up_to_parallel_runs_go_at_once_and_the_rest_wait(self):
+        with mock.patch.object(server, "engine_command", sleeping_engine):
+            planner = server.Planner(self.output, self.output, parallel_runs=2)
+            try:
+                jobs = [planner.submit(ONE_POINT) for _ in range(3)]
+                self.wait_for(planner, jobs[0]["id"], {"running"})
+                self.wait_for(planner, jobs[1]["id"], {"running"})
+                time.sleep(.5)
+                self.assertEqual(planner.get(jobs[2]["id"])["status"], "queued")
+                planner.cancel(jobs[0]["id"])
+                self.wait_for(planner, jobs[2]["id"], {"running"})
             finally:
                 planner.close()
 

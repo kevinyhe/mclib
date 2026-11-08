@@ -22,6 +22,7 @@ its time. Later launches reuse the build until the C++ or vexsim changes.
 | `--port NUMBER` | port on 127.0.0.1 (default 8765) |
 | `--output DIR` | where runs and the compiled library are kept (default `bin/path-planner`) |
 | `--no-prepare` | do not compile and measure at launch; the first plan or run does it |
+| `--parallel-runs N` | runs simulated at once (default: a third of the CPU's threads, 8 on 24). Each run holds about 400 MB. |
 
 ## First run
 
@@ -34,6 +35,11 @@ its time. Later launches reuse the build until the C++ or vexsim changes.
 4. Press play, or drag the time bar, to watch the simulated robot.
 
 No setting has to change before the first run.
+
+You can press **Run simulation** again while runs are going. Each run is its
+own process, and up to `--parallel-runs` of them go at once, with 4 more
+waiting. The page shows the newest one; pick another under Playback. Cancel
+stops the run on screen.
 
 ## The page
 

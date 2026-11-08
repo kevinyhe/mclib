@@ -34,6 +34,9 @@ from native_viewer import NativeViewerError, asset as native_asset  # noqa: E402
 from project import LIMITS, PRESETS, TRACKING, ProjectError, config, step_name, strict_json, validate_project  # noqa: E402
 
 FINISHED = {"finished", "broke_rule", "cancelled", "error"}
+#: A run keeps about 1.5 cores busy and holds about 400 MB.  On 24 threads, 8 at once finish one every
+#: 13.6 s, against one every 61.5 s one at a time, though each takes 108 s instead of 61.5 s.
+PARALLEL_RUNS = max(1, os.cpu_count() // 3)
 STATIC = HERE / "static"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                  ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
@@ -66,9 +69,10 @@ def check_runnable(project):
 
 
 class Planner:
-    """Starts every job in its own process; this server never loads C++."""
+    """Starts every job in its own process, up to `parallel_runs` runs at
+    once; this server never loads C++."""
 
-    def __init__(self, output, vexsim, wall_timeout=900):
+    def __init__(self, output, vexsim, wall_timeout=900, parallel_runs=PARALLEL_RUNS):
         self.output, self.vexsim = Path(output).resolve(), Path(vexsim).resolve()
         self.cache = self.output / "cache"
         self._field_drawings = None
@@ -79,12 +83,13 @@ class Planner:
         self.pending = queue.Queue(maxsize=LIMITS["queue_size"])
         self.preparing = {}
         self.shutdown_event = threading.Event()
-        self.process = None
-        self.active_id = None
+        self.processes = {}
         self.next_number = 1
         self._restore()
-        self.worker = threading.Thread(target=self._worker, name="run-worker", daemon=True)
-        self.worker.start()
+        self.workers = [threading.Thread(target=self._worker, name=f"run-worker-{n}", daemon=True)
+                        for n in range(parallel_runs)]
+        for worker in self.workers:
+            worker.start()
 
     @property
     def field_drawings(self):
@@ -236,10 +241,11 @@ class Planner:
             return [{key: value for key, value in job.items() if key != "artifact_dir"}
                     for job in reversed(self.jobs.values())]
 
-    def _stop_process(self):
-        if self.process is not None and self.process.poll() is None:
+    def _stop_process(self, identity):
+        process = self.processes.get(identity)
+        if process is not None and process.poll() is None:
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
 
@@ -251,8 +257,7 @@ class Planner:
             if job["status"] not in FINISHED:
                 job.update(status="cancelled", finished_at=time.time())
                 write_json(Path(job["artifact_dir"]) / "job.json", job)
-                if self.active_id == identity:
-                    self._stop_process()
+                self._stop_process(identity)
         return self.get(identity)
 
     def _worker(self):
@@ -274,7 +279,6 @@ class Planner:
             destination = Path(job["artifact_dir"])
             job.update(status="running", started_at=time.time())
             write_json(destination / "job.json", job)
-            self.active_id = identity
         command = engine_command("run", "--project", destination / "project.json", "--output", destination,
                                  vexsim=self.vexsim, cache=self.cache)
         try:
@@ -282,32 +286,32 @@ class Planner:
                 with self.lock:
                     if job["status"] == "cancelled" or self.shutdown_event.is_set():
                         return
-                    self.process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                                                    start_new_session=True,
-                                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
-                    process = self.process
+                    process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                               start_new_session=True,
+                                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                    self.processes[identity] = process
                 self._wait(job, process)
                 with self.lock:
                     if job["status"] != "cancelled":
                         result = self._read(destination, "result.json")
                         failure = self._read(destination, "error.json", {})
                         if process.returncode in (0, 1) and isinstance(result, dict) and not job["error"]:
-                            job.update(status="finished" if result["legal"] else "broke_rule", summary=result["summary"])
+                            job.update(status="finished" if result["legal"] else "broke_rule", summary=result["summary"],
+                                       finished_at=time.time())
                         else:
-                            job.update(status="error",
+                            job.update(status="error", finished_at=time.time(),
                                        error=job["error"] or failure.get("error") or
                                        f"The run stopped with exit code {process.returncode}. See {destination / 'run.log'}.",
                                        error_stage=failure.get("stage"), error_step=failure.get("step"))
         except OSError as error:
             with self.lock:
                 if job["status"] != "cancelled":
-                    job.update(status="error", error=str(error))
+                    job.update(status="error", error=str(error), finished_at=time.time())
         finally:
             with self.lock:
-                job["finished_at"] = time.time()
+                job.setdefault("finished_at", time.time())
                 write_json(destination / "job.json", job)
-                self.process = None
-                self.active_id = None
+                self.processes.pop(identity, None)
                 self._trim()
 
     def _wait(self, job, process):
@@ -319,7 +323,7 @@ class Planner:
                 expired = time.monotonic() > deadline
                 if cancelled or expired:
                     if kill_at is None:
-                        self._stop_process()
+                        self._stop_process(job["id"])
                         kill_at = time.monotonic() + 2
                         if expired and not cancelled:
                             job["error"] = f"The run took longer than {self.wall_timeout} s of real time and was stopped."
@@ -336,8 +340,9 @@ class Planner:
             for identity, job in self.jobs.items():
                 if job["status"] not in FINISHED:
                     self.cancel(identity)
-            self._stop_process()
-        self.worker.join(timeout=5)
+        deadline = time.monotonic() + 5
+        for worker in self.workers:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 def examples():
@@ -533,12 +538,16 @@ def main():
     parser.add_argument("--vexsim", type=Path, default=ROOT.parent / "vexsim", help="the vexsim checkout")
     parser.add_argument("--no-prepare", action="store_true",
                         help="do not start compiling mclib and measuring the default robot at launch")
+    parser.add_argument("--parallel-runs", type=int, default=PARALLEL_RUNS,
+                        help=f"runs simulated at once (default {PARALLEL_RUNS}, a third of this machine's CPU threads)")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
+    if args.parallel_runs < 1:
+        parser.error("--parallel-runs must be at least 1")
     if not (args.vexsim / "vexsim/sim.py").is_file():
         parser.error(f"--vexsim {args.vexsim} is not a vexsim checkout (no vexsim/sim.py)")
-    planner = Planner(args.output, args.vexsim)
+    planner = Planner(args.output, args.vexsim, parallel_runs=args.parallel_runs)
     try:
         server = LocalServer(args.port, planner)
     except OSError:
