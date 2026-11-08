@@ -773,6 +773,8 @@ def _execute(raw, destination, vexsim, cache, progress):
     paths = [i for i, step in enumerate(project["steps"]) if step["type"] == "path"]
     progress.finish("check", f"{len(project['steps'])} steps, {len(paths)} of them paths.")
     lib, fingerprint, build_dir = load_library(vexsim, cache, progress)
+    from vexsim import setup_cache
+    setup_cache.use(build_dir / "setup")
     robot = project["robot"]
     feedforward = plans = None
     if paths:
