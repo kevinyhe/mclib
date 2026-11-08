@@ -25,8 +25,8 @@
 namespace cascade {
 
 // The height of the claw's middle above the floor, inches, from the lift
-// motors' degrees. Three motors turn a 1.0 in drum through 48:60 gears, so
-// the drum winds in pi / 1.25 = 2.51 in of string a motor turn. The string
+// motors' degrees. Three motors turn a 1.0 in drum through 48:72 gears, so
+// the drum winds in pi / 1.5 = 2.09 in of string a motor turn. The string
 // lifts the first of five stages and the carriage moves five times as far.
 // Fully down, the claw's middle is level with the ridge of a stack standing
 // on the floor, where the Pin's flange sits on the Cup's rim. Once the
@@ -34,7 +34,7 @@ namespace cascade {
 // kStringStretchIn under where the wound string alone would put it.
 constexpr double kLowestClawIn = 6.62;
 constexpr double kDrumDiameterIn = 1.0;
-constexpr double kMotorTurnsPerDrumTurn = 1.25;
+constexpr double kMotorTurnsPerDrumTurn = 1.5;
 constexpr int kLiftStages = 5;
 constexpr double kStringStretchIn = 0.25;
 

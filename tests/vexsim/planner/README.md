@@ -179,13 +179,13 @@ Override robots teams have published:
   [569C](https://github.com/daydayparker/VexOverride569C), with rubber bands
   pulling it up as on
   [1862X](https://github.com/ShadowKingYT444/Goofy_Goobers_code_OVERRIDE).
-  Three 11 W green motors turn a 1.0 in drum through 48:60 gears. The drum
+  Three 11 W green motors turn a 1.0 in drum through 48:72 gears. The drum
   winds string that lifts the first stage, and string between the stages
   makes each one move as far on the one below, so the carriage moves five
   times as far as the first stage. Each stage travels 8.02 in, so the
   robot starts 17.9 in tall, under SG1's 18 in, and reaches 50 in. It goes
-  from fully down to fully up in about 1 s at 12 V, as the robot's owner
-  measured. The strings stretch: holding, the claw sits about 0.25 in under
+  from fully down to fully up in 1.17 s at 12 V; the robot's owner
+  measured about 1.2 s. The strings stretch: holding, the claw sits about 0.25 in under
   where the wound string alone would put it;
 - a pneumatic claw on the top stage, over the middle of the bite, as on
   1862X and [Cosmic Electrons](https://github.com/CyrusKuhlmann/CE_OVERRIDE).
@@ -240,8 +240,8 @@ and **Export C++** copies it.
 | Top | 46.72 in | highest |
 
 The claw height is the middle of the jaws. A motor turn winds
-pi / 1.25 = 2.51 in of string and raises the claw five times that,
-12.57 in. The lift reads its height from the motors' angle and takes off
+pi / 1.5 = 2.09 in of string and raises the claw five times that,
+10.47 in. The lift reads its height from the motors' angle and takes off
 the 0.25 in the strings stretch once the stages hang on them.
 
 | Claw preset | Jaws |
