@@ -28,6 +28,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   join. A path that settles reports how far off it was when its plan ran
   out, and says when `followTrajectory()` had to back off and drive back in.
   Start it with `python3 tests/vexsim/planner/server.py --vexsim ../vexsim`.
+- `examples/`: a complete robot program for each part of the library, from
+  tracking wheels and every motion to mechanisms, commands, devices and
+  telemetry. `make examples` compiles all of them with warnings as errors,
+  and CI runs it.
+- Path planner: eight more example routines, 18 in all. Between them they
+  use every step type, drivetrain, odometry setup, heading source, lift
+  height and action time, and a test fails when one is left out. The new
+  ones cover the steps that are not paths, keeping moving between steps,
+  path settings and gains, a worn field, no inertial sensor, a stack on the
+  Center Goal, the lift's move times, and a wall reset on an Override wall.
+  A second test runs them and checks what each description says.
 
 ## 0.4.0
 

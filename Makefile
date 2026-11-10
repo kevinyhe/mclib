@@ -204,6 +204,24 @@ test: test-build
 	fi; \
 	echo "All $$passed test(s) passed."
 
+# `make examples` compiles every examples/*.cpp against the library headers
+# without linking. Each one is a whole robot program, so this catches an
+# example that a library change left behind. g++ defines _GNU_SOURCE as 1
+# and the PROS headers define it again as nothing, which warns. Defining it
+# as nothing up front makes the two the same.
+EXAMPLEDIR:=$(ROOT)/examples
+EXAMPLE_SRCS:=$(wildcard $(EXAMPLEDIR)/*.cpp)
+EXAMPLE_CHECKS:=$(patsubst $(EXAMPLEDIR)/%.cpp,example-%,$(EXAMPLE_SRCS))
+
+.PHONY: examples $(EXAMPLE_CHECKS)
+$(EXAMPLE_CHECKS): example-%: $(EXAMPLEDIR)/%.cpp
+	@echo "Checking $<"
+	@$(HOST_CXX) -std=$(CXX_STANDARD) -I$(INCDIR) -DMCLIB_HOST_BUILD -U_GNU_SOURCE -D_GNU_SOURCE= -Wall -Wextra -Werror $(WARNFLAGS) -fsyntax-only $<
+
+examples: $(EXAMPLE_CHECKS)
+	@if [ -z "$(strip $(EXAMPLE_SRCS))" ]; then echo "No examples found in $(EXAMPLEDIR)"; exit 1; fi
+	@echo "All $(words $(EXAMPLE_SRCS)) example(s) compile."
+
 ################################################################################
 ################################################################################
 ########## Nothing below this line should be edited by typical users ###########

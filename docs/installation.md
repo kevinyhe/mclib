@@ -118,6 +118,15 @@ Binaries go to `bin/tests/`.
 Keep `tests/` outside `src/`. `common.mk` compiles everything under `src/` into
 the library.
 
+```sh
+make examples
+```
+
+`make examples` compiles every program in `examples/` against the library
+headers, with warnings as errors, and does not link. Run it after changing a
+public header: an example that no longer compiles is a call a team's code
+makes too.
+
 ### Writing a test
 
 One file per test, each with its own `main()`. New files are picked up
