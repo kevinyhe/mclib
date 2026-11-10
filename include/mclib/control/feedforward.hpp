@@ -38,8 +38,8 @@
  * **Identifying the gains.** See `fitVelocityGains()` and
  * `fitAccelerationGain()` below for the procedure; there is a worked version
  * in `docs/motion.md`. Short form: drive at a series of fixed voltages,
- * record the steady-state speed at each, fit a line, and the intercept is kS
- * while the slope's reciprocal is kV.
+ * record the steady-state speed at each, fit voltage against speed, and the
+ * intercept is kS while the slope is kV.
  */
 
 namespace mclib {
@@ -355,11 +355,11 @@ struct ProfileFollowerConfig {
  *     .gains = {.kS = 0.9_V, .kV = kv, .kA = ka},
  *     .kp = 1.5 * mclib::units::volt / mclib::units::inch,
  * });
- * follower.follow(MotionProfile::generate(48_in, limits));
+ * follower.follow(mclib::control::MotionProfile::generate(48_in, limits));
  * const QLength start = travelledDistance();
  * while (!follower.isFinished()) {
  *   const QVoltage command = follower.update(travelledDistance() - start);
- *   driveVoltage(command, command);
+ *   driveChassis(command, command);
  *   pros::delay(10);
  * }
  * @endcode

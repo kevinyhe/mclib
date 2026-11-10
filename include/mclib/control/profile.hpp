@@ -77,14 +77,14 @@ struct ProfileState {
  *   S-curve. `MotionProfile::generate()` reads this to pick a shape.
  *
  * This drivetrain has separate forward and reverse accel/decel constants
- * (`max_slew_accel_fwd` and friends in config.cpp). Build one
+ * (`MotionConfig::slew`, in `control/motion_config.hpp`). Build one
  * ProfileConstraints per direction and hand generate() the right one, or use
  * DirectionalConstraints below to let it choose.
  */
 struct ProfileConstraints {
-  /// @brief Cruise speed cap. Must be > 0 or the profile comes out empty.
+  /// @brief Cruise speed cap. 0 gives an empty profile.
   units::QVelocity max_velocity = 48 * units::inps;
-  /// @brief Speeding-up limit. Must be > 0 or the profile comes out empty.
+  /// @brief Speeding-up limit. 0 gives an empty profile.
   units::QAcceleration max_acceleration = 96 * inps2;
   /// @brief Slowing-down limit. 0 means "same as max_acceleration".
   units::QAcceleration max_deceleration = units::QAcceleration{0.0};
@@ -189,7 +189,8 @@ inline constexpr std::size_t kMaxSegments = 8;
  *   larger in magnitude than requestedDistance(). Refusing to build anything
  *   would be worse - the robot is moving either way and the best available
  *   command is "brake at the limit".
- * - Non-positive `max_velocity` or `max_acceleration`: an empty profile.
+ * - Zero `max_velocity` or `max_acceleration`: an empty profile. A negative
+ *   limit is used as its magnitude.
  */
 class MotionProfile {
  public:

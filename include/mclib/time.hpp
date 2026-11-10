@@ -23,13 +23,11 @@ namespace time {
 using ClockFn = std::uint32_t (*)();
 
 /**
- * @brief The platform clock, and the only place in the library that reads
- * pros::millis().
+ * @brief The platform clock behind millis(): pros::millis() on the robot.
  *
- * @details Defined in src/mclib/time.cpp, which is the single translation unit
- * that includes a PROS header. It is deliberately a strong out-of-line symbol
- * rather than a pointer installed at static-initialisation time. That buys two
- * things:
+ * @details Defined in src/mclib/time.cpp, so this header needs no PROS header.
+ * It is deliberately a strong out-of-line symbol rather than a pointer
+ * installed at static-initialisation time. That buys two things:
  *
  * - Every translation unit that calls millis() has an undefined reference to
  *   this symbol, so a plain archive link is forced to pull time.cpp.o out of

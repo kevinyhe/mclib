@@ -21,16 +21,16 @@
  *        to keep the ratio.
  *
  * A floor on one wheel alone would change the commanded curvature; scaling both
- * keeps the arc the controller asked for and only makes it faster. Both sides
- * must already have the same sign and be non-zero for this to do anything.
+ * keeps the arc the controller asked for and only makes it faster. It does
+ * nothing unless the smaller side is non-zero and under the floor.
  *
  * @param left_output  Left voltage, in and out.
  * @param right_output Right voltage, in and out.
  * @param min_output   The floor, volts - the stiction floor, i.e. the smallest
- *                     voltage that actually turns the wheels. The default and
- *                     its audit note live on the `min_output` global in
- *                     `config.hpp`; read the value there rather than assuming
- *                     one, and check it before enabling the floor.
+ *                     voltage that actually turns the wheels. The default
+ *                     lives on `MotionConfig::min_voltage` in
+ *                     `control/motion_config.hpp`; read the value there rather
+ *                     than assuming one, and check it before enabling the floor.
  */
 void scaleToMin(double& left_output, double& right_output, double min_output);
 

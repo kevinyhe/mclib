@@ -63,13 +63,16 @@ struct HolonomicControllerConfig {
  * the heading it steers by come from the same locked read.
  *
  * @code
- * mclib::HolonomicChassis drive({1}, {-2}, {3}, {-4}, Gearset::Green, Kind::Mecanum, imu);
+ * mclib::HolonomicChassis drive({1}, {-2}, {3}, {-4}, mclib::device::Gearset::Green,
+ *                               mclib::holonomic::Kind::Mecanum, imu);
  * mclib::HolonomicController controller(drive);
  * controller.setDefaultCommand(controller.makeDriveCommand(master));
  * controller.registerSelf();
  *
- * // In autonomous:
- * controller.makeMoveToPoseCommand({24.0, 24.0, 90.0 * mclib::kPi / 180.0}, 3_s)->schedule();
+ * // In autonomous. The scheduler does not own the command, so keep it alive:
+ * static auto to_corner =
+ *     controller.makeMoveToPoseCommand({24.0, 24.0, 90.0 * mclib::kPi / 180.0}, 3_s);
+ * to_corner->schedule();
  * @endcode
  */
 class HolonomicController : public Subsystem {

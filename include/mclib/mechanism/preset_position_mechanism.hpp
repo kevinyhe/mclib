@@ -53,7 +53,7 @@ namespace mechanism {
  *
  * MultiPositionMechanism pushes the current preset's setpoint into the sink on
  * every tick, but PositionMechanism::moveTo() restarts the PID every call.
- * Feeding one straight into the other would reset the loop 50 times a second
+ * Feeding one straight into the other would reset the loop 100 times a second
  * and it would never settle. The sink therefore retargets only when the
  * setpoint actually differs from the live target, or when a retarget was
  * explicitly requested.
@@ -98,11 +98,13 @@ namespace mechanism {
  * mclib::mechanism::PresetPositionMechanism<ArmPreset> arm(
  *     ArmPreset::Down,
  *     {{ArmPreset::Down, 0.0}, {ArmPreset::Load, 45.0}, {ArmPreset::Score, 130.0}},
- *     [&]() { return arm_sensor.getAngleDeg(); },
- *     [&](double volts) { arm_motors.setVoltage(volts); });
+ *     []() { return arm_sensor.getPositionDeg(); },
+ *     [](double volts) { arm_motors.setVoltage(volts); });
  *
- * arm.setName("arm");
- * arm.registerSelf();
+ * void initialize() {
+ *   arm.setName("arm");
+ *   arm.registerSelf();
+ * }
  * ```
  */
 template <typename StateT>
@@ -173,7 +175,7 @@ public:
    *
    * setPreset() restarts the loop on every call, which is what makes it take
    * control back from a manual override. That makes it wrong to call every
-   * tick: the PID would be reset 50 times a second and never accumulate its
+   * tick: the PID would be reset 100 times a second and never accumulate its
    * dwell. This is the version for commands that execute every frame.
    */
   void holdPreset(StateT preset) {

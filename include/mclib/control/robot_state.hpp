@@ -63,8 +63,10 @@ enum class MotionPhase {
  *
  * Targets/errors come from the controller's actual PID inputs, in compass
  * degrees; they are not the between-motion heading hold or simulator truth.
- * Remaining is signed encoder travel for drive/arc, Euclidean endpoint
- * distance for point/boomerang, and unavailable for turn/swing/wall.
+ * Remaining is the signed distance left for drive/arc, measured the way the
+ * motion measures progress (encoders or pose), Euclidean endpoint distance
+ * for point/boomerang, distance left along the plan for followTrajectory(),
+ * and unavailable for turn/swing/wall.
  * Drive/yaw are the requested translation/clockwise rotation volts before
  * wheel mixing and voltage/slew limits, after geometric shaping and any
  * minimum-output floor. A swing/arc includes its asymmetric wheel geometry.
@@ -174,8 +176,8 @@ class RobotState {
  * @brief The process-wide robot state.
  *
  * A function-local static so there is no static-initialisation-order question
- * between this and the mechanisms constructed at namespace scope in
- * `config.cpp`.
+ * between this and objects a program constructs at namespace scope, such as
+ * a `Chassis`.
  */
 RobotState& robotState();
 

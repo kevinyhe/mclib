@@ -464,7 +464,8 @@ inline QAngle asin(double value) { return QAngle::fromBase(std::asin(value)); }
 inline QAngle acos(double value) { return QAngle::fromBase(std::acos(value)); }
 inline QAngle atan(double value) { return QAngle::fromBase(std::atan(value)); }
 
-/// @brief Heading of the vector (@p x, @p y), in the range (-pi, pi].
+/// @brief std::atan2(@p y, @p x): the angle from +X, counter-clockwise, in
+///        [-pi, pi]. Not a compass heading; for that pass (dx, dy).
 inline QAngle atan2(QLength y, QLength x) { return QAngle::fromBase(std::atan2(y.raw(), x.raw())); }
 
 /// @brief Length of the vector (@p x, @p y).

@@ -3,8 +3,10 @@
 Wrappers live in `mclib::device` and own their PROS object. Each has two kinds
 of getter:
 
-- Plain getters (`getDistanceCm()`, `getHue()`) return the PROS value, including
-  `PROS_ERR` / `PROS_ERR_F`.
+- Plain getters (`getDistanceCm()`, `getHue()`) return the PROS value. Integer
+  getters pass `PROS_ERR` through. Readings returned as a single `double` are
+  NaN on error instead of `PROS_ERR_F`. `MotorGroup`'s per-motor vectors keep
+  the PROS error values.
 - Typed getters (`distance()`, `hue()`, `position()`) return `std::optional`,
   empty on error.
 
@@ -13,7 +15,7 @@ ADI wrappers take a port char (`'A'`..`'H'`). A second constructor,
 
 | Class | PROS device | Header |
 |---|---|---|
-| `Motor`, `MotorGroup` | `pros::Motor` | `mclib/device/motor.hpp`, `motor_group.hpp` |
+| `Motor`, `MotorGroup` | `pros::Motor`, `pros::MotorGroup` | `mclib/device/motor.hpp`, `motor_group.hpp` |
 | `Controller` | `pros::Controller` | `mclib/device/controller.hpp` |
 | `Inertial` | `pros::Imu` | `mclib/device/inertial.hpp` |
 | `Rotation` | `pros::Rotation` | `mclib/device/rotation.hpp` |
@@ -35,8 +37,8 @@ ADI wrappers take a port char (`'A'`..`'H'`). A second constructor,
 ```cpp
 mclib::device::Controller master;  // ControllerId::Partner for the second one
 
-const double forward = master.analog(AnalogAxis::LeftY);  // -1..1
-if (master.getNewPress(DigitalButton::A)) intake.toggle();  // once per press
+const double forward = master.analog(mclib::device::AnalogAxis::LeftY);  // -1..1
+if (master.getNewPress(mclib::device::DigitalButton::A)) intake.toggle();  // once per press
 master.print(0, 0, "Auton %d", slot);                       // 3 lines x 15 chars
 master.rumble(".-");
 if (auto battery = master.batteryCapacity()) { /* percent */ }

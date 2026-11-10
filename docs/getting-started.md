@@ -56,7 +56,7 @@ void opcontrol() {
 (`control/motion_config.hpp`). It holds:
 
 - distance, turn and heading PID gains
-- two exit rules
+- three exit rules: distance, turn and arc
 - the voltage cap
 - `min_voltage`, the minimum output needed to get the drive moving (default 1.5 V)
 - slew rates (how fast output voltage may change)
@@ -126,7 +126,15 @@ a horizontal tracker sees. Forward slip is small on these drives. With
 `PoseFusion`, set `odom_along_var_per_in` and `odom_side_var_per_in` apart
 for one tracker: low in the direction it measures, about 0.09 in the other.
 
-Reset the IMU and the pose together. `Chassis::setPose()` sets both.
+Reset the IMU and the pose together. `Chassis::setPose()` sets both. Pass
+units so the heading is in degrees:
+
+```cpp
+chassis.setPose(0_in, -58_in, 180_deg);
+```
+
+`Pose2D::theta` is radians. `chassis.setPose(mclib::Pose2D(0, 0, 180))` sets a
+heading of 180 rad, which is about 233°.
 
 Without an IMU, a differential `Chassis` computes heading from the difference in
 left and right wheel travel divided by track width. Set a measured, positive
@@ -167,8 +175,8 @@ const snapshot::SensorGeometry left_back{-6.0f, -5.0f, -90.0f};
 
 // Every loop:
 filter.predict(previous_odometry_pose, odometry_pose);
-filter.updateDistance(left_front, left_front_sensor.distance().in());
-filter.updateDistance(left_back, left_back_sensor.distance().in());
+filter.updateDistance(left_front, left_front_sensor.getDistanceIn());
+filter.updateDistance(left_back, left_back_sensor.getDistanceIn());
 // filter.pose() is the corrected pose.
 ```
 
@@ -219,11 +227,10 @@ auto read = [](mclib::device::Distance& sensor) {
   };
 };
 
-mclib::control::PoseFusionConfig fusion_config;
 // Odometry is already in field coordinates (0-144 in) here. If it starts at
 // 0 in the field centre instead, use 72 and 72.
-fusion_config.field_offset_x_in = 0;
-fusion_config.field_offset_y_in = 0;
+mclib::control::PoseFusionConfig fusion_config{.field_offset_x_in = 0,
+                                               .field_offset_y_in = 0};
 mclib::control::PoseFusion fusion(fusion_config, {
     {{-6.0f, 5.0f, -90.0f}, read(left_front_sensor)},
     {{-6.0f, -5.0f, -90.0f}, read(left_back_sensor)},
@@ -299,14 +306,16 @@ mclib::control::bindDrive(&chassis);
 mclib::control::setMotionConfig(my_config);
 ```
 
-If no drive is bound, every motion routine prints an error and returns
-`MotionResult::NoDrive`.
+If no drive is bound, the first motion routine called prints an error, and
+every motion routine returns `MotionResult::NoDrive` (`wallReset()` returns
+false).
 
 ## Motion commands
 
 `ChassisController` wraps each blocking routine as a command:
 `makeTurnToAngleCommand`, `makeDriveToCommand`, `makeCurveCircleCommand`,
-`makeSwingCommand`, `makeWallResetCommand`, `makeTurnToPointCommand`,
+`makeCurveCircleReverseCommand`, `makeSwingCommand`,
+`makeCorrectHeadingCommand`, `makeWallResetCommand`, `makeTurnToPointCommand`,
 `makeMoveToPointCommand`, `makeBoomerangCommand` and
 `makeFollowTrajectoryCommand`. Each runs the routine on its own task and
 cancels it when interrupted.

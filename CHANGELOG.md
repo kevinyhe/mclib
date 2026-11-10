@@ -22,6 +22,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   join. A path that settles reports how far off it was when its plan ran
   out, and says when `followTrajectory()` had to back off and drive back in.
   Start it with `python3 tests/vexsim/planner/server.py --vexsim ../vexsim`.
+
+## 0.4.0
+
+Upgrading from 0.3.0:
+
+- `.until()` on a `Routine` no longer compiles. Put `.until()` on the motion
+  step, or use `waitUntil()`.
+- A `Routine` with a configuration error, such as a motion added with no
+  `setChassis()`, no longer runs at all. It prints why and finishes.
+- A `VelocityMechanism` ratio or an `Inertial` gain that is not a finite
+  number above 0 is a configuration error instead of being replaced with
+  1.0. The mechanism outputs 0 V; the IMU reads NaN, so motions refuse to
+  run. Check `hasConfigurationError()` if one stopped working.
+- Chained `moveToPoint()` and `boomerang()` hand off sooner: inside
+  `distance_exit.big_error` (1.5 in) of the target, or when they pass it
+  within 8 in. Routes that chain them reach the next move earlier.
+- A stopping `moveToPoint()` turns in place when the target is more than
+  30° off the nose within 8 in, and an explicit `min_speed` stops applying
+  near the target. With a 4 V floor, some short or behind-the-robot moves
+  take 0.5-0.8 s longer.
+
+### Added
+
 - Owning forms of the command decorators: `Command::andThen(a, b)`,
   `with(a, b)`, `race(a, b)`, `withTimeout(a, t)`, `until(a, condition)`,
   `repeatedly(a)` and `asProxy(a)` take the commands by `std::unique_ptr`
@@ -33,6 +56,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   the next step starts. A condition already true when the step starts skips
   the motion. Unlike `Command::until()`, the routine owns the motion, so it
   can be built inline in the chain.
+- `TrajectoryConstraints::speed_zones` caps the speed on stretches of a
+  trajectory: `SpeedZone{20_in, 36_in, 15_in / 1_s}` keeps the robot at or
+  under 15 in/s from 20 in to 36 in along the path. The plan brakes before
+  the zone and speeds up after it. Before this, a slow section meant
+  splitting the path into two trajectories, and the two splines met at
+  different headings.
+- `Routine` motion steps take `.atTime(t, command)`, `.atDistance(d, command)`
+  and `.atDistanceFromEnd(d, command)`. Each starts its command partway
+  through the motion, while the robot is still moving: a `trigger()` after a
+  motion step only starts once the motion ends. `missedEvents()` counts the
+  commands whose step ended before they came due.
+- `early_exit_range` on `turnToAngle()`, `driveTo()`, `curveCircle()`,
+  `curveCircleReverse()`, `swing()`, `moveToPoint()`, `boomerang()` and
+  `followTrajectory()`, and on the matching `ChassisController` commands, and
+  `.withEarlyExit(range)` on `Routine` motion steps. A chained motion ends
+  once the robot is that close to its end, still moving. Above zero with
+  `exit` true, or negative, the motion returns `InvalidValue`.
+- `followTrajectory()` publishes `remaining_in` in its motion telemetry.
+- `Chassis::setPose(QLength, QLength, QAngle)`:
+  `chassis.setPose(0_in, -58_in, 180_deg)`. `Pose2D::theta` is radians, so
+  `setPose(Pose2D(0, 0, 180))` sets 180 rad, about 233°.
 
 ### Changed
 
@@ -53,9 +97,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   to become a step that did nothing while the rest of the routine ran, so
   a missing `setChassis()` showed up as a robot that ran its mechanisms and
   never drove.
+- A chained `moveToPoint()` hands off as soon as the robot is inside
+  `distance_exit.big_error` (1.5 in by default) of the target, or when it
+  passes the target within 8 in. It used to hand off only when it crossed
+  the line through the target within 1.5 in of it. On `six_motor_450` in the
+  simulator it stalled 1.3 in short and timed out after 2 s, and at an 8 V
+  floor the second move of a zigzag timed out.
+- A chained `moveToPoint()` no longer sets the drive to 0 V when it starts.
+  One that hands off on its first tick keeps the previous motion's wheel
+  commands, as `boomerang()` already did.
+- A chained `boomerang()` also hands off when it passes the target within
+  8 in. It used to wait for the 1.5 in band, and in the simulator every
+  chained boomerang timed out after 2.5 s, turning 215-420°.
 
 ### Fixed
 
+- Examples in the docs and header comments that did not compile or did the
+  wrong thing. Some called functions that do not exist
+  (`Rotation::getAngleDeg()`, `makeDisableCommand()`, `driveVoltage()`),
+  set config fields with assignments at file scope, or registered a default
+  command held by a local that is destroyed when `initialize()` returns. Docs
+  that disagreed with the code now match it, including `followTrajectory()`'s
+  settle steps and how `driveTo()` and `curveCircle()` measure distance. The
+  example `src/main.cpp` now sets its starting pose with `Chassis::setPose()`.
+- A stopping `moveToPoint()` still circled its target on drives whose inner
+  wheel stalls below its friction voltage or that slide sideways, such as
+  all-omni bases. For the last 8 in it now drives a straight line through
+  the target: it turns in place first when the target is more than 30° off
+  the nose, backs up along the line if it passes the target, and turns in
+  place again if the target drifts more than 30° off the line. Farther out,
+  if it turns 90° without getting 1 in closer, it turns in place to face the
+  target. An explicit voltage floor stops applying once it turns in place
+  within 8 in, or comes within 0.5 in of the target along its line. The
+  physics simulator ran 16 drivetrains (100-600 rpm; 2.75, 3.25 and 4 in
+  wheels; 4 and 6 motors; all-omni, center traction and all-traction; one
+  on 5.5 W motors), each with two tunings, on 13 routes at five voltage
+  floors. Stops ended Reached within 1.5 in in 1726 of 1760 runs, up from
+  1040. Timeouts fell from 652 to 23,
+  and 21 of those are a 100 rpm drive that needs more than the 4 s limit.
+  Runs that turned more than a full circle fell from 694 to 6, and the most
+  any run turned fell from 1290° to 528°. The cost: with a 4 V floor on the
+  stop, 15 of 293 short or behind-the-robot moves take 0.5-0.8 s longer,
+  because the robot turns in place first and then runs without the floor.
 - `moveToPoint()` could circle its target until the time limit. Inside 8 in
   it let the heading correction reach the full voltage cap, so a target
   passed a few inches to the side pulled the robot round it (455° and a

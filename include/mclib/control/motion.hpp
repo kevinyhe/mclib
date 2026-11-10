@@ -31,6 +31,18 @@ struct RamseteConfig;
  * Timeout, cancellation, disable, and nonfinite sensor data always stop the
  * drive and clear its stored slew output. Callers must serialize motions.
  *
+ * ## Early exit
+ *
+ * The motions that can chain take `early_exit_range`, a distance or an angle.
+ * When it is above zero, a chained motion ends as soon as the robot is that
+ * close to its end, still moving, so the next motion takes over before this
+ * one slows down for its target. It only applies to a chained motion: above
+ * zero with `exit` true returns `InvalidValue`, as does a negative range.
+ *
+ * Without it, a chained `moveToPoint()` or `boomerang()` hands off once the
+ * robot is inside `MotionConfig::distance_exit`'s band of the target, or once
+ * it passes the target within 8 in.
+ *
  * ## Frame
  *
  * Positions are field-frame inches and headings are **absolute field
@@ -50,12 +62,12 @@ struct RamseteConfig;
  * ## `min_speed` and the -1 sentinel
  *
  * Every routine takes `min_speed`, a floor on the output voltage, defaulting
- * to `-1_V`. Negative means "use the `min_output` global" - the stiction
- * floor, **1.5 V of a 12 V rail**, applied unconditionally in
- * `turnToAngle()`'s chained branches, in `swing()` and in `turnToPoint()`, and
- * gated behind chaining elsewhere. It was 10 V - 83% of the rail as a
+ * to `-1_V`. Negative means "use `MotionConfig::min_voltage`" - the stiction
+ * floor, **1.5 V of a 12 V rail** by default, applied unconditionally in
+ * `turnToAngle()`'s and `swing()`'s chained branches and in `turnToPoint()`,
+ * and gated behind chaining elsewhere. It was 10 V - 83% of the rail as a
  * *minimum* - which is almost certainly a leftover from a 0..127 output scale;
- * see the note on `min_output` in `mclib/config.hpp`.
+ * see `MotionConfig::min_voltage` in `mclib/control/motion_config.hpp`.
  */
 
 namespace mclib::control {
@@ -79,7 +91,8 @@ enum class MotionResult {
   /// The robot was disabled by field control or the competition switch.
   Disabled,
   /// A parameter, sensor reading, pose value or computed output was NaN or
-  /// infinite, or `time_limit` was not positive.
+  /// infinite, `time_limit` was not positive, or a parameter was out of
+  /// range, such as a negative `early_exit_range`.
   InvalidValue,
   /// No drive is bound. See `mclib::control::bindDrive()`.
   NoDrive,
@@ -92,9 +105,10 @@ const char* toString(MotionResult result);
  * @brief Make `curveCircle()` and `curveCircleReverse()` follow their arc with
  *        RAMSETE, steering on the odometry pose.
  *
- * The encoder arcs measure progress with the drive encoders, which keep
- * counting when a wheel slips; in the physics simulator they missed 24 in
- * arcs by 5.9-15.1 in. After this call, an arc with `exit` true plans the
+ * Without it, the arcs measure progress on the odometry pose but do not plan
+ * a speed: a distance PID sets the voltage, and they slow down to keep
+ * sideways acceleration under `MotionConfig::arc_max_lateral_accel`. After
+ * this call, an arc with `exit` true plans the
  * same arc (`path::planArc()`) as a trajectory under @p limits and runs
  * `followTrajectory()` with @p config, settle included. The call's
  * `time_limit` and `max_output` still apply.
@@ -103,7 +117,8 @@ const char* toString(MotionResult result);
  * and `curveCircleReverse()` / `reverse` when the geometry says forward.
  *
  * @param config RAMSETE gains and measured feedforward; `kV` must be
- *        positive, or this does nothing.
+ *        positive, or this goes back to the encoder arcs like
+ *        `useEncoderArcs()`.
  * @param limits Speed, acceleration and cornering limits for the plan.
  *        `reversed` is set per arc.
  */
@@ -135,37 +150,44 @@ inline constexpr QAngle keep_current_heading =
  *                   heading passes @p turn_angle and leaves the drive
  *                   energised, for chaining into the next motion.
  * @param max_output Voltage cap.
- * @param min_speed  Voltage floor; negative selects the `min_output` default.
+ * @param min_speed  Voltage floor; negative selects the `MotionConfig::min_voltage` default.
  *                   Only the `exit == false` branches apply it.
+ * @param early_exit_range Chained only: end once the heading is this close to
+ *                   @p turn_angle.
  * @return How the motion ended. See MotionResult.
  */
 mclib::control::MotionResult turnToAngle(QAngle turn_angle,
                                          QTime time_limit,
                                          bool exit = true,
                                          QVoltage max_output = 12.0 * mclib::units::volt,
-                                         QVoltage min_speed = -1.0 * mclib::units::volt);
+                                         QVoltage min_speed = -1.0 * mclib::units::volt,
+                                         QAngle early_exit_range = 0.0 * mclib::units::degree);
 
 /**
  * @brief Drive straight a relative distance, holding the current heading.
  *
- * Distance is measured off the drive encoders, not the odometry, so it is a
- * displacement along the robot's own path rather than a field position.
+ * `MotionConfig::drive_distance_source` picks how distance is measured. By
+ * default it is the odometry pose's travel along the starting heading when a
+ * forward tracking wheel is fitted, and the drive encoders otherwise. Either
+ * way it is a displacement from where the move starts, not a field position.
  *
  * @param distance   How far to travel. Negative drives backward.
  * @param time_limit Give up after this long.
  * @param exit       True ramps to 0 V and holds at the end. False leaves the
  *                   drive energised for chaining.
  * @param max_output Voltage cap.
- * @param min_speed  Voltage floor; negative selects the `min_output` default.
+ * @param min_speed  Voltage floor; negative selects the `MotionConfig::min_voltage` default.
  *                   Gated off unless the caller asks for it or the motion is
  *                   chained.
+ * @param early_exit_range Chained only: end once this much distance is left.
  * @return How the motion ended. See MotionResult.
  */
 mclib::control::MotionResult driveTo(QLength distance,
                                      QTime time_limit,
                                      bool exit = true,
                                      QVoltage max_output = 12.0 * mclib::units::volt,
-                                     QVoltage min_speed = -1.0 * mclib::units::volt);
+                                     QVoltage min_speed = -1.0 * mclib::units::volt,
+                                     QLength early_exit_range = 0.0 * mclib::units::inch);
 
 /**
  * @brief Drive a constant-radius arc to an absolute field heading.
@@ -173,7 +195,8 @@ mclib::control::MotionResult driveTo(QLength distance,
  * The arc begins at the measured heading. Stopped arcs settle outer-wheel
  * distance using `MotionConfig::arc_exit`; chained arcs keep controlling until
  * that distance crosses the endpoint and preserve the live drive output.
- * Wheel slip can make the measured arc differ from the body's field path.
+ * Progress is the angle swept around the arc's centre, measured on the
+ * odometry pose. Below 1 in of radius it is the outer wheel's encoder travel.
  *
  * @param result_angle The **absolute** compass heading to finish on.
  * @param center_radius Radius of the arc, measured to the centre of the robot.
@@ -183,9 +206,11 @@ mclib::control::MotionResult driveTo(QLength distance,
  * @param time_limit   Give up after this long.
  * @param exit         True stops and holds at the end.
  * @param max_output   Voltage cap.
- * @param min_speed    Voltage floor; negative selects the `min_output` default.
+ * @param min_speed    Voltage floor; negative selects the `MotionConfig::min_voltage` default.
  * @param reverse      Forces the drive direction backward regardless of which
  *                     way the heading has to move.
+ * @param early_exit_range Chained only: end once this much of the arc is left,
+ *                     measured along the outer wheel's path.
  * @return How the motion ended. See MotionResult.
  */
 mclib::control::MotionResult curveCircle(QAngle result_angle,
@@ -194,15 +219,18 @@ mclib::control::MotionResult curveCircle(QAngle result_angle,
                                          bool exit = true,
                                          QVoltage max_output = 12.0 * mclib::units::volt,
                                          QVoltage min_speed = -1.0 * mclib::units::volt,
-                                         bool reverse = false);
+                                         bool reverse = false,
+                                         QLength early_exit_range = 0.0 * mclib::units::inch);
 
 /// @brief `curveCircle()` with @p reverse forced on. See curveCircle().
-mclib::control::MotionResult curveCircleReverse(QAngle result_angle,
-                                                QLength center_radius,
-                                                QTime time_limit,
-                                                bool exit = true,
-                                                QVoltage max_output = 12.0 * mclib::units::volt,
-                                                QVoltage min_speed = -1.0 * mclib::units::volt);
+mclib::control::MotionResult curveCircleReverse(
+    QAngle result_angle,
+    QLength center_radius,
+    QTime time_limit,
+    bool exit = true,
+    QVoltage max_output = 12.0 * mclib::units::volt,
+    QVoltage min_speed = -1.0 * mclib::units::volt,
+    QLength early_exit_range = 0.0 * mclib::units::inch);
 
 /**
  * @brief Turn about one locked tread to an absolute field heading.
@@ -214,9 +242,11 @@ mclib::control::MotionResult curveCircleReverse(QAngle result_angle,
  * @param time_limit      Give up after this long.
  * @param exit            True stops and holds at the end.
  * @param max_output      Voltage cap.
- * @param min_speed       Voltage floor; negative selects the `min_output`
+ * @param min_speed       Voltage floor; negative selects the `MotionConfig::min_voltage`
  *                        default, which this routine applies unconditionally on
  *                        the chained branches.
+ * @param early_exit_range Chained only: end once the heading is this close to
+ *                        @p swing_angle.
  * @return How the motion ended. See MotionResult.
  */
 mclib::control::MotionResult swing(QAngle swing_angle,
@@ -224,7 +254,8 @@ mclib::control::MotionResult swing(QAngle swing_angle,
                                    QTime time_limit,
                                    bool exit = true,
                                    QVoltage max_output = 12.0 * mclib::units::volt,
-                                   QVoltage min_speed = -1.0 * mclib::units::volt);
+                                   QVoltage min_speed = -1.0 * mclib::units::volt,
+                                   QAngle early_exit_range = 0.0 * mclib::units::degree);
 
 /**
  * @brief Hold the heading in `RobotState::correctAngleDeg()` forever.
@@ -269,7 +300,7 @@ bool wallReset(QLength reset_x,
  * @param direction  +1 faces the point with the front of the robot, -1 with the
  *                   back. A sign flag, not a quantity.
  * @param time_limit Give up after this long.
- * @param min_speed  Voltage floor; negative selects the `min_output` default,
+ * @param min_speed  Voltage floor; negative selects the `MotionConfig::min_voltage` default,
  *                   which this routine applies unconditionally.
  * @return How the motion ended. See MotionResult.
  */
@@ -282,8 +313,18 @@ mclib::control::MotionResult turnToPoint(QLength x,
 /**
  * @brief Drive to a field point, steering as it goes.
  *
- * Exits early once the robot crosses the line through the target perpendicular
- * to its own heading, so it does not orbit a point it has already passed.
+ * Chained, it hands off inside the position band, or when it crosses the line
+ * through the target perpendicular to its own heading within 8 in, so it does
+ * not orbit a point it has already passed.
+ *
+ * Stopping, it drives a straight line through the target for the last 8 in.
+ * If the target is more than 30 deg off the nose there, it first turns in
+ * place until the target is within 10 deg. If it passes the target, it backs
+ * up along the line instead of turning around, and if it drifts so the target
+ * is more than 30 deg off the line, it turns in place again. Farther out, if
+ * it turns 90 deg without getting 1 in closer, it turns in place until the
+ * target is within 10 deg. @p min_speed stops applying once it turns in place
+ * within 8 in, or comes within 0.5 in of the target along its line.
  *
  * @param x          Field X of the target.
  * @param y          Field Y of the target.
@@ -293,7 +334,9 @@ mclib::control::MotionResult turnToPoint(QLength x,
  * @param max_output Voltage cap.
  * @param overturn   True lets heading correction eat into the forward drive
  *                   when the two together exceed @p max_output.
- * @param min_speed  Voltage floor; negative selects the `min_output` default.
+ * @param min_speed  Voltage floor; negative selects the `MotionConfig::min_voltage` default.
+ * @param early_exit_range Chained only: end once the robot is this close to
+ *                   the target.
  * @return How the motion ended. See MotionResult.
  */
 mclib::control::MotionResult moveToPoint(QLength x,
@@ -303,7 +346,8 @@ mclib::control::MotionResult moveToPoint(QLength x,
                                          bool exit = true,
                                          QVoltage max_output = 12.0 * mclib::units::volt,
                                          bool overturn = true,
-                                         QVoltage min_speed = -1.0 * mclib::units::volt);
+                                         QVoltage min_speed = -1.0 * mclib::units::volt,
+                                         QLength early_exit_range = 0.0 * mclib::units::inch);
 
 /**
  * @brief Drive to a field point *and* a final heading, by chasing a carrot.
@@ -315,8 +359,8 @@ mclib::control::MotionResult moveToPoint(QLength x,
  * With `exit=true`, position must settle using `MotionConfig::distance_exit`,
  * then heading must settle using `turn_exit`. A positional drift outside the
  * distance band resumes approach. With `exit=false`, entering that distance
- * band hands a moving chassis to the next motion without waiting for position
- * or heading settlement. An already-reached
+ * band, or passing the target within 8 in, hands a moving chassis to the next
+ * motion without waiting for position or heading settlement. An already-reached
  * chained pose preserves the preceding wheel commands.
  * Chaining uses the configured minimum drive voltage outside the endpoint band;
  * explicitly disabling that floor can stall a high-friction drivetrain early.
@@ -337,7 +381,9 @@ mclib::control::MotionResult moveToPoint(QLength x,
  * @param exit           True ramps to 0 V and holds at the end.
  * @param max_output     Voltage cap.
  * @param overturn       True lets heading correction eat into the forward drive.
- * @param min_speed      Voltage floor; negative selects the `min_output` default.
+ * @param min_speed      Voltage floor; negative selects the `MotionConfig::min_voltage` default.
+ * @param early_exit_range Chained only: end once the robot is this close to
+ *                       the target.
  *
  * @warning The slip-speed limiter inside now uses `mclib::arcRadius()`, the
  *          correct compass-frame arc radius. It used to use `getRadius()`,
@@ -359,7 +405,8 @@ mclib::control::MotionResult boomerang(QLength x,
                                        bool exit = true,
                                        QVoltage max_output = 12.0 * mclib::units::volt,
                                        bool overturn = true,
-                                       QVoltage min_speed = -1.0 * mclib::units::volt);
+                                       QVoltage min_speed = -1.0 * mclib::units::volt,
+                                       QLength early_exit_range = 0.0 * mclib::units::inch);
 
 /**
  * @brief Follow a planned trajectory with RAMSETE, steering on the odometry
@@ -367,19 +414,21 @@ mclib::control::MotionResult boomerang(QLength x,
  *
  * Each 10 ms tick samples @p trajectory at the time since the call, runs
  * `mclib::control::Ramsete` against the odometry pose, and drives each side
- * with the feedforward in @p config. Unlike `driveTo()` and `curveCircle()`,
- * wheel slip does not fool it: the correction comes from the pose, not the
- * drive encoders.
+ * with the feedforward in @p config. Unlike `driveTo()` on the drive
+ * encoders, wheel slip does not fool it: the correction comes from the pose,
+ * not the drive encoders.
  *
  * Plan the trajectory from where the robot is. It is not shifted to the
  * current pose.
  *
  * RAMSETE stops correcting once the trajectory's speed reaches zero. With
- * `exit` true it then settles, in the time left: it turns in place to the
- * last heading with `turnToAngle()` (`config.turn_to_final_heading`), then
- * drives straight to close any miss along that heading larger than
- * `MotionConfig::distance_exit.big_error` with `driveTo()`
- * (`config.settle_position`). A sideways miss is not settled. Both are on
+ * `exit` true it then settles, in the time left. First it turns in place to
+ * the last heading with `turnToAngle()` (`config.turn_to_final_heading`).
+ * Then, with `config.settle_position`: if the robot is more than
+ * `config.settle_side_tolerance` to the side of the end point, it backs off
+ * along its heading with `driveTo()` and comes back in with `boomerang()`.
+ * Otherwise it drives straight with `driveTo()` to close any miss along the
+ * heading larger than `MotionConfig::distance_exit.big_error`. Both are on
  * by default.
  *
  * @param trajectory The plan. Must outlive the call.
@@ -390,13 +439,18 @@ mclib::control::MotionResult boomerang(QLength x,
  * @param exit       True stops and holds at the end. False leaves the last
  *                   voltages on for chaining.
  * @param max_output Voltage cap. Both sides scale down together.
+ * @param early_exit_range Chained only: end once this much of the path is
+ *                   left, measured from where the robot is along the plan.
  * @return `Reached` when the trajectory ran to its end and, if it settled
  *         afterwards, the settle reached its target. `InvalidValue` for an empty
- *         trajectory or a non-positive `kV`. See MotionResult.
+ *         trajectory, a non-positive `kV` or `b`, a negative `zeta`, or an
+ *         `early_exit_range` that is negative or set with `exit` true. See
+ *         MotionResult.
  */
 mclib::control::MotionResult followTrajectory(
     const mclib::path::Trajectory& trajectory,
     const mclib::control::RamseteConfig& config,
     QTime time_limit,
     bool exit = true,
-    QVoltage max_output = 12.0 * mclib::units::volt);
+    QVoltage max_output = 12.0 * mclib::units::volt,
+    QLength early_exit_range = 0.0 * mclib::units::inch);

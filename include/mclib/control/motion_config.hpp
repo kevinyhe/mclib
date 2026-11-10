@@ -123,7 +123,10 @@ struct MotionConfig {
    *
    * The blocking routines apply it on their chained (`exit == false`)
    * branches and whenever the caller passes an explicit `min_speed`; the
-   * scheduler-driven driveDistance() applies it whenever it is non-zero.
+   * scheduler-driven driveDistance() applies it whenever it is non-zero. A
+   * stopping moveToPoint() stops applying it once it turns in place within
+   * 8 in of the target, or comes within distance_exit.small_error of the
+   * target along its line, so it can slow down there.
    */
   QVoltage min_voltage = 1.5 * units::volt;
 
@@ -160,7 +163,8 @@ struct MotionConfig {
 
   /**
    * @brief Least voltage a stopped (`exit` true) distance move commands while
-   *        it is outside `distance_exit.small_error`. 0 turns it off.
+   *        it is outside `distance_exit.small_error` (`arc_exit.small_error`
+   *        for curveCircle()). 0 turns it off.
    *
    * @details The distance PID's output shrinks with the distance left, so
    * near the target it falls to about what the drive needs to overcome
@@ -191,9 +195,10 @@ struct MotionConfig {
 /**
  * @brief The MotionConfig every drive loop reads.
  *
- * `ChassisController::setConfig()` writes it. Read at the start of each
- * motion routine, so changing it between motions is safe and changing it
- * mid-motion does nothing to the one already running.
+ * `ChassisController::setConfig()` writes it. Each motion routine reads its
+ * PID gains and exit rules when it starts, but reads some fields, such as
+ * `chase_power` and `settle_min_voltage`, every tick. Change it between
+ * motions, not during one.
  */
 const MotionConfig& motionConfig();
 

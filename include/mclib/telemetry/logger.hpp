@@ -172,7 +172,7 @@ struct LoggerConfig {
  * auto x = logger.addLength("x");
  * auto volts = logger.addVoltage("left_cmd");
  * // control loop:
- * logger.set(x, pose.x);
+ * logger.set(x, chassis.getPose().x * mclib::units::inch);
  * logger.set(volts, command);
  * logger.sample();
  * @endcode

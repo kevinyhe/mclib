@@ -80,6 +80,24 @@ void checkLimits(const Trajectory& traj, const TrajectoryConstraints& c) {
   CHECK(time_ok);
 }
 
+double fastestBetween(const Trajectory& traj, double from_in, double to_in) {
+  double fastest = 0;
+  for (double t = 0; t <= traj.duration().s(); t += 0.001) {
+    const TrajectoryState state = traj.sample(QTime::fromBase(t));
+    if (state.distance.in() >= from_in && state.distance.in() <= to_in) {
+      fastest = std::max(fastest, std::fabs(state.velocity.inps()));
+    }
+  }
+  return fastest;
+}
+
+double speedAt(const Trajectory& traj, double distance_in) {
+  for (const TrajectoryState& state : traj.states()) {
+    if (state.distance.in() >= distance_in) return std::fabs(state.velocity.inps());
+  }
+  return NAN;
+}
+
 }  // namespace
 
 int main() {
@@ -169,6 +187,87 @@ int main() {
     c.start_velocity = 100 * inps;
     CHECK_NEAR(Trajectory::generate(straight48(), c).states().front().velocity.inps(),
                48.0, 1e-9);
+  }
+
+  std::printf("-- speed zone: 12 in/s from 18 in to 30 in\n");
+  {
+    TrajectoryConstraints c = limits();
+    c.speed_zones = {SpeedZone{18_in, 30_in, 12 * inps}};
+    const Trajectory traj = Trajectory::generate(straight48(), c);
+    CHECK(!traj.empty());
+    const double inside = fastestBetween(traj, 18, 30);
+    const double before = speedAt(traj, 9.5);
+    const double after = speedAt(traj, 38.5);
+    std::printf("   fastest inside = %.4f in/s, at 9.5 in = %.4f, at 38.5 in = %.4f, "
+                "duration = %.4f s\n",
+                inside, before, after, traj.duration().s());
+    CHECK(inside <= 12 + 1e-6);
+    CHECK_NEAR(inside, 12.0, 1e-6);
+    // Braking at 96 in/s^2 to 12 in/s at 18 in, and speeding up from 12 in/s
+    // at 30 in. The zone edge may land one 0.5 in sample early or late.
+    CHECK(before <= std::sqrt(144 + 2 * 96 * (18 - 9.5)) + 1e-6);
+    CHECK(before >= std::sqrt(144 + 2 * 96 * (17.5 - 9.5)) - 1e-6);
+    CHECK(after <= std::sqrt(144 + 2 * 96 * (38.5 - 30)) + 1e-6);
+    CHECK(after >= std::sqrt(144 + 2 * 96 * (38.5 - 30.5)) - 1e-6);
+    CHECK(traj.duration().s() > 1.5 + 0.5);
+    checkLimits(traj, c);
+  }
+
+  std::printf("-- speed zone narrower than the sample spacing\n");
+  {
+    TrajectoryConstraints c = limits();
+    c.speed_zones = {SpeedZone{24.1_in, 24.3_in, 6 * inps}};
+    const Trajectory traj = Trajectory::generate(straight48(), c);
+    const double inside = fastestBetween(traj, 24.1, 24.3);
+    std::printf("   fastest inside = %.4f in/s\n", inside);
+    CHECK(inside > 0);
+    CHECK(inside <= 6 + 1e-6);
+    checkLimits(traj, c);
+  }
+
+  std::printf("-- overlapping speed zones: the lowest cap wins\n");
+  {
+    TrajectoryConstraints c = limits();
+    c.speed_zones = {SpeedZone{10_in, 30_in, 20 * inps}, SpeedZone{20_in, 25_in, 8 * inps}};
+    const Trajectory traj = Trajectory::generate(straight48(), c);
+    CHECK_NEAR(fastestBetween(traj, 20, 25), 8.0, 1e-6);
+    CHECK_NEAR(fastestBetween(traj, 10, 15), 20.0, 1e-6);
+    checkLimits(traj, c);
+  }
+
+  std::printf("-- speed zone past the end of the path\n");
+  {
+    TrajectoryConstraints c = limits();
+    c.speed_zones = {SpeedZone{40_in, 100_in, 12 * inps}};
+    const Trajectory traj = Trajectory::generate(straight48(), c);
+    CHECK(!traj.empty());
+    CHECK(fastestBetween(traj, 40, 48) <= 12 + 1e-6);
+  }
+
+  std::printf("-- speed zone above max_velocity changes nothing\n");
+  {
+    TrajectoryConstraints c = limits();
+    c.speed_zones = {SpeedZone{10_in, 30_in, 100 * inps}};
+    CHECK_NEAR(Trajectory::generate(straight48(), c).duration().s(),
+               Trajectory::generate(straight48(), limits()).duration().s(), 1e-12);
+  }
+
+  std::printf("-- invalid speed zones give an empty trajectory\n");
+  {
+    const std::vector<SpeedZone> invalid = {
+        SpeedZone{-1_in, 10_in, 12 * inps},
+        SpeedZone{10_in, 10_in, 12 * inps},
+        SpeedZone{20_in, 10_in, 12 * inps},
+        SpeedZone{10_in, 20_in, QVelocity{}},
+        SpeedZone{10_in, 20_in, -12 * inps},
+        SpeedZone{10_in, QLength::fromBase(NAN), 12 * inps},
+        SpeedZone{10_in, 20_in, QVelocity::fromBase(INFINITY)},
+    };
+    for (const SpeedZone& zone : invalid) {
+      TrajectoryConstraints c = limits();
+      c.speed_zones = {SpeedZone{0_in, 5_in, 30 * inps}, zone};
+      CHECK(Trajectory::generate(straight48(), c).empty());
+    }
   }
 
   std::printf("-- S-bend with cornering and wheel limits\n");

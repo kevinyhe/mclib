@@ -10,7 +10,7 @@ Requires the PROS CLI (`pip install pros-cli`) and a PROS 4 project.
 2. In the project directory:
 
 ```sh
-pros c fetch mclib@0.3.0.zip
+pros c fetch mclib@0.4.0.zip
 pros c apply mclib
 ```
 
@@ -23,7 +23,7 @@ current project and records it in `project.pros`.
 
 | Task | Command |
 | --- | --- |
-| Pin a version | `pros c apply mclib@0.3.0` |
+| Pin a version | `pros c apply mclib@0.4.0` |
 | Upgrade | fetch the new zip, then `pros c apply mclib --force-apply` |
 | Remove | `pros c uninstall mclib` |
 
@@ -78,12 +78,15 @@ mclib/
       mclib.hpp
       pid.hpp
       robot_geometry.hpp
+      sync.hpp
+      time.hpp
       utils.hpp
     main.h
   src/
     mclib/
       auton/
       chassis/
+      command/
       device/
       mechanism/
       path/
@@ -92,6 +95,7 @@ mclib/
       control/
       math.cpp
       pid.cpp
+      time.cpp
       utils.cpp
     main.cpp
   tests/
@@ -107,8 +111,9 @@ make test
 ```
 
 `make test` builds each `tests/*.cpp` into its own host binary with `g++` and
-runs it. It does not use PROS or the ARM toolchain. Use `make -j8 test` to build
-in parallel. Binaries go to `bin/tests/`.
+runs it. It compiles against the PROS headers in `include/` but does not link
+PROS or use the ARM toolchain. Use `make -j8 test` to build in parallel.
+Binaries go to `bin/tests/`.
 
 Keep `tests/` outside `src/`. `common.mk` compiles everything under `src/` into
 the library.
@@ -163,6 +168,11 @@ mclib::test::knownBug(
     "getRadius compares the denominator to exactly 0, so angle == -90 returns "
     "~1e15 instead of +infinity");
 ```
+
+Once the bug is fixed, the check prints
+`KNOWN BUG (appears FIXED, update this test)`. Then replace it with a normal
+`CHECK`. This `getRadius()` bug has since been fixed, so the example above now
+prints that line.
 
 ### Host-testable sources
 

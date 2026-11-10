@@ -160,7 +160,7 @@ void ChassisController::cancel() {}
 
 std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
     const path::Trajectory& trajectory, const control::RamseteConfig& config,
-    QTime time_limit, bool exit, QVoltage max_output) {
+    QTime time_limit, bool exit, QVoltage max_output, QLength) {
   ++recorded.calls;
   recorded.samples = trajectory.states().size();
   recorded.first_y_in = trajectory.states().front().y.in();
@@ -173,19 +173,19 @@ std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
   return finished();
 }
 
-std::unique_ptr<Command> ChassisController::makeDriveToCommand(QLength, QTime, bool, QVoltage, QVoltage) {
+std::unique_ptr<Command> ChassisController::makeDriveToCommand(QLength, QTime, bool, QVoltage, QVoltage, QLength) {
   return finished();
 }
 
 std::unique_ptr<Command> ChassisController::makeDriveDistanceCommand(QLength, QTime, bool, QVoltage) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeTurnToHeadingCommand(QAngle, QTime, bool, QVoltage) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(QAngle, QTime, bool, QVoltage, QVoltage) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(QAngle, QTime, bool, QVoltage, QVoltage, QAngle) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool, QLength) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, QLength) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage, QAngle) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeTurnToPointCommand(QLength, QLength, int, QTime, QVoltage) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(QLength, QLength, int, QTime, bool, QVoltage, bool, QVoltage) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLength, int, QAngle, double, QTime, bool, QVoltage, bool, QVoltage) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(QLength, QLength, int, QTime, bool, QVoltage, bool, QVoltage, QLength) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLength, int, QAngle, double, QTime, bool, QVoltage, bool, QVoltage, QLength) { return nullptr; }
 
 }  // namespace mclib

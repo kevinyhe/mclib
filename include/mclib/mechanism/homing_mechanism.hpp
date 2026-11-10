@@ -27,7 +27,8 @@ enum class HomingState {
   Seeking,     ///< Driving toward the hard stop, watching the stop detectors.
   BackingOff,  ///< Stop found, driving away from it before zeroing.
   Homed,       ///< Zero found, position reset callback fired.
-  Failed,      ///< Timed out before any detector fired.
+  Failed,      ///< Timed out, or a current or velocity source returned a
+               ///< non-finite value or a negative current.
 };
 
 /**

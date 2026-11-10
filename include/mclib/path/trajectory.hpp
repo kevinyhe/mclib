@@ -23,9 +23,10 @@
  * ## How the speeds are chosen
  *
  * The path is resampled every `TrajectoryConstraints::spacing`. Each sample
- * gets a speed cap from three limits: `max_velocity`, the cornering limit
- * `sqrt(max_lateral_acceleration / |curvature|)`, and the outer-wheel limit
- * `max_velocity / (1 + |curvature| * track_width / 2)`. A forward pass then
+ * gets a speed cap from four limits: `max_velocity`, the cornering limit
+ * `sqrt(max_lateral_acceleration / |curvature|)`, the outer-wheel limit
+ * `max_velocity / (1 + |curvature| * track_width / 2)`, and any `SpeedZone`
+ * it falls in. A forward pass then
  * limits how fast the speed can rise between samples (`max_acceleration`), and
  * a backward pass limits how fast it can fall (`max_deceleration`). Time comes
  * from the speeds, assuming constant acceleration between samples.
@@ -46,9 +47,29 @@ using units::QTime;
 using units::QVelocity;
 
 /**
+ * @brief A lower top speed for one stretch of the path.
+ *
+ * `start` and `end` are distances along the path from its first point. The
+ * plan slows down before `start`, within `max_deceleration`, so the robot is
+ * at or under `max_velocity` everywhere from `start` to `end`, and speeds back
+ * up after `end`. The slow stretch can begin and end up to one `spacing`
+ * outside the zone.
+ */
+struct SpeedZone {
+  /// @brief Where the zone begins. 0 or more.
+  QLength start{};
+  /// @brief Where the zone ends. More than `start`. Past the end of the path
+  ///        means the zone runs to the end.
+  QLength end{};
+  /// @brief Top speed inside the zone. More than 0.
+  QVelocity max_velocity{};
+};
+
+/**
  * @brief Limits a trajectory is planned against.
  *
- * A zero `max_velocity` or `max_acceleration` gives an empty trajectory.
+ * A zero `max_velocity` or `max_acceleration`, or an invalid `SpeedZone`,
+ * gives an empty trajectory.
  */
 struct TrajectoryConstraints {
   /// @brief Top speed of the robot's centre.
@@ -76,6 +97,9 @@ struct TrajectoryConstraints {
   /// @brief Distance between planned samples. Smaller follows the limits
   ///        more closely and costs more memory. 0 or negative uses 0.5 in.
   QLength spacing = 0.5 * units::inch;
+  /// @brief Stretches of the path with a lower top speed. Zones may overlap;
+  ///        the lowest cap wins.
+  std::vector<SpeedZone> speed_zones;
 };
 
 /**
@@ -123,8 +147,9 @@ class Trajectory {
 
   /**
    * @brief Plan speeds and times along @p path.
-   * @return An empty trajectory when the path is not `valid()` or a required
-   *         limit is zero, negative or not finite.
+   * @return An empty trajectory when the path is not `valid()`, a required
+   *         limit is zero, negative or not finite, or a `SpeedZone` is
+   *         invalid.
    */
   static Trajectory generate(const Path& path,
                              const TrajectoryConstraints& constraints);

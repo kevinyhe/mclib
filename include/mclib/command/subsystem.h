@@ -14,8 +14,7 @@
 class Command;
 
 /**
- * @brief Abstract class for subsystem behaviors. Look at the [annotated intake example](../tutorials/intakeExample.md)
- * for a more in depth solution
+ * @brief Abstract class for subsystem behaviors. See docs/commands.md.
  *
  * @details A Subsystem owns a piece of hardware and, optionally, the default
  * \refitem Command that runs on it whenever nothing else has claimed it. Because
@@ -26,11 +25,11 @@ class Command;
  *
  * ```C
  * // Preferred registration pattern
- * Intake intake{...};
+ * mclib::mechanism::MotorSubsystem intake{...};
  *
  * void initialize() {
  *	intake.setName("intake");
- *	intake.setDefaultCommand(intake.makeDisableCommand());
+ *	intake.setDefaultCommand(intake.makeStopCommand());
  *	intake.registerSelf();
  * }
  * ```
@@ -88,7 +87,7 @@ public:
 	 * left that frame running on freed memory.
 	 *
 	 * ```C
-	 * intake.setDefaultCommand(intake.makeDisableCommand());
+	 * intake.setDefaultCommand(intake.makeStopCommand());
 	 * ```
 	 *
 	 * @param command The command to own and run whenever nothing else requires
