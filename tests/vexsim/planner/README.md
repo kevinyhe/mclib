@@ -86,6 +86,17 @@ or its round heading knob on the field, or type the values. A wall reset
 must be the last step. On the open floor there are no walls, so it locks
 the motors to make them stall.
 
+On a game field the robot pushes on the real wall, and `wallReset()` only
+counts a stall when the motors draw the stall current and turn slower than
+5 RPM. At the step's defaults, 6 V and 2500 mA, the Override robot's wheels
+slip on the tiles at about 70 RPM and draw 2.05 A a motor, so the wall is
+never found. Lower the step's Max voltage until the wheels stop, and set
+the stall current under what the motors draw then: 3 V and 1000 mA work for
+that robot. [override_wall_reset.json](examples/override_wall_reset.json)
+shows it. A wall fixes the heading and the coordinate across it. It says
+nothing about the coordinate along it, so set that one to what odometry
+already has.
+
 **Wait** does nothing for its time, 10 ms to 120 s, and exports as
 `pros::delay()`. The drive stays as the last step left it. Use it to wait
 for the Driver Controlled Period before a Match Load.
@@ -562,6 +573,12 @@ project on another computer.
 
 ## Examples
 
+Open one from the Examples menu. Between them they use every step type,
+drivetrain, odometry setup, lift height and action time, which
+`test_planner.py` checks, and the numbers in their descriptions were
+measured in the simulator. The game examples are all on the Override
+field.
+
 | File | Shows |
 | --- | --- |
 | [s_curve.json](examples/s_curve.json) | one path, all automatic |
@@ -569,11 +586,19 @@ project on another computer.
 | [out_and_back.json](examples/out_and_back.json) | a reverse section after a forward one |
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and run again to compare |
+| [points_arcs_and_swing.json](examples/points_arcs_and_swing.json) | the steps that are not paths: drive to a point, turn to face a point, an arc, a swing turn, a reverse arc and backing up to a point |
+| [keep_moving.json](examples/keep_moving.json) | Keep moving into the next step on a drive, an arc and a point: 6.85 s against 9.48 s with every step stopping, with a voltage cap and a Min voltage |
+| [path_settings_and_gains.json](examples/path_settings_and_gains.json) | the S-curve with a higher speed limit, acceleration and cornering, and changed turn gains, with what each one bought |
+| [worn_field.json](examples/worn_field.json) | the S-curve at 60% battery and 70% grip: the robot slides 15.7 in off the path and runs into the time limit |
+| [no_inertial_sensor.json](examples/no_inertial_sensor.json) | a square with heading from the drive encoders: every 90° turn really turns about 70°; switch Heading to the inertial sensor and run again to compare |
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal: red 20, and 2 of the 6 Pin halves the Autonomous Win Point needs. Turning the bottom Toggle as well only starts at 18 s, past the end of the autonomous |
 | [override_five_halves.json](examples/override_five_halves.json) | both Toggles, the red preload and a yellow stack on the red left Goal, and a yellow stack on the neutral bottom Goal, with chained paths and lift and claw actions during them and one turn in place: red 30 at 15 s and 50 (5 Pin halves) at the end, 16.8 s. A start 0.25 in off can lose a stack |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.1 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
 | [override_roller.json](examples/override_roller.json) | turn the left Toggle two faces with the roller, blue then red, pushing back at 3 V; 10 points, for the top half of the neutral left Goal's yellow Pin, and the Autonomous Bonus |
 | [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall, turn at 6 V and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 26.5 s. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin |
+| [override_center_goal.json](examples/override_center_goal.json) | grip the blue/red stack at (0, -23.5) and set it on the Center Goal, lifting during the drive; 5 points each for red and blue |
+| [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.94 in tall at Top |
+| [override_wall_reset.json](examples/override_wall_reset.json) | a wall reset on red's wall at 3 V and 1000 mA; at the default 6 V the wheels slip and the wall is never found |
 
 ## Files
 

@@ -1,0 +1,19 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: a stack onto the Center Goal",
+  "description": "Drives the bite straight onto the blue/red stack at (0, -23.5), closes the claw on its Cup and Pin, and carries it 24.5 in to the Center Goal with the lift rising to Over the Center Goal from the start of the drive. Then the lift comes down to On the Center Goal, the claw opens, and the robot backs away and lowers the lift. The stack ends standing on the Center Goal's Pin, and the simulator scores it 5 for red and 5 for blue. 7.1 s.",
+  "field": "override",
+  "preload": "none",
+  "robot": {"preset": "override_cascade", "tracking": "horizontal"},
+  "slew": {"speed_up_v": 0.3, "slow_down_v": 1},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
+  "steps": [
+    {"type": "drive", "note": "the bite onto the blue/red stack straight ahead", "distance": 32.5},
+    {"type": "claw", "note": "close on the Cup and the Pin", "claw_preset": "closed"},
+    {"type": "drive", "note": "to the Center Goal, lifting on the way", "distance": 24.5, "timeout_ms": 2000, "actions": [{"when": "start", "mechanism": "lift", "preset": "over_center_goal"}]},
+    {"type": "lift", "note": "set the Cup's rim on the Goal's Pin", "lift_preset": "on_center_goal"},
+    {"type": "claw", "claw_preset": "open"},
+    {"type": "drive", "note": "back away, then lower the lift", "distance": -8, "actions": [{"when": "time", "value": 300, "mechanism": "lift", "preset": "down"}]}
+  ]
+}

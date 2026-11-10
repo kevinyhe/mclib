@@ -1,0 +1,17 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Points, arcs and a swing turn",
+  "description": "Six mclib motions that are not paths, on a four-motor base: drive to a point, turn to face a point, a quarter circle, a swing turn on one side of the drive, a quarter circle backward, and backing up to a point. In the simulator the two point steps end 0.3 and 0.5 in off and the turns 0.6° and 2.1° off. The arcs end 2.3 in and about 2° off: an arc stops when the robot faces the heading, so its end position is wherever the circle took it. 12.2 s.",
+  "field": "open",
+  "robot": {"preset": "four_motor_450", "tracking": "two"},
+  "start": {"x": -36, "y": -48, "heading": 0},
+  "steps": [
+    {"type": "point", "note": "forward to a point", "x": -24, "y": -12},
+    {"type": "turn_to_point", "note": "face a point to the right", "x": 12, "y": -12},
+    {"type": "arc", "note": "a quarter circle to the right", "heading": 180, "radius": 24},
+    {"type": "swing", "note": "turn on one side of the drive", "heading": 270, "direction": 1},
+    {"type": "reverse_arc", "note": "back up around a quarter circle", "heading": 180, "radius": 24},
+    {"type": "point", "note": "back up to a point", "x": 24, "y": 24, "direction": -1}
+  ]
+}

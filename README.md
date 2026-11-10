@@ -98,6 +98,10 @@ void opcontrol() {
 }
 ```
 
+[examples/](examples/README.md) has a complete robot program for each part
+of the library: tracking wheels, every motion, trajectories, mechanisms,
+commands, devices and telemetry.
+
 ## Building
 
 Requires the PROS CLI and the Arm GNU toolchain (`arm-none-eabi-g++`).
@@ -107,9 +111,10 @@ make              # build the PROS project
 make library      # build bin/mclib.a
 make template     # package mclib@<version>.zip
 make test         # build and run the host test suite
+make examples     # compile every program in examples/
 ```
 
-`make test` needs only a host `g++`.
+`make test` and `make examples` need only a host `g++`.
 
 ## Requirements
 

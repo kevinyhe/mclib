@@ -31,7 +31,8 @@
  * Create the logger with a 10 ms period, and drain it with a
  * `telemetry::FlushTask` (or `flush()` afterwards). Give the robot room: the
  * drive routine goes forward and back at each voltage, so it ends near where
- * it started, but each run covers up to about 2 ft at 9 V on a fast base.
+ * it started, but each 1.2 s run covers up to about 5 ft at 9 V on a fast
+ * base.
  *
  * ```cpp
  * static mclib::telemetry::RowBuffer<512> buffer;

@@ -526,9 +526,25 @@ mclib::HolonomicControllerConfig config{
 };
 mclib::HolonomicController controller(drive, config);
 
+// A holonomic chassis is not a differential drive, so startOdometry() with no
+// arguments has no drive encoders to read and returns false. Give it two
+// tracking wheels.
+mclib::device::Rotation vertical_tracker(-6);
+mclib::device::Rotation horizontal_tracker(7);
+const mclib::units::TrackingWheel vertical_wheel{
+    mclib::units::Wheel::fromDiameter(2.0_in), 0.0_in, 1.0};
+const mclib::units::TrackingWheel horizontal_wheel{
+    mclib::units::Wheel::fromDiameter(2.0_in), -3.5_in, 1.0};
+
 void initialize() {
+  mclib::control::OdometrySetup odometry;
+  odometry.heading_deg = [] { return drive.headingDeg(); };
+  odometry.vertical = mclib::control::TrackingWheelSensor{
+      mclib::control::encoderReader(vertical_tracker), vertical_wheel};
+  odometry.horizontal = mclib::control::TrackingWheelSensor{
+      mclib::control::encoderReader(horizontal_tracker), horizontal_wheel};
+  mclib::control::startOdometry(odometry);
   drive.setPose({0.0, 0.0, 0.0});
-  mclib::control::startOdometry();
   mclib::control::DriveCurveConfig curve;
   curve.gain = 10.0;
   controller.setDefaultCommand(controller.makeDriveCommand(master, curve));
@@ -542,13 +558,19 @@ std::unique_ptr<Command> back_home =
     controller.makeMoveToPointCommand(0.0 * mclib::units::inch, 0.0 * mclib::units::inch,
                                       3.0 * mclib::units::second);
 
-void autonomous() {
-  to_corner->schedule();
-  while (to_corner->scheduled()) {
+// A scheduled command only moves the robot while something calls
+// CommandScheduler::run().
+void runToEnd(Command& command) {
+  command.schedule();
+  while (command.scheduled()) {
     CommandScheduler::run();
     pros::delay(10);
   }
-  back_home->schedule();
+}
+
+void autonomous() {
+  runToEnd(*to_corner);
+  runToEnd(*back_home);
 }
 ```
 
@@ -590,7 +612,9 @@ mclib::path::TrajectoryConstraints limits;
 limits.max_velocity = 30_in / 1_s;
 limits.max_acceleration = 60_in / (1_s * 1_s);
 const mclib::path::Trajectory traj = mclib::path::Trajectory::generate(route, limits);  // reversed = false
-controller.makeFollowTrajectoryCommand(traj, 90_deg, 5_s)->schedule();
+// The scheduler does not own a command, so keep it alive while it runs.
+static std::unique_ptr<Command> follow = controller.makeFollowTrajectoryCommand(traj, 90_deg, 5_s);
+runToEnd(*follow);
 ```
 
 Measure each feedforward axis on its own, as in

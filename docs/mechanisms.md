@@ -224,16 +224,18 @@ All command factories finish on their own:
 ```cpp
 CommandController primary(mclib::device::ControllerId::Master);
 
-std::unique_ptr<Command> wings_in;
+std::unique_ptr<Command> wings_idle;
 std::unique_ptr<Command> wings_toggle;
 std::unique_ptr<Command> wings_pulse;
 
 void initialize() {
-  wings_in = wings.makeRetractCommand();
+  // The default command runs again whenever nothing else holds the wings. A
+  // retract command there would pull them back in right after every toggle.
+  wings_idle = wings.idleCommand();
   wings_toggle = wings.makeToggleCommand();
   wings_pulse = wings.makeExtendForCommand(500 * millisecond);
 
-  CommandScheduler::registerSubsystem(&wings, wings_in.get());
+  CommandScheduler::registerSubsystem(&wings, wings_idle.get());
 
   primary.getTrigger(mclib::device::DigitalButton::L1)
       ->onTrue(wings_toggle.get());
@@ -906,7 +908,7 @@ ml::mechanism::MechanismManager mechanisms;
 
 void initialize() {
   mechanisms.add(&flywheel, flywheel.makeStopCommand(), "flywheel");
-  mechanisms.add(&wings, wings.makeRetractCommand(), "wings");
+  mechanisms.add(&wings, wings.idleCommand(), "wings");
 
   mechanisms.registerAll();
 }

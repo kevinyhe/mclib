@@ -1,0 +1,16 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Low battery and worn tiles",
+  "description": "The S-curve example's path on the 4 in wheel base with Battery charge 60% and Floor grip 70%. At full charge and grip the path takes 4.63 s and ends 0.5 in off. Here the robot slides 15.7 in off the path and finishes the plan 5.1 in to the side, and driving back in runs into the 7.6 s time limit, 0.9 in and 26° off. The grip does this, not the battery: at 60% charge and full grip the path still takes 4.63 s. Set these two to see whether a routine survives a worn field before you trust it.",
+  "field": "open",
+  "robot": {"preset": "speed_base", "tracking": "two"},
+  "conditions": {"battery_percent": 60, "grip_percent": 70, "noise_seed": 7},
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 24, "y": -12}, {"x": 0, "y": 24}, {"x": -24, "y": 56}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": null, "reverse": false},
+                  {"speed_percent": null, "reverse": false}]},
+    {"type": "turn", "heading": 90}
+  ]
+}

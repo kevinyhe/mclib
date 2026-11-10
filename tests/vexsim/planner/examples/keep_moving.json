@@ -1,0 +1,15 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Keep moving between steps",
+  "description": "Three steps with Keep moving into the next step on, then a boomerang that stops. The run takes 6.85 s; with every step stopping it takes 9.48 s. The drive is capped at 6 V so it hands off at 42 in/s. At 12 V it hands off at 76 in/s and the arc runs 7.2 in wide and 29° past its heading. The arc has a 4 V Min voltage, the least the drive gets until the handoff. The cost is accuracy between steps: the arc hands off 2.8 in and 9.4° from its target. The last step still ends 0.2 in off.",
+  "field": "open",
+  "robot": {"preset": "six_motor_450", "tracking": "two"},
+  "start": {"x": -36, "y": -48, "heading": 0},
+  "steps": [
+    {"type": "drive", "note": "at 6 V, so the arc starts at a speed it can hold", "distance": 24, "volts": 6, "chain": true},
+    {"type": "arc", "note": "never under 4 V, so it does not slow to a crawl at the end", "heading": 90, "radius": 24, "chain": true, "min_volts": 4},
+    {"type": "point", "x": 24, "y": 12, "chain": true},
+    {"type": "boomerang", "note": "the last step stops", "x": 48, "y": 36, "heading": 0, "lead": 0.5}
+  ]
+}

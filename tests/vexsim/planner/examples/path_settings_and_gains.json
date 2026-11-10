@@ -1,0 +1,17 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Path settings and turn gains",
+  "description": "The S-curve with the path settings raised and the turn gains changed, then a half turn. Speed limit 90%, Acceleration 80 in/s² and Cornering 70 in/s² plan the path in 3.22 s, down from 3.62 s at the defaults of 70%, 60 and 60, and the step takes 4.07 s, down from 4.23 s, still ending 0.1 in off. Raising them to 100%, 100 and 80 plans 2.94 s, but the robot runs 11.5 in off the plan and the step takes 4.16 s and ends 0.8 in off, so more is not faster. Turn P 0.5 and D 3 end the half turn 0.6° off; the default 0.3 and 1.5 end it 1.3° off in the same time.",
+  "field": "open",
+  "robot": {"preset": "six_motor_450", "tracking": "two"},
+  "path_defaults": {"speed_percent": 90, "accel_ips2": 80, "cornering_ips2": 70},
+  "gains": {"turn_kp": 0.5, "turn_kd": 3},
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 24, "y": -12}, {"x": 0, "y": 24}, {"x": -24, "y": 56}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": null, "reverse": false},
+                  {"speed_percent": null, "reverse": false}]},
+    {"type": "turn", "heading": 180}
+  ]
+}

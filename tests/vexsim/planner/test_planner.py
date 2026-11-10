@@ -4,6 +4,7 @@ The engine tests compile mclib once (1 to 2 minutes). Set
 MCLIB_PLANNER_CACHE to a folder to keep that build between test runs, and
 VEXSIM_PATH to the vexsim checkout (default: ../vexsim next to mclib).
 """
+import concurrent.futures
 import copy
 import json
 import math
@@ -21,7 +22,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 from export_cpp import export, exported_helpers  # noqa: E402
-from project import (DEFAULT_PROJECT, ProjectError, carries_speed, config, default_project,  # noqa: E402
+from project import (ACTION_TIMES, CLAW_PRESETS, DEFAULT_PROJECT, HEADING_SOURCES, LIFT_PRESETS,  # noqa: E402
+                     PRELOADS, PRESETS, STEP_TYPES, TRACKING, ProjectError, carries_speed, config, default_project,
                      step_time_limit, strict_json, validate_project)
 
 VEXSIM = Path(os.environ.get("VEXSIM_PATH", ROOT.parent / "vexsim")).resolve()
@@ -137,6 +139,47 @@ class ProjectTests(unittest.TestCase):
         for path in sorted((HERE / "examples").glob("*.json")):
             with self.subTest(path.name):
                 validate_project(example(path.stem))
+
+    def test_between_them_the_examples_use_every_step_type_and_every_choice(self):
+        projects = [validate_project(example(path.stem)) for path in sorted((HERE / "examples").glob("*.json"))]
+        steps = [step for project in projects for step in project["steps"]]
+        actions = [action for step in steps for action in step["actions"]]
+        sections = [section for step in steps for section in step.get("sections", [])]
+        points = [point for step in steps for point in step.get("points", [])]
+        defaults = validate_project(dict(steps=[dict(type="turn", heading=90)]))
+        choices = {
+            "step type": (STEP_TYPES, {step["type"] for step in steps}),
+            "drivetrain": (PRESETS, {project["robot"]["preset"] for project in projects}),
+            "odometry sensors": (TRACKING, {project["robot"]["tracking"] for project in projects}),
+            "heading source": (HEADING_SOURCES, {project["robot"]["heading_source"] for project in projects}),
+            "preload": (PRELOADS, {project["preload"] for project in projects}),
+            "lift position": (LIFT_PRESETS, {step["lift_preset"] for step in steps if step["type"] == "lift"}
+                              | {action["preset"] for action in actions if action["mechanism"] == "lift"}),
+            "claw position": (CLAW_PRESETS, {step["claw_preset"] for step in steps if step["type"] == "claw"}
+                              | {action["preset"] for action in actions if action["mechanism"] == "claw"}),
+            "action time": (ACTION_TIMES, {action["when"] for action in actions}),
+        }
+        for name, (every, used) in choices.items():
+            with self.subTest(name):
+                self.assertEqual(set(every) - used, set())
+        self.assertEqual({project["field"] for project in projects}, {"override", "open"})
+        options = {
+            "a step that keeps moving into the next": any(step["chain"] for step in steps),
+            "a min voltage": any(step.get("min_volts") is not None for step in steps),
+            "a voltage cap": any(step["volts"] < 12 for step in steps),
+            "a time limit": any(step["timeout_ms"] not in (None, 4000) for step in steps if step["type"] == "drive"),
+            "a backward point": any(step.get("direction") == -1 for step in steps),
+            "a reversed path section": any(section["reverse"] for section in sections),
+            "a section speed limit": any(section["speed_percent"] is not None for section in sections),
+            "a point with its own heading": any(point["heading"] is not None for point in points),
+            "a curve handle": any(point["handle_in"] is not None or point["handle_out"] is not None for point in points),
+            "a wall reset stall current": any(step.get("current_ma") not in (None, 2500) for step in steps),
+            "conditions": any(project["conditions"] != defaults["conditions"] for project in projects),
+            "gains": any(project["gains"] != defaults["gains"] for project in projects),
+            "speed-up and slow-down limits": any(project["slew"] != defaults["slew"] for project in projects),
+            "path settings": any(project["path_defaults"] != defaults["path_defaults"] for project in projects),
+        }
+        self.assertEqual([name for name, used in options.items() if not used], [])
 
     def test_errors_name_the_step_and_the_field(self):
         cases = [
@@ -1041,6 +1084,116 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(second["skipped_because"], "Not run: step 1 broke a rule, so the run stopped there.")
         self.assertEqual(result["summary"]["broke_rule_in_step"], 0)
         self.assertEqual(result["autonomous"]["rules"]["motors_w"]["passed"], False)
+
+    def run_together(self, projects):
+        def run(item):
+            name, project = item
+            folder = self.scratch / f"together-{name}"
+            folder.mkdir()
+            (folder / "project.json").write_text(json.dumps(project))
+            done = subprocess.run([sys.executable, "-B", str(HERE / "engine.py"), "run", "--project",
+                                   str(folder / "project.json"), "--output", str(folder / "run"),
+                                   "--vexsim", str(VEXSIM), "--cache", str(self.cache)],
+                                  cwd=ROOT, capture_output=True, text=True, timeout=900)
+            self.assertEqual(done.returncode, 0, f"{name}: {done.stderr[-3000:]}")
+            return name, strict_json((folder / "run" / "result.json").read_text())
+
+        first, *rest = projects.items()
+        results = dict([run(first)])
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(rest)) as pool:
+            results.update(pool.map(run, rest))
+        return results
+
+    def test_16_the_examples_that_show_one_feature_do_what_their_descriptions_say(self):
+        names = ("points_arcs_and_swing", "keep_moving", "path_settings_and_gains", "worn_field", "no_inertial_sensor",
+                 "override_wall_reset", "override_center_goal", "override_lift_heights")
+        wall_reset_at_its_defaults = dict(example("override_wall_reset"), start=dict(x=-37, y=-58, heading=180),
+                                          steps=[dict(type="wall_reset", x=-37, y=-62.7, heading=180)])
+        results = self.run_together(dict({name: example(name) for name in names},
+                                         wall_reset_at_its_defaults=wall_reset_at_its_defaults))
+
+        def messages(step):
+            return [item["message"] for item in step["readings"]]
+
+        for name in names:
+            with self.subTest(name, check="every step ran"):
+                self.assertTrue(results[name]["legal"])
+                self.assertEqual(results[name]["summary"]["skipped_steps"], 0)
+
+        with self.subTest("points_arcs_and_swing"):
+            steps = results["points_arcs_and_swing"]["steps"]
+            self.assertEqual([step["type"] for step in steps],
+                             ["point", "turn_to_point", "arc", "swing", "reverse_arc", "point"])
+            self.assertLess(max(steps[index]["position_error_in"] for index in (0, 5)), 1.0)
+            self.assertLess(max(steps[index]["position_error_in"] for index in (2, 4)), 4.0)
+            self.assertLess(max(steps[index]["heading_error_deg"] for index in (1, 2, 3, 4)), 4.0)
+
+        with self.subTest("keep_moving"):
+            result = results["keep_moving"]
+            for step in result["steps"][:3]:
+                self.assertTrue(any(line.startswith("Kept moving into step") for line in step["info"]), step["info"])
+            self.assertLess(result["steps"][3]["position_error_in"], 1.0)
+            self.assertLess(result["summary"]["simulated_s"], 8.0)
+
+        with self.subTest("path_settings_and_gains"):
+            path, turn = results["path_settings_and_gains"]["steps"]
+            self.assertEqual(path["motion_result"], "Reached")
+            self.assertLess(path["position_error_in"], 0.5)
+            self.assertLess(turn["heading_error_deg"], 1.0)
+
+        with self.subTest("worn_field"):
+            path = results["worn_field"]["steps"][0]
+            self.assertEqual(path["motion_result"], "TimedOut")
+            self.assertTrue(any("to the side of the end point" in note for note in path["notes"]), path["notes"])
+
+        with self.subTest("no_inertial_sensor"):
+            turns = results["no_inertial_sensor"]["steps"][1::2]
+            off = [turn["heading_error_deg"] for turn in turns]
+            self.assertEqual(off, sorted(off))
+            self.assertGreater(off[0], 15.0)
+            self.assertGreater(off[-1], 60.0)
+            self.assertLess(abs(math.remainder(turns[0]["estimated_pose_at_exit"][2] - 90, 360)), 3.0)
+
+        with self.subTest("override_wall_reset"):
+            steps = results["override_wall_reset"]["steps"]
+            self.assertEqual([contact["element"] for step in steps[:4] for contact in step["contacts"]], [])
+            self.assertEqual({contact["element"] for contact in steps[4]["contacts"]}, {"the red Alliance Station wall"})
+            self.assertIn("Detected the wall (motor stall).", messages(steps[4]))
+            self.assertIn("Odometry was set to (-37, -62.7) facing 180°.", messages(steps[4]))
+            self.assertLess(math.dist(steps[4]["true_pose"][:2], (-37, -62.7)), 0.5)
+
+        with self.subTest("the same wall reset at 6 V and 2500 mA"):
+            step = results["wall_reset_at_its_defaults"]["steps"][0]
+            self.assertEqual({contact["element"] for contact in step["contacts"]}, {"the red Alliance Station wall"})
+            self.assertIn("Did not detect the wall: the motor current never stayed above 2500 mA.", messages(step))
+            self.assertIn("Odometry was not set to the requested pose.", messages(step))
+
+        with self.subTest("override_center_goal"):
+            result = results["override_center_goal"]
+            info = [line for row in result["steps"] for line in row["info"]]
+            self.assertEqual(len([line for line in info if line.startswith("Gripped a Cup with a blue/red Pin")]), 1, info)
+            self.assertEqual(len([line for line in info if line.startswith("Dropped")]), 1, info)
+
+            def on_the_goal(pose):
+                return math.hypot(pose[0], pose[1]) < 0.3
+            already_there = {str(piece["id"]) for piece in result["pieces"] if on_the_goal(piece["pose"])}
+            last_seen = {}
+            for frame in result["trace"]:
+                last_seen.update({key: pose for key, pose in frame["pieces"].items() if pose})
+            set_down = [pose for key, pose in last_seen.items() if key not in already_there and on_the_goal(pose)]
+            self.assertEqual(len(set_down), 2, set_down)
+            for pose in set_down:
+                self.assertGreater(pose[5], math.cos(math.radians(2.0)), pose)
+            self.assertIsNone(result["trace"][-1]["holding"])
+            self.assertEqual((result["score"]["red"]["total"], result["score"]["blue"]["total"]), (5, 5))
+
+        with self.subTest("override_lift_heights"):
+            result = results["override_lift_heights"]
+            self.assertEqual([step["move_result"] for step in result["steps"]], ["Reached the preset"] * 9)
+            tallest = result["autonomous"]["rules"]["largest_in"]
+            self.assertTrue(tallest["passed"])
+            self.assertGreater(tallest["height"], 49.0)
+            self.assertLessEqual(tallest["height"], 50.0)
 
 
 if __name__ == "__main__":

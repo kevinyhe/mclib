@@ -55,7 +55,7 @@ namespace mechanism {
  *
  * void initialize() {
  *   mechanisms.add(&flywheel, flywheel.makeStopCommand(), "flywheel");
- *   mechanisms.add(&wings, wings.makeRetractCommand(), "wings");
+ *   mechanisms.add(&wings, wings.idleCommand(), "wings");
  *   mechanisms.registerAll();
  * }
  * @endcode

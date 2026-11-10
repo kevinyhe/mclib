@@ -1,0 +1,19 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "A square with no inertial sensor",
+  "description": "A 36 in square on a four-motor 200 RPM base with no inertial sensor and no tracking wheels: position and heading both come from the drive encoders. The wheels scrub sideways in a turn, so each 90° turn really turns about 70° while odometry reads 90°. The four turns end 19.8°, 37.9°, 56.1° and 74.1° off and the last drive ends 36.3 in from its target. Change Heading to the inertial sensor and run again: every turn ends within 2.5° and every drive within 0.9 in.",
+  "field": "open",
+  "robot": {"preset": "four_motor_200", "tracking": "drive", "heading_source": "encoders"},
+  "start": {"x": -18, "y": -18, "heading": 0},
+  "steps": [
+    {"type": "drive", "distance": 36},
+    {"type": "turn", "heading": 90},
+    {"type": "drive", "distance": 36},
+    {"type": "turn", "heading": 180},
+    {"type": "drive", "distance": 36},
+    {"type": "turn", "heading": 270},
+    {"type": "drive", "distance": 36},
+    {"type": "turn", "heading": 0}
+  ]
+}

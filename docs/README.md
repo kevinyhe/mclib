@@ -14,3 +14,4 @@
 | [Telemetry and time](telemetry.md) | CSV logging, serial output, clock |
 | [Devices](devices.md) | Device wrappers |
 | [Simulator](simulator.md) | Physics simulator and path planner |
+| [Examples](../examples/README.md) | A complete robot program for each part of the library |

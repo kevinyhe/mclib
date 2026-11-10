@@ -105,7 +105,10 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual({item["id"] for item in config["examples"]},
                          {"s_curve", "speed_zones", "out_and_back", "mixed_steps", "wheel_slip", "override_autonomous",
-                          "override_stack_to_goal", "override_roller", "override_match_load", "override_five_halves"})
+                          "override_stack_to_goal", "override_roller", "override_match_load", "override_five_halves",
+                          "points_arcs_and_swing", "keep_moving", "path_settings_and_gains", "worn_field",
+                          "no_inertial_sensor", "override_wall_reset", "override_center_goal",
+                          "override_lift_heights"})
         status, project = self.json("GET", "/api/examples/s_curve")
         self.assertEqual(status, 200)
         self.assertNotIn("description", project)
