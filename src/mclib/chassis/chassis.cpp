@@ -139,6 +139,14 @@ void Chassis::setPose(const Pose2D& pose) {
   // too, or the two frames drift apart by exactly the offset introduced here
   // and every subsequent moveToPoint aims wrong.
   setHeadingDeg(wrapAngle(pose.theta) * 180.0 / kPi);
+  // driveTo() and correctHeading() steer to the held heading, which is in the
+  // IMU's frame too. Left alone it still names the heading from before the
+  // jump, and the next driveTo() turns back to it while it drives. Read back,
+  // not assumed: an IMU that is still calibrating ignores the write.
+  const double held_heading_deg = headingDeg();
+  if (std::isfinite(held_heading_deg)) {
+    control::robotState().setCorrectAngleDeg(held_heading_deg);
+  }
   control::resetOdometry(pose);
 }
 
