@@ -41,6 +41,8 @@ struct MotionLog {
   int ends = 0;
   bool interrupted = false;
   double max_volts = 0;
+  int direction = 0;
+  bool arc_reversed = false;
 } motion;
 
 int executes_to_finish = 0;
@@ -201,6 +203,33 @@ int main() {
     CHECK(!motion.interrupted);
   }
 
+  std::printf("-- reversed(false) puts a reversed step back to forward\n");
+  {
+    reset(1);
+    Routine routine(chassis);
+    Routine::MotionStep step = routine.moveToPoint(Point{0_in, 24_in}, 1, 2_s);
+    step.reversed();
+    CHECK_EQ(motion.direction, -1);
+    step.reversed(false);
+    CHECK_EQ(motion.direction, 1);
+    step.withDirection(-1).reversed(false);
+    CHECK_EQ(motion.direction, 1);
+  }
+
+  std::printf("-- reversed() sets an arc step's reverse flag, whichever call made it\n");
+  {
+    reset(1);
+    Routine routine(chassis);
+    Routine::MotionStep reverse_arc = routine.curveCircleReverse(0_deg, 24_in, 2_s);
+    CHECK(motion.arc_reversed);
+    reverse_arc.reversed(false);
+    CHECK(!motion.arc_reversed);
+    Routine::MotionStep arc = routine.curveCircle(90_deg, 24_in, 2_s);
+    CHECK(!motion.arc_reversed);
+    arc.reversed();
+    CHECK(motion.arc_reversed);
+  }
+
   return mclib::test::summary("routine_until");
 }
 
@@ -221,8 +250,9 @@ void ChassisController::driveDistance(QLength, QTime, bool, QVoltage) {}
 void ChassisController::cancel() {}
 
 std::unique_ptr<Command> ChassisController::makeMoveToPointCommand(
-    QLength, QLength, int, QTime, bool, QVoltage max_output, bool, QVoltage, QLength) {
+    QLength, QLength, int direction, QTime, bool, QVoltage max_output, bool, QVoltage, QLength) {
   motion.max_volts = max_output.volts();
+  motion.direction = direction;
   return std::make_unique<ScriptedMotion>();
 }
 
@@ -231,7 +261,11 @@ std::unique_ptr<Command> ChassisController::makeDriveToCommand(QLength, QTime, b
 std::unique_ptr<Command> ChassisController::makeDriveDistanceCommand(QLength, QTime, bool, QVoltage) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeTurnToHeadingCommand(QAngle, QTime, bool, QVoltage) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeTurnToAngleCommand(QAngle, QTime, bool, QVoltage, QVoltage, QAngle) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool, QLength) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(
+    QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool reverse, QLength) {
+  motion.arc_reversed = reverse;
+  return std::make_unique<ScriptedMotion>();
+}
 std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage, QAngle) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity) { return nullptr; }
