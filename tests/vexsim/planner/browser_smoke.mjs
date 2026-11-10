@@ -1,10 +1,11 @@
 // Drives the real planner page in headless Chromium against a running
-// server.py: place points, plan, run, play back, compare, export, mirror,
+// server.py: place points, plan, run, play back, compare, export into a robot
+// project folder, mirror,
 // run the Override example with its lift, claw, Toggle roller, score and 3D field, and
 // run the Match Load example past 15 s.
 // Installs nothing; pass an existing Playwright and browser.
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -45,6 +46,11 @@ try {
     return points.map((p) => ({ x: box.left + (p.x - view.x) * view.scale + box.width / 2, y: box.top + box.height / 2 - (p.y - view.y) * view.scale }));
   }, fieldPoints);
   const fieldHint = () => page.locator("#field-hint").innerText();
+  const exportedFile = async (tab) => {
+    await page.locator("#cpp-tabs button", { hasText: tab }).click();
+    return page.locator("#cpp-code").inputValue();
+  };
+  const closeExport = () => page.locator("#cpp-dialog .dialog-foot button[data-close]").click();
 
   async function fieldPoint(x, y) {
     const box = await page.locator("#field").boundingBox();
@@ -244,15 +250,63 @@ try {
 
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();
+  const exportedFunction = (await page.locator("#cpp-title").innerText()).match(/^Export (run\w+)\(\)$/)[1];
+  const exportTabs = await page.locator("#cpp-tabs button").allInnerTexts();
+  assert.deepEqual(exportTabs.slice(1), ["robot_drive.hpp", "path_helpers.hpp", "Add to main.cpp"]);
+  const routinePath = `src/autons/${exportTabs[0]}`;
   const code = await page.locator("#cpp-code").inputValue();
-  assert.match(code, /void autonomous\(\)/);
+  assert(code.includes(`\nvoid ${exportedFunction}() {\n`));
+  assert.doesNotMatch(code, /void autonomous\(\)/);
   assert.match(code, /path_planner::planSections/);
   assert.match(code, /path_planner::followSections/);
   assert.match(code, /turnToAngle|turnTo/);
+  assert((await page.locator("#cpp-about").innerText()).startsWith(`${routinePath}. `));
   assert.match(await page.locator("#cpp-note").innerText(), /measured on the simulated robot/);
-  pass("Export C++ shows autonomous() with the same path helpers the simulator ran");
+  assert.match(await exportedFile("path_helpers.hpp"), /namespace path_planner \{/);
+  assert.match(await exportedFile("robot_drive.hpp"), /follow\.feedforward\.kS = [\d.]+_V;/);
+  pass(`Export C++ shows ${exportedFunction}() in its own file, beside the path helpers the simulator ran and the robot's drive numbers`);
   await shot("07-export");
-  await page.locator("#cpp-dialog .dialog-foot button.primary").click();
+
+  const robotProject = `${output}/robot-project`;
+  await rm(robotProject, { recursive: true, force: true });
+  await mkdir(`${robotProject}/src`, { recursive: true });
+  await page.locator("#cpp-folder").fill(robotProject);
+  expectRefusal = true;
+  await page.locator("#cpp-write").click();
+  await page.locator("#cpp-written.bad").waitFor();
+  assert.match(await page.locator("#cpp-written").innerText(), /^Nothing was written\. .* has no project\.pros, so it is not a PROS project\.$/);
+  assert(await page.locator("#cpp-write").isEnabled());
+  expectRefusal = false;
+  pass("Export C++ refuses to write into a folder that is not a PROS project, and says why");
+
+  await writeFile(`${robotProject}/project.pros`, "{}");
+  await page.locator("#cpp-write").click();
+  await page.locator("#cpp-written.ok").waitFor();
+  let written = await page.locator("#cpp-written").innerText();
+  for (const file of [routinePath, "include/planner/robot_drive.hpp", "include/planner/path_helpers.hpp"]) {
+    assert(written.includes(`${file}: new`), written);
+  }
+  assert.match(written, /One step left: add the two lines under “Add to main\.cpp” to src\/main\.cpp/);
+  assert.equal(await page.locator('#cpp-tabs button[aria-selected="true"]').innerText(), "Add to main.cpp");
+  const mainLines = await page.locator("#cpp-code").inputValue();
+  assert(mainLines.includes(`\nvoid ${exportedFunction}();\n`));
+  assert.match(mainLines, /\nselector\.add\("[^"\n]+", run\w+\);\n/);
+  assert(await page.locator("#cpp-download").isDisabled());
+  assert.equal(await readFile(`${robotProject}/${routinePath}`, "utf8"), code);
+  await shot("07-export-written");
+  pass(`Write files puts ${routinePath} and its two headers in the robot project, then shows the two lines for main.cpp`);
+
+  await writeFile(`${robotProject}/include/planner/robot_drive.hpp`, "// my robot's numbers\n");
+  await writeFile(`${robotProject}/src/main.cpp`, mainLines);
+  await page.locator("#cpp-folder").press("Enter");
+  await page.waitForFunction(() => /already names/.test(document.querySelector("#cpp-written").textContent));
+  written = await page.locator("#cpp-written").innerText();
+  assert(written.includes(`${routinePath}: unchanged`), written);
+  assert(written.includes("include/planner/robot_drive.hpp: kept: yours, so the planner left it alone"), written);
+  assert(written.includes(`src/main.cpp already names ${exportedFunction}, so there is nothing to add.`), written);
+  assert.equal(await readFile(`${robotProject}/include/planner/robot_drive.hpp`, "utf8"), "// my robot's numbers\n");
+  pass("Writing again keeps the robot's own numbers file and sees that main.cpp already lists the routine");
+  await closeExport();
 
   const unmirrored = await draft();
   await page.locator("#mirror-picker").click();
@@ -609,15 +663,19 @@ try {
 
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();
+  assert.equal(await page.locator("#cpp-folder").inputValue(), robotProject);
+  assert(await page.locator("#cpp-written").isHidden());
   const cascadeCode = await page.locator("#cpp-code").inputValue();
-  assert.match(cascadeCode, /cascade::Rig cascade_rig/);
+  assert.match(cascadeCode, /planner_robot::startCascadeTask\(\);/);
   assert.match(cascadeCode, /cascade_rig\.beginActions\(/);
   assert.match(cascadeCode, /cascade::ClawPreset::Closed/);
   assert.match(cascadeCode, /cascade_rig\.moveLift\(cascade::LiftPreset::OnNeutralGoal, 1500\)/);
   assert.match(cascadeCode, /cascade::Action::When::AfterDistance/);
   assert.match(cascadeCode, /cascade_rig\.spinRoller\(\*drive, 470, 12, 3, 2000\)/);
-  await page.locator("#cpp-dialog .dialog-foot button.primary").click();
-  pass("Export C++ writes the lift, claw, roller and actions with the same helpers the simulator ran");
+  assert.match(await exportedFile("robot_cascade.hpp"), /inline cascade::Rig cascade_rig\(/);
+  assert.match(await exportedFile("cascade_helpers.hpp"), /class Rig \{/);
+  await closeExport();
+  pass("Export C++ writes the lift, claw, roller and actions with the same helpers the simulator ran, and remembers the robot project folder");
 
   await openExample("override_match_load");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
@@ -643,7 +701,7 @@ try {
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();
   assert.match(await page.locator("#cpp-code").inputValue(), /\n  pros::delay\(15000\);\n/);
-  await page.locator("#cpp-dialog .dialog-foot button.primary").click();
+  await closeExport();
   pass(`The Match Load example waits 15 s, loads at 15.00 s, runs to ${matchLoadScore.match(/Score at (\S+ s)/)[1]} ` +
        "and scores red 5; Export C++ writes the wait as pros::delay(15000)");
 

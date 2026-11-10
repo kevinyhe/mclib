@@ -1,7 +1,9 @@
-"""The planner's HTTP server: what it accepts, what it refuses, and how it
-queues, cancels and restores runs. No C++ or physics runs here."""
+"""The planner's HTTP server: what it accepts, what it refuses, how it
+queues, cancels and restores runs, and how it writes an export into a robot
+project. No C++ or physics runs here."""
 import http.client
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -35,8 +37,9 @@ class StubPlanner:
         validate_project(raw)
         return dict(not_ready=True, error="not compiled")
 
-    def export(self, raw):
-        return dict(code="void autonomous() {}", measured=False, note=None)
+    def write_export(self, body):
+        folder = server.robot_project(body["folder"])
+        return dict(folder=str(folder), function="runRoutine", files=[], mentioned_in=None)
 
     def submit(self, raw):
         project = validate_project(raw)
@@ -119,6 +122,20 @@ class HttpTests(unittest.TestCase):
         self.assertIn("has no points yet", answer["error"])
         self.assertEqual(self.json("POST", "/api/runs", ONE_POINT)[0], 202)
         self.assertEqual(self.json("POST", "/api/plan", ONE_POINT)[0], 409)
+
+    def test_export_write_says_what_is_wrong_with_the_folder(self):
+        body = dict(project=ONE_POINT, folder="robot")
+        status, answer = self.json("POST", "/api/export/write", body)
+        self.assertEqual(status, 400)
+        self.assertIn("full path", answer["error"])
+        self.assertEqual(self.request("POST", "/api/export/write", body, {"Origin": "http://example.com"})[0], 403)
+        with tempfile.TemporaryDirectory() as folder:
+            status, answer = self.json("POST", "/api/export/write", dict(project=ONE_POINT, folder=folder))
+            self.assertEqual(status, 400)
+            self.assertIn("no project.pros", answer["error"])
+            Path(folder, "project.pros").write_text("{}")
+            status, answer = self.json("POST", "/api/export/write", dict(project=ONE_POINT, folder=folder))
+            self.assertEqual((status, answer["folder"]), (200, folder))
 
     def test_refuses_other_hosts_origins_and_bodies(self):
         self.assertEqual(self.request("GET", "/api/config", headers={"Host": "example.com"})[0], 403)
@@ -263,6 +280,123 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(planner.list(), [])
         finally:
             planner.close()
+
+
+LIFT_ROUTINE = dict(name="Lift check", field="override", preload="none",
+                    robot=dict(preset="override_cascade", tracking="horizontal"),
+                    steps=[dict(type="drive", distance=12), dict(type="lift", lift_preset="top")])
+ROUTINE, ROBOT_CASCADE, CASCADE_HELPERS = ("src/autons/lift_check.cpp", "include/planner/robot_cascade.hpp",
+                                           "include/planner/cascade_helpers.hpp")
+
+
+class WriteExportTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.robot = Path(self.folder.name) / "robot"
+        self.robot.mkdir()
+        (self.robot / "project.pros").write_text("{}")
+        self.output = Path(self.folder.name) / "output"
+        self.output.mkdir()
+        self.planner = server.Planner(self.output, self.output)
+
+    def tearDown(self):
+        self.planner.close()
+        self.folder.cleanup()
+
+    def write(self, project=LIFT_ROUTINE, folder=None):
+        return self.planner.write_export(dict(project=project, folder=str(folder or self.robot)))
+
+    def statuses(self, answer):
+        return {file["path"]: file["status"] for file in answer["files"]}
+
+    def test_first_write_puts_every_file_in_the_robot_project(self):
+        answer = self.write()
+        self.assertEqual((answer["folder"], answer["function"], answer["mentioned_in"]),
+                         (str(self.robot), "runLiftCheck", None))
+        self.assertEqual(self.statuses(answer),
+                         {ROUTINE: "written", ROBOT_CASCADE: "written", CASCADE_HELPERS: "written"})
+        self.assertIn("void runLiftCheck() {", (self.robot / ROUTINE).read_text())
+        self.assertEqual(sorted(path.relative_to(self.robot).as_posix() for path in self.robot.rglob("*.?pp")),
+                         sorted([ROUTINE, ROBOT_CASCADE, CASCADE_HELPERS]))
+
+    def test_writing_again_replaces_the_routine_and_keeps_the_robots_own_file(self):
+        self.write()
+        (self.robot / ROBOT_CASCADE).write_text("// my ports\n")
+        self.assertEqual(self.statuses(self.write()),
+                         {ROUTINE: "unchanged", ROBOT_CASCADE: "kept", CASCADE_HELPERS: "unchanged"})
+        changed = dict(LIFT_ROUTINE, steps=[dict(type="drive", distance=20), dict(type="lift", lift_preset="top")])
+        self.assertEqual(self.statuses(self.write(changed)),
+                         {ROUTINE: "replaced", ROBOT_CASCADE: "kept", CASCADE_HELPERS: "unchanged"})
+        self.assertIn("driveTo(20_in", (self.robot / ROUTINE).read_text())
+        self.assertEqual((self.robot / ROBOT_CASCADE).read_text(), "// my ports\n")
+
+    def test_says_where_the_routine_is_already_hooked_up(self):
+        (self.robot / "src").mkdir()
+        (self.robot / "src" / "main.cpp").write_text("void runLiftCheckTwice();\n")
+        self.assertIsNone(self.write()["mentioned_in"])
+        (self.robot / "src" / "main.cpp").write_text("void runLiftCheck();\n")
+        self.assertEqual(self.write()["mentioned_in"], "src/main.cpp")
+
+    def test_writes_nothing_outside_a_pros_project(self):
+        elsewhere = Path(self.folder.name) / "elsewhere"
+        elsewhere.mkdir()
+        cases = (("", "Type the folder"), ("robot", "full path"), (str(elsewhere / "missing"), "is not a folder"),
+                 (str(elsewhere), "no project.pros"), (7, "Type the folder"))
+        for folder, message in cases:
+            with self.subTest(folder=folder), self.assertRaisesRegex(ValueError, f"^Nothing was written. .*{message}"):
+                self.planner.write_export(dict(project=LIFT_ROUTINE, folder=folder))
+        self.assertEqual(list(elsewhere.iterdir()), [])
+        with self.assertRaisesRegex(ValueError, "Send the project and the robot project folder"):
+            self.planner.write_export(dict(project=LIFT_ROUTINE))
+
+    def test_a_bad_routine_writes_nothing(self):
+        with self.assertRaises(ProjectError):
+            self.write(dict(LIFT_ROUTINE, steps=[dict(type="lift", lift_preset="sky")]))
+        self.assertEqual([path.name for path in self.robot.iterdir()], ["project.pros"])
+
+    def test_a_file_that_cannot_be_written_is_named_with_what_was_written_before_it(self):
+        (self.robot / "src").write_text("not a folder")
+        with self.assertRaisesRegex(ValueError, r"Could not write .*lift_check\.cpp: .* Nothing was written\.$"):
+            self.write()
+        (self.robot / "src").unlink()
+        (self.robot / "include").write_text("not a folder")
+        with self.assertRaisesRegex(ValueError, r"Could not write .*robot_cascade\.hpp: .* Written before that: "
+                                                r"src/autons/lift_check\.cpp\.$"):
+            self.write()
+
+    def test_a_routine_whose_paths_are_not_planned_yet_is_not_written(self):
+        path_routine = dict(name="Path check", steps=ONE_POINT["steps"])
+        still_compiling = dict(not_ready=True, error="Speeds are not planned yet.")
+        with mock.patch.object(self.planner, "plan", return_value=still_compiling):
+            with self.assertRaisesRegex(ValueError, "^Nothing was written. Until the paths are planned, their "
+                                                    "speeds, time limits and the drive numbers would be "
+                                                    "placeholders. The planner said: Speeds are not planned yet.$"):
+                self.write(path_routine)
+            exported = self.planner.export(path_routine)
+        self.assertEqual([path.name for path in self.robot.iterdir()], ["project.pros"])
+        self.assertEqual((exported["drive_numbers"], exported["plan_error"]),
+                         ("placeholders", "Speeds are not planned yet."))
+
+    def test_an_unknown_home_folder_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "names a home folder this computer does not have"):
+            self.write(folder="~no-such-user-here/robot")
+
+    def test_a_routine_with_only_drive_steps_writes_one_file_into_a_bare_project(self):
+        answer = self.write(dict(name="Drive check", steps=[dict(type="drive", distance=12)]))
+        self.assertEqual((self.statuses(answer), answer["mentioned_in"]),
+                         ({"src/autons/drive_check.cpp": "written"}, None))
+        self.assertFalse((self.robot / "include").exists())
+
+    def test_a_project_file_that_is_not_utf8_is_still_searched(self):
+        (self.robot / "src").mkdir()
+        (self.robot / "src" / "main.cpp").write_bytes(b"// caf\xe9\nvoid runLiftCheck();\n")
+        self.assertEqual(self.write()["mentioned_in"], "src/main.cpp")
+
+    @unittest.skipUnless(os.name == "posix", "Windows paths are only translated under WSL")
+    def test_a_windows_path_is_read_as_its_wsl_folder(self):
+        self.assertEqual(server.local_path(r"C:\Users\you\robot"), Path("/mnt/c/Users/you/robot"))
+        self.assertEqual(server.local_path("d:/robot"), Path("/mnt/d/robot"))
+        self.assertEqual(server.local_path("/home/you/robot"), Path("/home/you/robot"))
 
 
 if __name__ == "__main__":

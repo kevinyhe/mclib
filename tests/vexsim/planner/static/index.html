@@ -12,7 +12,7 @@
 <body>
   <header class="topbar">
     <div class="brand">Path Planner</div>
-    <label class="routine-name"><span class="sr-only">Routine name</span><input id="routine-name" maxlength="80" autocomplete="off" title="Name of this routine. It goes into saved files and the exported C++."></label>
+    <label class="routine-name"><span class="sr-only">Routine name</span><input id="routine-name" maxlength="80" autocomplete="off" title="Name of this routine. It goes into saved files and names the exported C++ function: Left side becomes runLeftSide()."></label>
     <nav class="toolbar" aria-label="Project">
       <button id="new-project" title="Start a new routine with one empty path (keeps the robot settings)">New</button>
       <button id="open-project" title="Open a routine saved as JSON">Open…</button>
@@ -23,7 +23,7 @@
       <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
       <span class="divider"></span>
       <button id="mirror-picker" class="menu-button" aria-haspopup="menu" aria-expanded="false" title="Flip the whole routine for the other side of the field">Mirror</button>
-      <button id="export-cpp" title="Show the routine as mclib C++ for autonomous()">Export C++</button>
+      <button id="export-cpp" title="Write the routine into your robot project as mclib C++">Export C++</button>
       <input id="open-file" type="file" accept="application/json,.json" hidden>
     </nav>
     <div class="run-area">
@@ -131,10 +131,18 @@
   <div id="popover" class="menu popover" hidden></div>
 
   <dialog id="cpp-dialog" class="dialog wide">
-    <div class="dialog-head"><h2>Routine as C++</h2><button class="close" data-close aria-label="Close">×</button></div>
+    <div class="dialog-head"><h2 id="cpp-title">Export C++</h2><button class="close" data-close aria-label="Close">×</button></div>
+    <div class="export-write">
+      <label for="cpp-folder">Robot project folder</label>
+      <input id="cpp-folder" type="text" spellcheck="false" autocomplete="off" placeholder="The folder that holds project.pros, such as /home/you/robot or C:\Users\you\robot">
+      <button id="cpp-write" class="primary">Write files</button>
+    </div>
+    <div id="cpp-written" class="export-written" role="status" hidden></div>
     <p id="cpp-note" class="note"></p>
+    <div id="cpp-tabs" class="tabs" role="tablist" aria-label="Exported files"></div>
+    <p id="cpp-about" class="note"></p>
     <textarea id="cpp-code" readonly spellcheck="false" aria-label="Generated C++"></textarea>
-    <div class="dialog-foot"><button id="cpp-copy">Copy to clipboard</button><button id="cpp-download">Download autonomous.cpp</button><button class="primary" data-close>Close</button></div>
+    <div class="dialog-foot"><button id="cpp-copy">Copy this file</button><button id="cpp-download">Download this file</button><button data-close>Close</button></div>
   </dialog>
 
   <dialog id="help-dialog" class="dialog">
@@ -144,7 +152,7 @@
       <li><b>Shape it.</b> Drag points to move them. Select a point to show its curve handles; drag a handle to set the heading there and how wide the curve is.</li>
       <li><b>Set speeds.</b> Select a point to set the speed limit and direction of the section that ends at it. The path colour shows the planned speed: blue is slow, red is fast.</li>
       <li><b>Run.</b> Press Run simulation. vexsim drives the robot with mclib's C++. Each step is checked against its target.</li>
-      <li><b>Export.</b> Save keeps the routine as JSON. Export C++ gives the autonomous() code for the robot.</li>
+      <li><b>Export.</b> Save keeps the routine as JSON. Export C++ writes the routine into your robot project as its own function, with the two lines that add it to your selector.</li>
     </ol>
     <h3>Keyboard and mouse</h3>
     <table id="shortcut-table" class="shortcut-table"></table>

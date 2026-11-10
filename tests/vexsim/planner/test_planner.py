@@ -245,31 +245,99 @@ class ExportTests(unittest.TestCase):
                              dict(type="arc", heading=90, radius=-18)]
         return validate_project(raw)
 
-    def compile(self, code):
+    PLAN = dict(duration_s=2.44, length_in=80.0, top_speed_ips=60.0, requested_start_ips=0.0, requested_end_ips=0.0)
+    DRIVE, CASCADE = "include/planner/robot_drive.hpp", "include/planner/robot_cascade.hpp"
+    PATH_HELPERS, CASCADE_HELPERS = "include/planner/path_helpers.hpp", "include/planner/cascade_helpers.hpp"
+
+    def code(self, exported):
+        return {file["path"]: file["code"] for file in exported["files"]}
+
+    def routine(self, exported):
+        return exported["files"][0]["code"]
+
+    def compile(self, *exports):
+        """Builds a robot project that holds every export, with a main.cpp
+        that puts each routine in the selector, and compiles all of it."""
         with tempfile.TemporaryDirectory() as folder:
-            source = Path(folder) / "autonomous.cpp"
-            source.write_text(code)
-            done = subprocess.run(["g++", "-std=gnu++20", "-fsyntax-only", "-Wall", "-Wextra", "-DMCLIB_HOST_BUILD",
-                                   "-Wno-deprecated-declarations", "-Iinclude", str(source)],
-                                  cwd=ROOT, capture_output=True, text=True)
-            own_warnings = [line for line in done.stderr.splitlines() if line.startswith(f"{source}:")]
-        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
-        self.assertEqual(own_warnings, [])
+            for exported in exports:
+                for file in exported["files"]:
+                    target = Path(folder) / file["path"]
+                    if file["owner"] == "you" and target.exists():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(file["code"])
+            hookups = [line for exported in exports for line in exported["hookup"].splitlines()
+                       if line and not line.startswith("//")]
+            declarations = [line for line in hookups if line.startswith("void ")]
+            registrations = [line for line in hookups if line.startswith("selector.add(")]
+            self.assertEqual((len(declarations), len(registrations)), (len(exports), len(exports)), hookups)
+            (Path(folder) / "src/main.cpp").write_text("\n".join([
+                '#include "mclib/mclib.hpp"', "mclib::auton::AutonSelector selector;", *declarations,
+                "void initialize() {", *registrations, "}", ""]))
+            for source in sorted(Path(folder, "src").rglob("*.cpp")):
+                done = subprocess.run(["g++", "-std=gnu++20", "-fsyntax-only", "-Wall", "-Wextra", "-DMCLIB_HOST_BUILD",
+                                       "-Wno-deprecated-declarations", f"-I{folder}/include", "-Iinclude", str(source)],
+                                      cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+                self.assertEqual([line for line in done.stderr.splitlines() if line.startswith(f"{folder}/")], [])
 
     def test_export_compiles_and_carries_the_simulated_helpers(self):
         project = self.every_step()
-        plans = [dict(duration_s=2.44, length_in=80.0, top_speed_ips=60.0, requested_start_ips=0.0,
-                      requested_end_ips=0.0) if step["type"] == "path" else None
-                 for step in project["steps"]]
-        code = export(project, self.SETTINGS, plans)
-        self.assertIn(exported_helpers(), code)
-        for call in ("path_planner::planSections", "path_planner::followSections", "turnToAngle(180_deg",
+        plans = [self.PLAN if step["type"] == "path" else None for step in project["steps"]]
+        exported = export(project, self.SETTINGS, plans)
+        code = self.code(exported)
+        self.assertEqual(list(code), ["src/autons/path_turn_boomerang_and_wall_reset.cpp", self.DRIVE, self.PATH_HELPERS])
+        self.assertEqual((exported["function"], exported["drive_numbers"]), ("runPathTurnBoomerangAndWallReset", "measured"))
+        self.assertIn(exported_helpers(), code[self.PATH_HELPERS])
+        for call in ("void runPathTurnBoomerangAndWallReset() {", '#include "planner/path_helpers.hpp"',
+                     '#include "planner/robot_drive.hpp"', "path_planner::planSections",
+                     "path_planner::followSections", "turnToAngle(180_deg",
                      "driveTo(-24_in", "curveCircleReverse(0_deg, 18_in", "turnToPoint(10_in, 10_in, 1",
                      "moveToPoint(0_in, 0_in, -1", "swing(45_deg, -1", "curveCircle(90_deg, -18_in",
                      "boomerang(24_in, 24_in, 1, 90_deg, 0.5", "wallReset(24_in, 63_in, 0_deg",
+                     "mclib::control::RamseteConfig follow = planner_robot::followConfig();",
                      "follow.gains.b = 50;", "6500_ms"):
-            self.assertIn(call, code)
-        self.compile(code)
+            self.assertIn(call, self.routine(exported))
+        for text in ("follow.feedforward.kS = 0.58_V;", "follow.feedforward.kV = 0.131_V / mclib::units::inps;",
+                     "follow.track_width = 14.1_in;", "were measured on the simulated robot"):
+            self.assertIn(text, code[self.DRIVE])
+        self.assertNotIn("autonomous()", "".join(code.values()))
+        self.compile(exported)
+
+    def test_each_routine_is_a_function_named_for_it_in_a_file_named_for_it(self):
+        for name, function, path in (("Left side", "runLeftSide", "src/autons/left_side.cpp"),
+                                     ("5-pin AWP (red)", "run5PinAwpRed", "src/autons/5_pin_awp_red.cpp"),
+                                     ("skills", "runSkills", "src/autons/skills.cpp"),
+                                     ("!!!", "runRoutine", "src/autons/routine.cpp")):
+            with self.subTest(name):
+                exported = export(validate_project(dict(name=name, steps=[dict(type="drive", distance=12)])))
+                self.assertEqual((exported["function"], [file["path"] for file in exported["files"]]),
+                                 (function, [path]))
+                self.assertIsNone(exported["drive_numbers"])
+                self.assertIn(f"void {function}() {{", self.routine(exported))
+                self.assertIn(f"\nvoid {function}();\n", exported["hookup"])
+                self.assertIn(f'\nselector.add("{name}", {function});\n', exported["hookup"])
+
+    def test_only_the_robots_own_files_are_the_users_to_edit(self):
+        project = validate_project(dict(field="override", steps=[path_step([(0, -24)]), dict(type="lift")]))
+        exported = export(project)
+        self.assertEqual({file["path"]: file["owner"] for file in exported["files"]},
+                         {"src/autons/new_routine.cpp": "planner", self.DRIVE: "you", self.CASCADE: "you",
+                          self.PATH_HELPERS: "planner", self.CASCADE_HELPERS: "planner"})
+        for file in exported["files"]:
+            says_replaced = "The planner replaces this file on every export." in file["code"]
+            self.assertEqual(says_replaced, file["owner"] == "planner", file["path"])
+
+    def test_a_name_or_note_cannot_break_out_of_its_comment_or_string(self):
+        project = validate_project(dict(name='He said "go" \\', steps=[
+            dict(type="drive", distance=5, note="ends in a backslash \\"), dict(type="turn", heading=90)]))
+        project["steps"][1]["note"] = "two\nlines"
+        exported = export(project)
+        for text in ('selector.add("He said \\"go\\" \\\\", runHeSaidGo);',
+                     "  // 1. Drive straight: ends in a backslash\n  driveTo(5_in",
+                     "  // 2. Turn to heading: two lines\n  turnToAngle(90_deg"):
+            self.assertIn(text, self.routine(exported))
+        self.compile(exported)
 
     def test_export_of_chained_steps_passes_exit_false_and_the_join_speeds(self):
         project = validate_project(dict(steps=[
@@ -283,14 +351,15 @@ class ExportTests(unittest.TestCase):
                  dict(duration_s=1.2, length_in=34.0, top_speed_ips=50.0, requested_start_ips=38.5,
                       requested_end_ips=0.0),
                  None]
-        code = export(project, self.SETTINGS, plans)
+        exported = export(project, self.SETTINGS, plans)
+        code = self.routine(exported)
         self.assertIn("driveTo(12_in, 4000_ms, false, 12_V)", code)
         self.assertIn("}, limits, 0, 41.25);", code)
         self.assertIn("}, limits, 38.5, 0);", code)
         self.assertEqual(code.count(", 12_V, false)"), 1)
         self.assertEqual(code.count(", 12_V, true)"), 1)
         self.assertEqual(code.count("Keeps moving into the next step"), 2)
-        self.compile(code)
+        self.compile(exported)
 
     def test_export_passes_a_set_min_voltage_and_leaves_automatic_to_mclib(self):
         project = validate_project(dict(steps=[
@@ -298,14 +367,14 @@ class ExportTests(unittest.TestCase):
             dict(type="point", x=10, y=10, min_volts=3), dict(type="turn_to_point", x=0, y=40, min_volts=4),
             dict(type="boomerang", x=-10, y=20, heading=0, min_volts=1),
             dict(type="swing", heading=45, chain=True, min_volts=2), dict(type="turn", heading=0)]))
-        code = export(project)
+        exported = export(project)
         for text in ("driveTo(12_in, 4000_ms, true, 12_V);", "driveTo(6_in, 4000_ms, true, 12_V, 2.5_V);",
                      "moveToPoint(10_in, 10_in, 1, 4000_ms, true, 12_V, true, 3_V);",
                      "turnToPoint(0_in, 40_in, 1, 4000_ms, 4_V);",
                      "boomerang(-10_in, 20_in, 1, 0_deg, 0.5, 4000_ms, true, 12_V, true, 1_V);",
                      "swing(45_deg, 1, 4000_ms, false, 12_V, 2_V);", "turnToAngle(0_deg, 4000_ms, true, 12_V);"):
-            self.assertIn(text, code)
-        self.compile(code)
+            self.assertIn(text, self.routine(exported))
+        self.compile(exported)
 
     def test_export_of_the_lift_claw_match_load_and_actions_compiles(self):
         project = validate_project(dict(field="override", preload="yellow", steps=[
@@ -319,16 +388,23 @@ class ExportTests(unittest.TestCase):
             dict(type="match_load", loader="red_right", match_load_pin="yellow"),
             dict(type="wall_reset", x=0, y=-63, heading=180,
                  actions=[dict(when="start", mechanism="lift", preset="top")])]))
-        code = export(project)
-        self.assertIn(exported_helpers("cascade_helpers.hpp"), code)
-        for text in ("static pros::Task cascade_task", "Preload: Red/yellow Pin held in the closed claw by its flange, yellow half up",
+        exported = export(project)
+        code = self.code(exported)
+        routine = self.routine(exported)
+        self.assertIn(exported_helpers("cascade_helpers.hpp"), code[self.CASCADE_HELPERS])
+        for text in ("static pros::Task cascade_task",
                      "[](double volts) { roller_motor.setVoltage(volts); },\n"
-                     "                         cascade::ClawPreset::Closed);",
+                     "                                cascade::ClawPreset::Closed);",
                      "mclib::device::MotorGroup lift_motors({7, -8, 9}, mclib::device::Gearset::Green);",
                      "mclib::device::Pneumatic claw_piston('A');",
                      "[](bool closed) { claw_piston.set_value(closed); }",
                      "mclib::device::MotorGroup roller_motor({10}, mclib::device::Gearset::Green);",
-                     "[] { return roller_motor.getAveragePositionDeg(); }",
+                     "[] { return roller_motor.getAveragePositionDeg(); }"):
+            self.assertIn(text, code[self.CASCADE])
+        for text in ("Preload: Red/yellow Pin held in the closed claw by its flange, yellow half up",
+                     "cascade::Rig& cascade_rig = planner_robot::cascade_rig;",
+                     "planner_robot::startCascadeTask();",
+                     "if (!cascade_rig.clawClosed()) cascade_rig.setClaw(cascade::ClawPreset::Closed);",
                      "cascade_rig.moveLift(cascade::LiftPreset::OnStackOnNeutralGoal, 1500)",
                      "cascade_rig.setClaw(cascade::ClawPreset::Closed);",
                      "// The Drive Team stands a Cup under the red right Loader with a yellow/yellow Pin in it. The robot "
@@ -342,11 +418,12 @@ class ExportTests(unittest.TestCase):
                      "  pros::delay(15000);\n",
                      "    wallReset(0_in, -63_in, 180_deg, 6_V, 4000_ms, 2500 * mclib::units::milliampere);\n",
                      "Claw to Open: jaws 4.4 in apart after driving 8 in from the step start."):
-            self.assertIn(text, code)
-        for gone in ("claw_motor", "toggle_arm", "ToggleArm", "Reached) return;", "TimedOut) return;", "if (!wallReset("):
-            self.assertNotIn(gone, code)
-        self.assertEqual(code.count("cascade_rig.finishActions();"), 3)
-        self.compile(code)
+            self.assertIn(text, routine)
+        for gone in ("claw_motor", "toggle_arm", "ToggleArm", "Reached) return;", "TimedOut) return;", "if (!wallReset(",
+                     "lift_motors", "pros::Task"):
+            self.assertNotIn(gone, routine)
+        self.assertEqual(routine.count("cascade_rig.finishActions();"), 3)
+        self.compile(exported)
 
     def test_the_exported_lift_presets_are_the_planner_heights(self):
         from mechanisms import LIFT_HEIGHTS_IN
@@ -357,17 +434,29 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(exported, {"".join(word.capitalize() for word in name.split("_")): height
                                     for name, height in LIFT_HEIGHTS_IN.items()})
 
-    def test_override_examples_export_and_compile(self):
-        for name in ("override_autonomous", "override_stack_to_goal", "override_roller", "override_match_load"):
-            with self.subTest(name):
-                code = export(validate_project(example(name)))
-                self.assertIn("static pros::Task cascade_task", code)
-                self.compile(code)
+    def test_every_example_compiles_side_by_side_in_one_robot_project(self):
+        names = sorted(path.stem for path in (HERE / "examples").glob("*.json"))
+        exports = [export(validate_project(example(name))) for name in names]
+        self.assertEqual(len({exported["function"] for exported in exports}), len(names))
+        self.assertEqual(len({exported["files"][0]["path"] for exported in exports}), len(names))
+        starts_open = [exported for exported in exports if "ClawPreset::Open);" in self.code(exported).get(self.CASCADE, "")]
+        starts_closed = [exported for exported in exports
+                         if "ClawPreset::Closed);" in self.code(exported).get(self.CASCADE, "")]
+        self.assertTrue(starts_open and starts_closed)
+        self.compile(*exports)
+
+    def test_a_routine_sets_the_claw_it_was_simulated_with_whatever_the_robots_file_says(self):
+        steps = [dict(type="lift", lift_preset="top")]
+        held = self.routine(export(validate_project(dict(field="override", preload="yellow", steps=steps))))
+        empty = self.routine(export(validate_project(dict(field="override", preload="none", steps=steps))))
+        self.assertIn("if (!cascade_rig.clawClosed()) cascade_rig.setClaw(cascade::ClawPreset::Closed);", held)
+        self.assertIn("if (cascade_rig.clawClosed()) cascade_rig.setClaw(cascade::ClawPreset::Open);", empty)
 
     def test_export_without_a_plan_marks_the_placeholders(self):
-        code = export(validate_project(example("s_curve")))
-        self.assertIn("placeholder", code.lower())
-        self.compile(code)
+        exported = export(validate_project(example("s_curve")))
+        self.assertEqual(exported["drive_numbers"], "placeholders")
+        self.assertIn("kS, kV and the track width are placeholders.", self.code(exported)[self.DRIVE])
+        self.compile(exported)
 
 
 @unittest.skipUnless((VEXSIM / "vexsim/sim.py").is_file(), f"no vexsim checkout at {VEXSIM}")

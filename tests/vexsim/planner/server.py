@@ -27,7 +27,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from engine import ROOT, readiness, write_json  # noqa: E402
-from export_cpp import export  # noqa: E402
+from export_cpp import YOU, export  # noqa: E402
 from fields import drawings  # noqa: E402
 from geometry import designed_poses  # noqa: E402
 from native_viewer import NativeViewerError, asset as native_asset  # noqa: E402
@@ -66,6 +66,79 @@ def check_runnable(project):
         if step["type"] == "path" and not step["points"]:
             raise ProjectError(f"{step_name(index, step)} has no points yet. Click on the field to add at least one.",
                                index)
+
+
+SOURCE_SUFFIXES = {".c", ".cpp", ".h", ".hpp"}
+
+
+def local_path(text):
+    """@p text as a path on this computer. Under WSL a Windows path such as
+    C:\\Users\\you\\robot is the same folder at /mnt/c/Users/you/robot."""
+    drive = re.fullmatch(r"([A-Za-z]):[\\/]+(.*)", text)
+    if drive and os.name == "posix":
+        return Path("/mnt", drive.group(1).lower(), *re.split(r"[\\/]+", drive.group(2)))
+    try:
+        return Path(text).expanduser()
+    except RuntimeError as error:
+        raise ValueError(f"Nothing was written. {text} names a home folder this computer does not have.") from error
+
+
+def robot_project(text):
+    """The PROS project folder typed as @p text."""
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Nothing was written. Type the folder of your robot project: the one that holds "
+                         "project.pros.")
+    folder = local_path(text.strip())
+    if not folder.is_absolute():
+        raise ValueError("Nothing was written. Give the robot project folder as a full path, such as "
+                         f"/home/you/robot. Got {text.strip()}.")
+    if not folder.is_dir():
+        raise ValueError(f"Nothing was written. {folder} is not a folder on this computer.")
+    if not (folder / "project.pros").is_file():
+        raise ValueError(f"Nothing was written. {folder} has no project.pros, so it is not a PROS project.")
+    return folder
+
+
+def write_files(folder, files):
+    """Write an export's files under @p folder and say what happened to each.
+    A file that is the user's to edit is kept once it exists."""
+    report = []
+    for file in files:
+        target = folder / file["path"]
+        code = file["code"].encode()
+        try:
+            if target.exists() and file["owner"] == YOU:
+                status = "kept"
+            elif target.exists() and target.read_bytes() == code:
+                status = "unchanged"
+            else:
+                status = "replaced" if target.exists() else "written"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(code)
+        except OSError as error:
+            changed = [entry["path"] for entry in report if entry["status"] in ("written", "replaced")]
+            before = f" Written before that: {', '.join(changed)}." if changed else " Nothing was written."
+            raise ValueError(f"Could not write {target}: {error}.{before}") from error
+        report.append(dict(path=file["path"], status=status))
+    return report
+
+
+def mentioned_in(folder, function, routine_path):
+    """The first source file under @p folder, other than the routine's own,
+    that names @p function: where it is already declared or run."""
+    name = re.compile(rb"\b" + function.encode() + rb"\b")
+    for top in ("src", "include"):
+        for file in sorted((folder / top).rglob("*")):
+            relative = file.relative_to(folder).as_posix()
+            if file.suffix not in SOURCE_SUFFIXES or relative == routine_path or not file.is_file():
+                continue
+            try:
+                found = name.search(file.read_bytes())
+            except OSError as error:
+                raise ValueError(f"Could not read {file}: {error}. Nothing was written.") from error
+            if found:
+                return relative
+    return None
 
 
 class Planner:
@@ -172,9 +245,20 @@ class Planner:
         project = validate_project(raw)
         designed_poses(project)
         answer = self.plan(project) if any(s["type"] == "path" and s["points"] for s in project["steps"]) else {}
-        measured = "settings" in answer
-        code = export(project, answer.get("settings"), answer.get("plans"))
-        return dict(code=code, measured=measured, note=None if measured else answer.get("error"))
+        return dict(export(project, answer.get("settings"), answer.get("plans")),
+                    plan_error=None if "settings" in answer else answer.get("error"))
+
+    def write_export(self, body):
+        if not isinstance(body, dict) or set(body) != {"project", "folder"}:
+            raise ValueError("Send the project and the robot project folder.")
+        folder = robot_project(body["folder"])
+        exported = self.export(body["project"])
+        if exported["drive_numbers"] == "placeholders":
+            raise ValueError("Nothing was written. Until the paths are planned, their speeds, time limits and "
+                             f"the drive numbers would be placeholders. The planner said: {exported['plan_error']}")
+        named_in = mentioned_in(folder, exported["function"], exported["files"][0]["path"])
+        return dict(folder=str(folder), function=exported["function"], mentioned_in=named_in,
+                    files=write_files(folder, exported["files"]))
 
     def submit(self, raw):
         project = validate_project(raw)
@@ -497,6 +581,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(409 if answer.get("not_ready") else 400 if "error" in answer else 200, answer)
             elif path == "/api/export":
                 self.send(200, planner.export(body))
+            elif path == "/api/export/write":
+                self.send(200, planner.write_export(body))
             elif path == "/api/validate":
                 project = validate_project(body)
                 designed_poses(project)

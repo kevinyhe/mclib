@@ -2,7 +2,7 @@
 
 Plan an autonomous routine on the field, see the speeds mclib plans for it,
 run it in the vexsim physics simulator with mclib's real C++ motion code,
-and export it as `autonomous()`.
+and write it into your robot project as C++.
 
 ```sh
 python3 tests/vexsim/planner/server.py --vexsim ../vexsim
@@ -429,7 +429,7 @@ and `vexsim/foam.py`. The planner adds these:
 | Claw step | 170 ms | the 160 ms opening stroke from vexsim's valve and 12 mm piston, guesses in its `GUESSES`, and a margin |
 | Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
 | Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
-| Exported ports | lift on ports 7, -8 and 9 with green cartridges, claw valve on ADI port A | placeholders: change them to your robot's |
+| Exported ports | lift on ports 7, -8 and 9 and roller on port 10 with green cartridges, claw valve on ADI port A | placeholders: change them in `include/planner/robot_cascade.hpp`, which the planner never replaces |
 
 ## What each step reports
 
@@ -476,13 +476,61 @@ on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 - **Save** downloads the routine as JSON. **Open** loads one; files from the
   old motion builder are converted (follow steps become paths).
 - The page keeps the routine you are editing in this browser between visits.
-- **Export C++** shows `autonomous()` for the routine. Path steps use the
-  helpers in [path_helpers.hpp](path_helpers.hpp), copied into the output.
-  The simulator compiles the same file, so the robot runs the code that was
-  simulated. kS, kV and track width come from the simulated robot; measure
-  your own (see [docs/motion.md](../../../docs/motion.md)).
 - **Mirror** flips the routine for the other side of the field: left ↔ right
   negates x, front ↔ back negates y. Headings flip and arcs bend the other way.
+
+### Export C++
+
+**Export C++** turns the routine into one function named for it. "Left side"
+becomes `runLeftSide()` in `src/autons/left_side.cpp`.
+
+1. Type your robot project's folder: the one that holds `project.pros`. The
+   page remembers it. Under WSL a Windows path such as `C:\Users\you\robot`
+   is read as `/mnt/c/Users/you/robot`.
+2. Press **Write files**. The page lists each file as new, replaced,
+   unchanged or kept.
+3. Add the two lines from the **Add to main.cpp** tab, once for each routine:
+
+```cpp
+void runLeftSide();                        // above initialize()
+selector.add("Left side", runLeftSide);    // in initialize()
+```
+
+`selector` is your `mclib::auton::AutonSelector`
+([docs/autonomous.md](../../../docs/autonomous.md)). With no selector, call
+`runLeftSide()` from `autonomous()`. Once a file in the project names the
+function, the page says there is nothing left to add.
+
+| File | Who changes it | What it holds |
+| --- | --- | --- |
+| `src/autons/<routine>.cpp` | the planner, on every export | the routine |
+| `include/planner/robot_drive.hpp` | you | kS, kV and track width, for path steps |
+| `include/planner/robot_cascade.hpp` | you | the lift, claw and roller ports |
+| `include/planner/path_helpers.hpp` | the planner, on every export | the path code the simulator ran, from [path_helpers.hpp](path_helpers.hpp) |
+| `include/planner/cascade_helpers.hpp` | the planner, on every export | the lift, claw and action code the simulator ran, from [cascade_helpers.hpp](cascade_helpers.hpp) |
+
+A routine gets only the files it uses: one with no path step has no
+`robot_drive.hpp`, and one that never uses the lift, claw or roller has no
+cascade files.
+
+The two `robot_` files are written once and never replaced, so every routine
+shares the numbers you put in them and exporting again cannot undo them.
+`robot_drive.hpp` starts with the simulated robot's kS, kV and track width;
+measure your own (see [docs/motion.md](../../../docs/motion.md)).
+`robot_cascade.hpp` starts with placeholder ports.
+
+The function and file names come from the letters a to z and the digits in
+the routine's name. Two routines whose names differ only in case or
+punctuation get the same function and file, and the second export replaces
+the first. A name with none of those letters or digits becomes `runRoutine()`.
+
+**Write files** is off while the routine's paths are not planned, such as
+while the planner is still compiling mclib: the speeds, time limits and drive
+numbers would be placeholders. Only a folder that holds `project.pros` is
+written to.
+
+Each tab also has **Copy this file** and **Download this file**, for a
+project on another computer.
 
 ## Keyboard and mouse
 

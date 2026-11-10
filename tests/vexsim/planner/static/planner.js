@@ -3,6 +3,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const DRAFT_KEY = "mclib.path-planner.draft.v1";
+  const ROBOT_FOLDER_KEY = "mclib.path-planner.robot-folder.v1";
   const FIELD_HALF_IN = 72;
   const TILE_IN = 24;
   const HANDLE_RADIUS_PX = 6;
@@ -3056,18 +3057,117 @@
     replaceProject(answer.data, `Opened ${source}.${note}`);
   }
 
+  const FILE_STATUS = {
+    written: "new",
+    replaced: "replaced",
+    unchanged: "unchanged",
+    kept: "kept: yours, so the planner left it alone",
+  };
+  const exported = { tabs: [], shown: 0 };
+
+  function rememberedRobotFolder() {
+    try {
+      return localStorage.getItem(ROBOT_FOLDER_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  function rememberRobotFolder(folder) {
+    try {
+      localStorage.setItem(ROBOT_FOLDER_KEY, folder);
+    } catch {
+      // Private windows refuse storage; the folder is then typed again next time.
+    }
+  }
+
+  function driveNumbersNote(data) {
+    if (data.drive_numbers === "measured") {
+      return "kS, kV and track width in robot_drive.hpp were measured on the simulated robot. Measure your own robot (docs/motion.md) and put its numbers in that file.";
+    }
+    if (data.drive_numbers === "placeholders") {
+      return `The paths are not planned, so their speeds, time limits and the drive numbers below are placeholders and Write files is off. The planner said: ${data.plan_error} Export again once the path shows its planned speeds.`;
+    }
+    return "";
+  }
+
+  function exportTabs(data) {
+    const files = data.files.map((file) => {
+      const name = file.path.split("/").pop();
+      return { label: name, about: `${file.path}. ${file.about}`, code: file.code, download: name };
+    });
+    const mainCpp = {
+      label: "Add to main.cpp",
+      about: "Two lines for src/main.cpp, added once for each routine. The files do nothing until the selector lists the routine.",
+      code: data.hookup,
+      download: null,
+    };
+    return [...files, mainCpp];
+  }
+
+  function showExportTab(index) {
+    exported.shown = index;
+    const tab = exported.tabs[index];
+    [...$("cpp-tabs").children].forEach((button, at) => button.setAttribute("aria-selected", String(at === index)));
+    $("cpp-about").textContent = tab.about;
+    $("cpp-code").value = tab.code;
+    $("cpp-code").scrollTop = 0;
+    $("cpp-download").disabled = tab.download === null;
+  }
+
+  function showWritten(kind, lines) {
+    const box = $("cpp-written");
+    box.className = `export-written ${kind}`;
+    box.replaceChildren(...lines.map((line) => element("p", { text: line })));
+    box.hidden = false;
+  }
+
   async function exportCpp() {
     const answer = await api("/api/export", { method: "POST", body: clone(state.project) });
     if (!answer.ok) {
       if (Number.isInteger(answer.data.step)) selectStep(answer.data.step);
       return notify(`Could not export: ${answer.data.error}`, "error");
     }
-    $("cpp-code").value = answer.data.code;
-    $("cpp-note").textContent = answer.data.measured
-      ? "Paste this into your robot project. The path helpers at the top bake, plan and follow each path the same way the simulator did. kS, kV and track width were measured on the simulated robot: measure your own robot (docs/motion.md) and replace them."
-      : `kS, kV and track width are placeholders${answer.data.note ? ` (${answer.data.note})` : ""}. Measure them on your robot (docs/motion.md).`;
+    exported.tabs = exportTabs(answer.data);
+    $("cpp-title").textContent = `Export ${answer.data.function}()`;
+    $("cpp-tabs").replaceChildren(...exported.tabs.map((tab, index) =>
+      element("button", { role: "tab", text: tab.label, onclick: () => showExportTab(index) })));
+    showExportTab(0);
+    const note = driveNumbersNote(answer.data);
+    $("cpp-note").textContent = note;
+    $("cpp-note").hidden = !note;
+    $("cpp-written").hidden = true;
+    $("cpp-write").disabled = answer.data.drive_numbers === "placeholders";
+    $("cpp-folder").value = rememberedRobotFolder();
     $("cpp-dialog").showModal();
     log("Exported the routine as C++.");
+  }
+
+  async function writeExport() {
+    const folder = $("cpp-folder").value.trim();
+    const button = $("cpp-write");
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "Writing…";
+    let answer;
+    try {
+      answer = await api("/api/export/write", { method: "POST", body: { project: clone(state.project), folder } });
+    } finally {
+      button.disabled = false;
+      button.textContent = "Write files";
+    }
+    if (!answer.ok) return showWritten("bad", [answer.data.error]);
+    rememberRobotFolder(folder);
+    const wired = answer.data.mentioned_in;
+    showWritten("ok", [
+      `Wrote ${answer.data.function}() into ${answer.data.folder}:`,
+      ...answer.data.files.map((file) => `${file.path}: ${FILE_STATUS[file.status]}`),
+      wired
+        ? `${wired} already names ${answer.data.function}, so there is nothing to add. Build and upload.`
+        : "One step left: add the two lines under “Add to main.cpp” to src/main.cpp, then build and upload.",
+    ]);
+    if (!wired) showExportTab(exported.tabs.length - 1);
+    log(`Wrote ${answer.data.function}() into ${answer.data.folder}.`, "ok");
   }
 
   function bindControls() {
@@ -3174,7 +3274,9 @@
         notify("The browser blocked the clipboard. The code is selected: press Ctrl+C.", "error");
       }
     });
-    $("cpp-download").addEventListener("click", () => download("autonomous.cpp", $("cpp-code").value, "text/x-c++src"));
+    $("cpp-download").addEventListener("click", () => download(exported.tabs[exported.shown].download, $("cpp-code").value, "text/x-c++src"));
+    $("cpp-write").addEventListener("click", writeExport);
+    $("cpp-folder").addEventListener("keydown", (event) => { if (event.key === "Enter") writeExport(); });
     window.addEventListener("resize", () => closePopover());
     new ResizeObserver(() => relayout()).observe($("field-wrap"));
     window.addEventListener("message", (event) => {

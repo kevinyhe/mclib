@@ -14,8 +14,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   with the planned time and top speed. **Run simulation** drives the whole
   routine in vexsim with mclib's C++ and checks each step, saying what was
   measured and the limit. Playback with telemetry, run comparison, the 3D
-  view, undo and redo, JSON save and load, mirroring, and an
-  `autonomous()` export that uses the same path code the simulator ran.
+  view, undo and redo, JSON save and load, mirroring, and a C++ export
+  that uses the same path code the simulator ran.
+- Path planner: **Export C++** writes each routine as its own function
+  straight into a PROS project folder: "Left side" becomes `runLeftSide()`
+  in `src/autons/left_side.cpp`, with the two lines that add it to an
+  `AutonSelector`. The robot's kS, kV, track width and ports go in
+  `include/planner/robot_drive.hpp` and `robot_cascade.hpp`, which are
+  written once and never replaced.
 - Path planner: **Keep moving into the next step** runs a step with
   `exit = false`, so the next step starts at once without stopping or
   settling. A path chained into another path carries its speed across the

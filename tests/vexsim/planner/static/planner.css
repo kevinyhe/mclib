@@ -534,6 +534,18 @@ details.description[open] .more { display: none; }
 .dialog .note { margin: 10px 16px 0; color: var(--muted); }
 .dialog textarea { display: block; margin: 10px 16px; width: calc(100% - 32px); height: min(60vh, 560px); font-family: var(--mono); font-size: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 10px; resize: vertical; white-space: pre; }
 .dialog-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--border); }
+.export-write { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; }
+.export-write label { font-weight: 600; white-space: nowrap; }
+.export-write input { flex: 1; font-family: var(--mono); font-size: 12px; }
+.export-written { margin: 10px 16px 0; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--border); }
+.export-written.ok { border-color: var(--ok); }
+.export-written.bad { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
+.export-written p { margin: 0; }
+.export-written p + p { margin-top: 2px; font-family: var(--mono); font-size: 12px; }
+.export-written.ok p:last-child { margin-top: 6px; font-family: inherit; font-size: inherit; font-weight: 600; }
+#cpp-tabs { margin-top: 10px; padding: 0 16px; overflow-x: auto; }
+#cpp-tabs button { white-space: nowrap; }
+#cpp-dialog textarea { height: min(48vh, 480px); }
 .howto { margin: 12px 16px; padding-left: 18px; display: grid; gap: 6px; }
 .dialog h3 { margin: 4px 16px 6px; }
 .shortcut-table { margin: 0 16px 12px; border-collapse: collapse; width: calc(100% - 32px); }
