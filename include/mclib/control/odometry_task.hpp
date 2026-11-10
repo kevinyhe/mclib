@@ -85,9 +85,11 @@ struct OdometrySetup {
   std::optional<TrackingWheelSensor> vertical;
   /// @brief Sideways-rolling tracking wheel, if fitted.
   std::optional<TrackingWheelSensor> horizontal;
-  /// @brief Optional distance-sensor correction, run after every tick. The
-  ///        task resets it when it starts and writes the position it returns
-  ///        back into odometry. Not owned; it must outlive the task.
+  /// @brief Optional distance-sensor correction, run after every tick
+  ///        through an `OdometryFusion`. startOdometry() resets it, and the
+  ///        task writes the position it returns back into odometry. When the
+  ///        pose is set, by setPose(), wallReset() or a snapshot, the task
+  ///        restarts it at the new pose. Not owned; it must outlive the task.
   PoseFusion* fusion = nullptr;
 };
 

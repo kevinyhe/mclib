@@ -252,6 +252,10 @@ void initialize() {
 }
 ```
 
+When the pose is set, by `setPose()`, `wallReset()` or a snapshot, the task
+restarts the filter at the new pose. A restart is no surer of the position
+than the filter was before it.
+
 ### GPS
 
 `PoseFusion::setGps()` adds a V5 GPS sensor, with or without distance

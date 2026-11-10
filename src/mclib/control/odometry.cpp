@@ -195,6 +195,9 @@ Odometry& odometryInstance() {
   static Odometry odometry;
   return odometry;
 }
+
+// Guarded by odometryMutex().
+std::uint32_t g_jump_count = 0;
 }  // namespace
 
 Pose2D odometryTick(const OdometrySample& sample) {
@@ -206,14 +209,41 @@ Pose2D odometryTick(const OdometrySample& sample) {
 
 void resetOdometry(const Pose2D& pose) {
   sync::LockGuard lock(odometryMutex());
+  const Pose2D before = odometryInstance().getPose();
   odometryInstance().reset(pose);
   // Publish what the odometry actually took, not what was asked for: reset()
   // rejects a non-finite heading and keeps the old one.
-  robotState().setPose(odometryInstance().getPose());
+  const Pose2D after = odometryInstance().getPose();
+  robotState().setPose(after);
+  if (after.x != before.x || after.y != before.y || after.theta != before.theta) {
+    ++g_jump_count;
+  }
+}
+
+std::uint32_t odometryJumpCount() {
+  sync::LockGuard lock(odometryMutex());
+  return g_jump_count;
+}
+
+OdometryReading readOdometry() {
+  sync::LockGuard lock(odometryMutex());
+  return {odometryInstance().getPose(), g_jump_count};
 }
 
 bool correctOdometryPosition(double x_in, double y_in) {
   sync::LockGuard lock(odometryMutex());
+  const Pose2D before = odometryInstance().getPose();
+  if (!odometryInstance().correctPosition(x_in, y_in)) return false;
+  robotState().setPose(odometryInstance().getPose());
+  if (x_in != before.x || y_in != before.y) {
+    ++g_jump_count;
+  }
+  return true;
+}
+
+bool correctOdometryPosition(double x_in, double y_in, std::uint32_t jumps) {
+  sync::LockGuard lock(odometryMutex());
+  if (jumps != g_jump_count) return false;
   if (!odometryInstance().correctPosition(x_in, y_in)) return false;
   robotState().setPose(odometryInstance().getPose());
   return true;

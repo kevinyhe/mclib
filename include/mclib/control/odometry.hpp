@@ -232,12 +232,53 @@ class Odometry {
  */
 Pose2D odometryTick(const OdometrySample& sample);
 
-/// @brief Teleport the odometry and `robotState()` to a known pose.
+/**
+ * @brief Teleport the odometry and `robotState()` to a known pose.
+ *
+ * A reset that moves the pose adds one to `odometryJumpCount()`. A reset to
+ * the pose odometry already has, which is what taring the drive encoders
+ * does, is not a jump.
+ */
 void resetOdometry(const Pose2D& pose);
+
+/**
+ * @brief How many times the pose has been set rather than driven.
+ *
+ * `resetOdometry()` and the two-argument `correctOdometryPosition()` each add
+ * one when they move the pose. That covers `Chassis::setPose()`,
+ * `wallReset()` and a snapshot. Code that follows the pose from tick to tick
+ * compares this between ticks to tell a jump from distance driven.
+ * `OdometryFusion` does that for a `PoseFusion`, and restarts the filter at
+ * the new pose.
+ */
+std::uint32_t odometryJumpCount();
+
+/// @brief A pose and the jump count it belongs to.
+struct OdometryReading {
+  Pose2D pose{};
+  std::uint32_t jumps = 0;
+};
+
+/// @brief The pose and `odometryJumpCount()`, read under one lock.
+OdometryReading readOdometry();
 
 /// Correct the integrator and published position under the same lock.
 /// Encoder baselines are preserved, so the next tick includes pending travel.
+/// A correction that moves the position adds one to `odometryJumpCount()`.
 bool correctOdometryPosition(double x_in, double y_in);
+
+/**
+ * @brief `correctOdometryPosition()` for code that follows the pose from tick
+ *        to tick and corrects it, from a correction worked out from an
+ *        earlier `readOdometry()`.
+ *
+ * Not a jump: the follower already knows about its own correction.
+ *
+ * @param jumps The reading's jump count. If the pose has jumped since, the
+ *   correction was worked out for a pose the robot no longer has, and writing
+ *   it would undo the jump. Nothing is written and this returns false.
+ */
+bool correctOdometryPosition(double x_in, double y_in, std::uint32_t jumps);
 
 /// @brief Configure the library's odometry instance.
 void setOdometryConfig(const OdometryConfig& config);
