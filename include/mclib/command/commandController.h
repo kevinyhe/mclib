@@ -9,6 +9,9 @@
 #include "mclib/command/trigger.h"
 #include "mclib/device/controller.hpp"
 
+#include <map>
+#include <memory>
+
 /**
  * @brief Command Controller wraps a controller and exposes Trigger helpers for command-based code.
  *
@@ -41,16 +44,26 @@ public:
 	}
 
 	/**
-	 * @brief Create trigger from button
+	 * @brief The trigger for a button
 	 *
-	 * @param button The button to create a \refitem Trigger on
+	 * The controller owns the trigger and returns the same one each time for
+	 * a button. Do not delete it. The trigger reads this controller, so the
+	 * controller has to outlive every binding made through it.
+	 *
+	 * @param button The button to get a \refitem Trigger on
 	 * @return \refitem Trigger with the boolean as the desired button
 	 */
 	Trigger *getTrigger(mclib::device::DigitalButton button) {
-		return new Trigger([this, button]() { return this->getDigital(button); },
-						   CommandScheduler::getTeleopEventLoop());
+		std::unique_ptr<Trigger> &trigger = triggers[button];
+		if (trigger == nullptr) {
+			trigger = std::make_unique<Trigger>(
+				[this, button]() { return this->getDigital(button); },
+				CommandScheduler::getTeleopEventLoop());
+		}
+		return trigger.get();
 	}
 
 private:
 	mclib::device::Controller controller;
+	std::map<mclib::device::DigitalButton, std::unique_ptr<Trigger>> triggers;
 };

@@ -387,8 +387,8 @@ void registerSubsystems() {
 // the controller cannot be read yet.
 // ---------------------------------------------------------------------------
 void bindDriverButtons() {
-  // getTrigger() is true while the button is held. Each call allocates a
-  // Trigger that is never freed, so call it once per binding, not in a loop.
+  // getTrigger() is true while the button is held. The controller keeps one
+  // Trigger for each button and hands back the same one every call.
   // Button bindings are only checked during driver control.
 
   // whileTrue: starts the command on press and cancels it on release.
