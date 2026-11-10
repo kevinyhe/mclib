@@ -116,10 +116,10 @@ more than this does. Odometry error at the end of a move, mean / worst:
 
 | Sensors | Straight moves | Curves (arcs, boomerang, S-curve) | Scenarios passing |
 | --- | --- | --- | --- |
-| Drive encoders only | 0.28 / 0.64 in | 4.20 / 9.34 in | 103 of 130 |
-| Vertical tracker | 0.25 / 0.30 in | 4.47 / 10.02 in | 102 of 130 |
-| Horizontal tracker | 0.44 / 1.14 in | 0.54 / 2.20 in | 124 of 130 |
-| Both | 0.25 / 0.30 in | 0.12 / 0.24 in | 127 of 130 |
+| Drive encoders only | 0.43 / 0.78 in | 4.56 / 9.79 in | 100 of 130 |
+| Vertical tracker | 0.15 / 0.19 in | 5.08 / 10.72 in | 100 of 130 |
+| Horizontal tracker | 0.78 / 1.53 in | 0.88 / 3.35 in | 120 of 130 |
+| Both | 0.15 / 0.19 in | 0.09 / 0.11 in | 123 of 130 |
 
 On curves the drive-encoder error is almost all sideways sliding, which only
 a horizontal tracker sees. Forward slip is small on these drives. With
