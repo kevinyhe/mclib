@@ -173,10 +173,18 @@ filter.reset(chassis_start_pose, 0.5, 0.5);  // pose, sigma in, sigma deg
 const snapshot::SensorGeometry left_front{-6.0f, 5.0f, -90.0f};
 const snapshot::SensorGeometry left_back{-6.0f, -5.0f, -90.0f};
 
+// A sensor with nothing in range reports 9999 mm. The filter skips a reading
+// that is zero, negative or NaN, so pass -1 for anything past the sensor's
+// 78 in range.
+auto inches = [](mclib::device::Distance& sensor) {
+  const double reading = sensor.getDistanceIn();
+  return reading < 78.0 ? reading : -1.0;
+};
+
 // Every loop:
 filter.predict(previous_odometry_pose, odometry_pose);
-filter.updateDistance(left_front, left_front_sensor.getDistanceIn());
-filter.updateDistance(left_back, left_back_sensor.getDistanceIn());
+filter.updateDistance(left_front, inches(left_front_sensor));
+filter.updateDistance(left_back, inches(left_back_sensor));
 // filter.pose() is the corrected pose.
 ```
 
@@ -223,7 +231,8 @@ mclib::device::Distance left_front_sensor(3), left_back_sensor(4);
 auto read = [](mclib::device::Distance& sensor) {
   return [&sensor] {
     const auto d = sensor.distance();
-    return d.has_value() ? d->in() : -1.0;
+    // Nothing in range reads 9999 mm, so anything past 78 in is no reading.
+    return d.has_value() && d->in() < 78.0 ? d->in() : -1.0;
   };
 };
 

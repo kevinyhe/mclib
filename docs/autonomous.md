@@ -156,6 +156,36 @@ built from a local:
 
 All motion arguments take units: `24_in`, `90_deg`, `2_s`, `10_V`.
 
+### Time budget
+
+A routine has no idea how long autonomous is unless you tell it. With
+`withTimeBudget()` it stops driving in time and still runs the steps that
+score.
+
+```cpp
+routine.withTimeBudget(15_s)
+    .driveTo(24_in, 2_s)
+    .moveToPoint(mclib::auton::Point{24_in, 36_in}, 1, 3_s)
+    .runOnce([] { claw.open(); }).mustRun();
+```
+
+- A motion whose time limit is longer than what is left gets the shorter one.
+- When the budget runs out the routine interrupts the running step and stops
+  the drive. It skips the remaining steps except those marked `mustRun()`.
+- The `mustRun()` steps share the grace window: the last 1.5 s of the budget,
+  held back for them, so they run before the field disables the robot. Change
+  it with `withGrace()`.
+- `withDeadlinePolicy(DeadlinePolicy::Abandon)` runs nothing after the budget
+  ends, and holds no time back.
+- `remaining()`, `budgetExpired()` and `skippedSteps()` report what happened.
+
+Mark only short actions `mustRun()`. A long drive marked `mustRun()` defeats
+the budget. Without `withTimeBudget()` a routine behaves as before.
+`mclib::auton::TimeBudget` in `mclib/auton/time_budget.hpp` is the same clock
+for code that calls the blocking motions itself;
+[examples/background_motion_and_safety.cpp](../examples/background_motion_and_safety.cpp)
+shows both.
+
 ## Mechanisms in routines
 
 Mechanisms are subsystems, so register them in `initialize()` and use their
@@ -247,7 +277,7 @@ void initialize() {
 }
 
 void autonomous() {
-  selector.runSelected();            // false if nothing is selected
+  selector.runSelected();            // false if nothing is selected, or the pick has no function
 }
 ```
 
@@ -262,7 +292,16 @@ at most every 50 ms.
 
 `saveSelection()` writes the selected routine's name to
 `/usd/auton_selection.txt`. `loadSelection()` selects the routine with that
-name. Both return `false` if there is no SD card or no matching routine.
+name. Both return `false` if there is no SD card or no matching routine. The
+selector never saves by itself. Call `saveSelection()` when the pick changes,
+from a loop in `disabled()`, not from `autonomous()` where it costs match
+time. [examples/routines_and_selector.cpp](../examples/routines_and_selector.cpp)
+has that loop.
+
+A routine exported from the [path planner](simulator.md#path-planner) is a
+plain function, such as `runLeftSide()` in `src/autons/left_side.cpp`. Declare
+it in `main.cpp` and add it like any other: `selector.add("Left side",
+runLeftSide);`.
 
 The list logic is `SelectorModel` in `mclib/auton/selector_model.hpp`, which is
 tested on the host. Use `model()` and `setLayout()` to change the grid.

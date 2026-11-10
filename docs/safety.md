@@ -59,6 +59,14 @@ if (drive.wait() != MotionResult::Reached) {
 `wallReset()` returns `true` only after sustained wall contact, and then resets
 the pose. On failure it stops, returns `false` and leaves the pose unchanged.
 
+Contact means the drive motors average at least `current_threshold` and turn
+slower than `velocity_threshold` (5 RPM) for 50 ms. Wheels that slip against
+the wall keep turning, so a push that is too hard never counts. In the
+simulator a four-motor 450 RPM, 14 lb robot slips at about 70 RPM at 6 V and
+is never reset; at 3 V with a 1000 mA threshold it is reset in 0.5 s. Push
+with the lowest voltage that still moves the robot, set the threshold under
+what the motors draw at that voltage, and check the return value.
+
 ## Competition disable
 
 Call `CommandScheduler::disable()` from `disabled()` if the scheduler loop does
