@@ -275,10 +275,18 @@ void correctHeading();
  * @param reset_heading      Absolute heading to stamp onto the IMU, or
  *                           #keep_current_heading to leave the IMU alone.
  * @param drive_power        Voltage to push with. Negative drives backward.
+ *                           Push gently: wheels that slip against the wall
+ *                           keep turning and never count as stalled. In the
+ *                           physics simulator a 14 lb robot on four 2.75 in
+ *                           omni wheels holds still on the wall at 3 V and
+ *                           slips from 4 V up.
  * @param time_limit         Give up after this long without changing pose.
  * @param current_threshold  Stall requires at least this average motor current.
- *                           Tune below the available current at the chosen
- *                           voltage and motor temperature/current limit.
+ *                           Tune below what the motors draw stalled at the
+ *                           chosen voltage. That robot draws 0.91 A a motor at
+ *                           2 V and 1.36 A at 3 V, and never more than 2.0 A
+ *                           at any voltage, so a threshold at the V5 motor's
+ *                           2.5 A limit is never met.
  * @param velocity_threshold ...and below this average motor speed, for five
  *                           consecutive 10 ms ticks.
  * @return True only after sustained contact and a pose reset. False on timeout,
@@ -289,7 +297,7 @@ bool wallReset(QLength reset_x,
                QAngle reset_heading,
                QVoltage drive_power,
                QTime time_limit,
-               QCurrent current_threshold = 2500.0 * mclib::units::milliampere,
+               QCurrent current_threshold = 1000.0 * mclib::units::milliampere,
                QAngularVelocity velocity_threshold = 5.0 * mclib::units::rpm);
 
 /**

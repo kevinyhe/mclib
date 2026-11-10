@@ -154,7 +154,7 @@ public:
       QAngle reset_heading,
       QVoltage drive_power,
       QTime time_limit,
-      QCurrent current_threshold = 2500.0 * units::milliampere,
+      QCurrent current_threshold = 1000.0 * units::milliampere,
       QAngularVelocity velocity_threshold = 5.0 * units::rpm);
   std::unique_ptr<Command> makeTurnToPointCommand(
       QLength x,

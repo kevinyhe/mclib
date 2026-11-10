@@ -155,7 +155,7 @@ STEP_TYPES = {
                                    "there are no walls, so the drive is held still as if it were touching one. "
                                    "Must be the last step, because it moves the odometry frame.",
                        fields=["x", "y", "heading", "current_ma"],
-                       defaults=dict(x=0, y=0, heading=0, current_ma=2500)),
+                       defaults=dict(x=0, y=0, heading=0, current_ma=1000, volts=3)),
     "lift": dict(label="Move the lift", call="moveLift()", mechanism="lift", still=True,
                  description="Raise or lower the cascade lift to a preset and wait until it gets there. The drive "
                              "holds still. The lift is an mclib PresetPositionMechanism on three motors.",
@@ -475,8 +475,7 @@ def _validate_step(index, value, count, field):
     kind = value["type"]
     info = STEP_TYPES[kind]
     _object(value, set(info["defaults"]) | {"type", "note", "timeout_ms", "volts", "chain", "actions"}, where)
-    step = dict(type=kind, note="", timeout_ms=4000, volts=6 if kind == "wall_reset" else 12, chain=False,
-                actions=[])
+    step = dict(type=kind, note="", timeout_ms=4000, volts=12, chain=False, actions=[])
     step.update(copy.deepcopy(info["defaults"]))
     step.update(value)
     if not isinstance(step["note"], str) or len(step["note"]) > 80:

@@ -167,8 +167,7 @@ void squareOnWall() {
   // least this much motor current, at less than this motor speed. Push too
   // hard and the wheels slip against the wall, keep turning, and never count.
   // Use the lowest voltage that moves the robot, and a current under what the
-  // motors draw stalled at it. The defaults, 2500 mA and 5 RPM, suit a push
-  // near 6 V on a drive that does not slip.
+  // motors draw stalled at it. 1000 mA and 5 RPM are the defaults.
   const bool touched_wall =
       wallReset(x_now, y_at_wall, 0_deg, -3_V, 2_s, 1000_mA, 5_rpm);
   if (!touched_wall) {

@@ -442,7 +442,7 @@ def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan
     return bridge.run(ACTIONS[kind], a=first, b=second, heading=step.get("heading", 0),
                       timeout=timeout_ms, direction=step.get("direction", 1), stop=not step["chain"],
                       volts=step["volts"], min_volts=MCLIB_DEFAULT_MIN_SPEED if min_volts is None else min_volts,
-                      current=step.get("current_ma", 2500), lead=step.get("lead", .5))
+                      current=step.get("current_ma", 1000), lead=step.get("lead", .5))
 
 
 def path_gap(frames, states):

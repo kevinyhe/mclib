@@ -378,7 +378,7 @@
   function newStep(type, after) {
     const info = state.config.step_types[type];
     const timeout = "fixed_ms" in info ? info.fixed_ms : info.timed_by ? info.defaults[info.timed_by] : 4000;
-    const step = { type, note: "", timeout_ms: timeout, volts: type === "wall_reset" ? 6 : 12, chain: false, actions: [], ...clone(info.defaults) };
+    const step = { type, note: "", timeout_ms: timeout, volts: 12, chain: false, actions: [], ...clone(info.defaults) };
     const pose = poses()[after]?.end ?? state.project.start;
     const ahead = along(pose.heading, 24);
     if ("x" in step && type !== "wall_reset") {

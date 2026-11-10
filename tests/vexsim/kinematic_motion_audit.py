@@ -107,7 +107,7 @@ class IdealBridge:
         return all(mode != 0 or volts == 0 for mode, volts in self.commands)
 
     def run(self, action, a=0, b=0, heading=0, timeout=4000, direction=1,
-            stop=True, volts=12, current=2500):
+            stop=True, volts=12, current=1000):
         result = self.lib.sim_run(action, a, b, heading, timeout, direction, stop, volts, current)
         self.record()
         if self.exceptions:

@@ -387,7 +387,7 @@ class PhysicsBridge:
             sample.contents.heading = math.nan
 
     def run(self, action, a=0, b=0, heading=0, timeout=4000, direction=1,
-            stop=True, volts=12, current=2500, lead=0.5, min_volts=-1.0):
+            stop=True, volts=12, current=1000, lead=0.5, min_volts=-1.0):
         """@p min_volts is the motion's min_speed; negative is mclib's default."""
         if not math.isfinite(lead) or not 0 <= lead < 1:
             raise ValueError("boomerang lead must be in [0, 1)")
@@ -590,7 +590,7 @@ def scenarios():
                    timeout_safety=True)
     for name, options, threshold, expected in (
         ("no_contact", {}, 2500, False),
-        ("locked_default_threshold", {"locked": True}, 2500, True),
+        ("locked_default_threshold", {"locked": True}, 1000, True),
         ("locked_2000mA_threshold", {"locked": True}, 2000, True),
         ("body_pinned_wheels_free", {"constrained": True}, 2000, False),
     ):
