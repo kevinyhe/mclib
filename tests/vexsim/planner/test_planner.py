@@ -1109,10 +1109,16 @@ class EngineTests(unittest.TestCase):
                  "override_wall_reset", "override_center_goal", "override_lift_heights")
         facing_the_wall = dict(example("override_wall_reset"), start=dict(x=-37, y=-58, heading=180))
         wall_reset = dict(type="wall_reset", x=-37, y=-62.7, heading=180)
+        facing_up_the_open_floor = example("points_arcs_and_swing")
+        self.assertEqual(facing_up_the_open_floor["start"]["heading"], 0)
         results = self.run_together(dict(
             {name: example(name) for name in names},
             wall_reset_at_its_defaults=dict(facing_the_wall, steps=[wall_reset]),
-            wall_reset_pushed_too_hard=dict(facing_the_wall, steps=[dict(wall_reset, volts=6, current_ma=2500)])))
+            wall_reset_pushed_too_hard=dict(facing_the_wall, steps=[dict(wall_reset, volts=6, current_ma=2500)]),
+            reverse_arc_of_half_a_circle=dict(
+                facing_up_the_open_floor, steps=[dict(type="reverse_arc", heading=180, radius=18, timeout_ms=8000)]),
+            reverse_arc_that_only_goes_forward=dict(facing_up_the_open_floor,
+                                                    steps=[dict(type="reverse_arc", heading=90, radius=18)])))
 
         def messages(step):
             return [item["message"] for item in step["readings"]]
@@ -1121,6 +1127,20 @@ class EngineTests(unittest.TestCase):
             with self.subTest(name, check="every step ran"):
                 self.assertTrue(results[name]["legal"])
                 self.assertEqual(results[name]["summary"]["skipped_steps"], 0)
+
+        with self.subTest("a reverse arc of half a circle runs, though 180 deg from 0 deg has the radius's sign"):
+            step = results["reverse_arc_of_half_a_circle"]["steps"][0]
+            self.assertTrue(step["executed"], messages(step))
+            self.assertLess(step["position_error_in"], 5.0)
+            self.assertLess(step["heading_error_deg"], 4.0)
+            self.assertLess(step["duration_s"], 6.0)
+            lowest_y = min(frame["true_y"] for frame in results["reverse_arc_of_half_a_circle"]["trace"])
+            self.assertLess(lowest_y, facing_up_the_open_floor["start"]["y"] - 15)
+
+        with self.subTest("a reverse arc that can only be driven forward is refused with the reason"):
+            step = results["reverse_arc_that_only_goes_forward"]["steps"][0]
+            self.assertIn("Not run: A reverse arc needs the radius and the heading change to have opposite signs "
+                          "from where the robot is now. Flip the radius sign or change the heading.", messages(step))
 
         with self.subTest("points_arcs_and_swing"):
             steps = results["points_arcs_and_swing"]["steps"]

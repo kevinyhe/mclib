@@ -25,6 +25,7 @@ using namespace mclib::units::literals;
 using mclib::Pose2D;
 using mclib::path::ArcPlan;
 using mclib::path::planArc;
+using mclib::path::planArcThrough;
 
 namespace {
 
@@ -69,6 +70,22 @@ int main() {
   std::printf("-- from a pose that isn't the origin\n");
   // Facing +X at (10, 5): centre right is -Y of it.
   checkArc("facing +X, (+12, +90)", Pose2D{10, 5, 90 * kDeg}, 180_deg, 12_in, 22, -7, false, 180);
+
+  std::printf("-- a given turn is not taken the short way round\n");
+  {
+    // Backing 190 deg round a centre 18 in to the right: past the far side of
+    // the circle at (36, 0) and 10 deg on.
+    const ArcPlan plan = planArcThrough(origin, -190_deg, 18_in);
+    CHECK(plan.path.valid());
+    CHECK(plan.reversed);
+    CHECK_NEAR(plan.path.length().in(), 18 * 190 * kDeg, 0.01);
+    CHECK_NEAR(plan.path.back().x.in(), 18 + 18 * std::cos(10 * kDeg), 1e-9);
+    CHECK_NEAR(plan.path.back().y.in(), 18 * std::sin(10 * kDeg), 1e-9);
+    // The same turn the short way is 170 deg forward.
+    CHECK(!planArc(origin, -190_deg, 18_in).reversed);
+    CHECK(!planArcThrough(origin, 0_deg, 18_in).path.valid());
+    CHECK(!planArcThrough(origin, -190_deg, 0_in).path.valid());
+  }
 
   std::printf("-- the short way round\n");
   {

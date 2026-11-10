@@ -579,14 +579,21 @@ def scenarios():
         yield dict(name=f"stress/{name}", preset="six_motor_450", action=9,
                    args={"a": 90, "b": 24}, target=(24, 24), angle=90,
                    options=options, position_tolerance=2.5)
+    # curveCircleReverse() only backs round a centre on the right to a lower
+    # heading. To a higher one it returns InvalidValue without moving.
+    reverse_arc = 3
+
+    def safety_args(action, **extra):
+        return {"a": -60 if action == reverse_arc else 60, "b": 24, "stop": False, **extra}
+
     for fault in ("cancel", "disabled", "imu", "encoder"):
         for action in (0, 1, 2, 3, 4, 5, 6, 7, 9):
             yield dict(name=f"safety/{fault}/{action}", preset="six_motor_450",
-                       action=action, args={"a": 60, "b": 24, "stop": False},
+                       action=action, args=safety_args(action),
                        options={"fault": fault}, safety=True)
     for action in (0, 1, 2, 3, 4, 5, 6, 7, 9):
         yield dict(name=f"safety/timeout/{action}", preset="six_motor_450",
-                   action=action, args={"a": 60, "b": 24, "stop": False, "timeout": 200},
+                   action=action, args=safety_args(action, timeout=200),
                    timeout_safety=True)
     for name, options, threshold, expected in (
         ("no_contact", {}, 2500, False),

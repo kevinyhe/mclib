@@ -113,8 +113,8 @@ const char* toString(MotionResult result);
  * `followTrajectory()` with @p config, settle included. The call's
  * `time_limit` and `max_output` still apply.
  *
- * The encoder arc still runs for a chained arc (`exit` false), a zero radius,
- * and `curveCircleReverse()` / `reverse` when the geometry says forward.
+ * The encoder arc still runs for a chained arc (`exit` false) and a zero
+ * radius.
  *
  * @param config RAMSETE gains and measured feedforward; `kV` must be
  *        positive, or this goes back to the encoder arcs like
@@ -207,8 +207,19 @@ mclib::control::MotionResult driveTo(QLength distance,
  * @param exit         True stops and holds at the end.
  * @param max_output   Voltage cap.
  * @param min_speed    Voltage floor; negative selects the `MotionConfig::min_voltage` default.
- * @param reverse      Forces the drive direction backward regardless of which
- *                     way the heading has to move.
+ * @param reverse      Requires the arc to be driven backward. Backing round
+ *                     a circle turns the heading away from the side its
+ *                     centre is on, so @p center_radius and the heading change
+ *                     must have opposite signs. With the same sign there is no
+ *                     backward arc: the call returns `InvalidValue` and the
+ *                     robot does not move, and prints why. Half a circle is
+ *                     the exception. The robot is rarely exactly on its
+ *                     planned heading, and the side it is off to decides
+ *                     which side of 180 deg the change falls: a same-sign
+ *                     change of 160 deg or more is backed round the other
+ *                     way, up to 200 deg.
+ *                     Without @p reverse the arc already backs up whenever the
+ *                     signs differ.
  * @param early_exit_range Chained only: end once this much of the arc is left,
  *                     measured along the outer wheel's path.
  * @return How the motion ended. See MotionResult.
@@ -222,7 +233,13 @@ mclib::control::MotionResult curveCircle(QAngle result_angle,
                                          bool reverse = false,
                                          QLength early_exit_range = 0.0 * mclib::units::inch);
 
-/// @brief `curveCircle()` with @p reverse forced on. See curveCircle().
+/**
+ * @brief `curveCircle()` with @p reverse on. See curveCircle().
+ *
+ * Returns `InvalidValue` without moving when @p center_radius and the heading
+ * change have the same sign, because that arc can only be driven forward. A
+ * half circle runs whichever sign its heading change wraps to.
+ */
 mclib::control::MotionResult curveCircleReverse(
     QAngle result_angle,
     QLength center_radius,

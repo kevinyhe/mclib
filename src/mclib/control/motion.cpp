@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <initializer_list>
 #include <optional>
 
@@ -644,15 +645,38 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
   if (!validEarlyExit(early_exit_range.in(), exit)) safety.reject();
   if (!safety.running()) return safety.result();
   const double early_exit_in = early_exit_range.in();
+  // Signed: the sign picks the curve direction, the magnitude is the radius.
+  const double center_radius_in = center_radius.in();
+
+  // Normalize the target angle to be within +/-180 degrees of the current heading
+  double result_angle_deg = safety.normalize(result_angle_target.deg());
+  const double entry_angle_deg = safety.heading();
+  if (reverse)
+  {
+    const std::optional<double> backward_target_deg =
+        mclib::control::reverseArcTargetDeg(center_radius_in, entry_angle_deg, result_angle_deg);
+    if (!backward_target_deg.has_value())
+    {
+      std::printf("mclib: curveCircleReverse() cannot back round a %.1f in radius from %.1f deg "
+                  "to %.1f deg. Flip the sign of the radius.\n",
+                  center_radius_in, entry_angle_deg, result_angle_deg);
+      safety.reject();
+      return safety.result();
+    }
+    result_angle_deg = *backward_target_deg;
+  }
 
   // With useRamseteForArcs(), plan the same arc and follow it on the pose.
   if (exit)
   {
     if (const std::optional<ArcFollower> follower = arcFollower())
     {
-      const mclib::path::ArcPlan plan =
-          mclib::path::planArc(safety.pose(), result_angle_target, center_radius);
-      if (plan.path.valid() && (!reverse || plan.reversed))
+      const mclib::path::ArcPlan plan = reverse
+          ? mclib::path::planArcThrough(safety.pose(),
+                                        (result_angle_deg - entry_angle_deg) * mclib::units::degree,
+                                        center_radius)
+          : mclib::path::planArc(safety.pose(), result_angle_target, center_radius);
+      if (plan.path.valid())
       {
         mclib::path::TrajectoryConstraints limits = follower->limits;
         limits.reversed = plan.reversed;
@@ -666,9 +690,6 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
     }
   }
 
-  double result_angle_deg = result_angle_target.deg();
-  // Signed: the sign picks the curve direction, the magnitude is the radius.
-  const double center_radius_in = center_radius.in();
   const double time_limit_msec = time_limit.ms();
   const double max_output = max_voltage.volts();
   const double min_speed = min_voltage.volts();
@@ -679,10 +700,7 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
   double real_angle = 0, current_angle = 0;
   double ratio, result_angle;
 
-  // Normalize the target angle to be within +/-180 degrees of the current heading
-  result_angle_deg = safety.normalize(result_angle_deg);
   // convert delta heading into radians so arc length math can use radius times angle
-  const double entry_angle_deg = safety.heading();
   result_angle = (result_angle_deg - entry_angle_deg) * 3.14159265359 / 180;
 
   // Calculate arc lengths for inner and outer wheels
