@@ -5,6 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+## 0.4.1
+
+Upgrading from 0.4.0:
+
+- `wallReset()` stalls at 1000 mA by default, not 2500 mA, and
+  `Routine::wallReset()` pushes at 3 V, not 4 V. A reset that never
+  happened may now happen. Anything that holds the robot still for 50 ms
+  reads as the wall: a game piece, another robot, or a push too weak to
+  start it moving. Check the return value, and pass your own voltage and
+  threshold if your drive stalls on something else first.
+- `curveCircleReverse()` returns `InvalidValue` and does not move when the
+  radius and the heading change have the same sign. It used to back the
+  wrong way until its time limit. Flip the sign of the radius.
+- After `Chassis::setPose()` to a new heading, `driveTo()` holds the new
+  heading. It used to turn back toward the old one.
+- `Routine::MotionStep::reversed(false)` drives the step forward. It used
+  to leave a reversed step reversed.
+- `control::correctOdometryPosition(x, y)` counts as setting the pose. A
+  `PoseFusion` on the odometry task restarts there.
+- `CommandController::getTrigger()` returns a trigger the controller owns.
+  Remove any `delete` of it.
+
 ### Added
 
 - Path planner (`tests/vexsim/planner`), replacing the motion builder.
@@ -39,6 +61,61 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   path settings and gains, a worn field, no inertial sensor, a stack on the
   Center Goal, the lift's move times, and a wall reset on an Override wall.
   A second test runs them and checks what each description says.
+- `control::readOdometry()` returns the pose with a count of how many times
+  the pose has been set, and `control::odometryJumpCount()` returns the
+  count alone. `control::correctOdometryPosition(x, y, jumps)` writes a
+  position only while the count still matches.
+- `control::OdometryFusion` steps a `PoseFusion` on the odometry pose and
+  writes its correction back. The odometry task and the physics simulator
+  both run it.
+- `path::planArcThrough()` plans an arc from the turn to make, which can be
+  more than half a circle.
+
+### Changed
+
+- `wallReset()` stalls at 1000 mA by default, down from 2500 mA. In the
+  simulator a 14 lb drive with four 450 RPM motors never draws more than
+  2.0 A a motor against a wall, so 2500 mA could not be reached. The same
+  default changed on `ChassisController::makeWallResetCommand()` and
+  `Routine::wallReset()`.
+- `Routine::wallReset()` pushes at 3 V by default, down from 4 V. At 4 V the
+  wheels of that drive slip at 27 RPM, above the 5 RPM stall limit, and the
+  reset never happens.
+- Path planner: a wall reset step starts at 3 V and 1000 mA, down from 6 V
+  and 2500 mA.
+- `curveCircleReverse()`, and `curveCircle()` with `reverse = true`, return
+  `InvalidValue` without moving when the radius and the heading change have
+  the same sign. That arc can only be driven forward. It used to back round
+  the circle until its time limit and never count it as progress. It prints
+  the radius and the two headings when it refuses. Half a circle runs
+  whichever way its heading change wraps: a same-sign change of 160° or more
+  is backed round the other way. Before, a `curveCircleReverse(180_deg, ...)`
+  from 0° finished or ran out its time limit depending on which side of 0°
+  the robot started.
+- `control::correctOdometryPosition(x, y)` adds one to
+  `control::odometryJumpCount()` when it moves the position.
+- `CommandController::getTrigger()` returns the same trigger each time for a
+  button, and the controller owns it. Do not delete it.
+
+### Fixed
+
+- `Chassis::setPose()` moves the heading that `driveTo()` and
+  `correctHeading()` hold to the heading the IMU reads after the write.
+  After a `setPose()` to a new heading, the next `driveTo()` used to turn
+  back toward the old one.
+- `Routine::MotionStep::reversed(false)` puts the step back to forward. It
+  used to leave a reversed step reversed. On an arc step it clears the
+  reverse flag, also for a step made with `curveCircleReverse()`: the signs
+  of the radius and the heading change then pick the direction, as in
+  `curveCircle()`.
+- The odometry task restarts `PoseFusion` when the pose is set, by
+  `setPose()`, `wallReset()`, `resetOdometry()` or a snapshot. The filter
+  used to read the jump as distance driven, and carry the correction it
+  still owed the old pose over to the new one. A correction worked out
+  before the jump is dropped instead of written over the new pose. The
+  restart keeps the filter's position uncertainty when it is above 0.5 in,
+  as a circle of its larger axis. Heading uncertainty restarts at 0.5°.
+- `CommandController::getTrigger()` no longer leaks a trigger on every call.
 
 ## 0.4.0
 

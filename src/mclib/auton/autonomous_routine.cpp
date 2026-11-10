@@ -350,9 +350,7 @@ Routine::MotionStep& Routine::MotionStep::withDirection(int direction) {
 
 Routine::MotionStep& Routine::MotionStep::reversed(bool reverse) {
   m_routine->m_steps[m_index].options.reverse = reverse;
-  if (reverse) {
-    m_routine->m_steps[m_index].options.direction = -1;
-  }
+  m_routine->m_steps[m_index].options.direction = reverse ? -1 : 1;
   return rebuild();
 }
 
@@ -850,13 +848,14 @@ Routine::MotionStep Routine::curveCircleReverse(ChassisController& chassis,
       RemainingUnit::Length,
       [&chassis, result_angle, center_radius](
           const MotionOptions& step_options) {
-        return chassis.makeCurveCircleReverseCommand(result_angle,
-                                                     center_radius,
-                                                     step_options.timeout,
-                                                     step_options.exit,
-                                                     step_options.max_voltage,
-                                                     step_options.min_voltage,
-                                                     step_options.early_exit_distance);
+        return chassis.makeCurveCircleCommand(result_angle,
+                                              center_radius,
+                                              step_options.timeout,
+                                              step_options.exit,
+                                              step_options.max_voltage,
+                                              step_options.min_voltage,
+                                              step_options.reverse,
+                                              step_options.early_exit_distance);
       },
       options,
       timeout);

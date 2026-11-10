@@ -51,5 +51,21 @@ struct ArcPlan {
 ArcPlan planArc(const Pose2D& start, units::QAngle end_heading, units::QLength signed_radius,
                 units::QLength spacing = 0.5 * units::inch);
 
+/**
+ * @brief Bake the arc that turns the heading by @p turn.
+ *
+ * `planArc()` with the turn given instead of taken the short way round, so
+ * it can be more than half a circle.
+ *
+ * @param start Robot pose: inches, radians, compass frame.
+ * @param turn Change of heading. Positive is clockwise.
+ * @param signed_radius Radius to the robot's centre. Positive: centre on the
+ *        right.
+ * @param spacing Distance between samples.
+ * @return An invalid path (`valid()` false) for a zero radius or no turn.
+ */
+ArcPlan planArcThrough(const Pose2D& start, units::QAngle turn, units::QLength signed_radius,
+                       units::QLength spacing = 0.5 * units::inch);
+
 }  // namespace path
 }  // namespace mclib

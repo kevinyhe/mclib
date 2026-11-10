@@ -453,9 +453,16 @@ control::useRamseteForArcs(follow, arc_limits);
 curveCircle(90_deg, 24_in, 5_s);  // now followed on the odometry pose
 ```
 
-The encoder arc still runs for a chained arc (`exit` false), a zero radius,
-and a `curveCircleReverse()` whose geometry says forward. `useEncoderArcs()`
-switches back.
+The encoder arc still runs for a chained arc (`exit` false) and a zero
+radius. `useEncoderArcs()` switches back.
+
+A reverse arc needs the radius and the heading change to have opposite signs.
+Backing round a circle turns the heading away from the side its centre is on.
+`curveCircleReverse()` with the same sign on both returns `InvalidValue` and
+does not move, and prints why. Half a circle is the exception. Its heading
+change wraps to +180° or -180° with the side of its planned heading the robot
+starts on, so a same-sign change of 160° or more is backed round the other
+way, with `useRamseteForArcs()` or without.
 
 In the physics simulator, on the 90° arcs of 24 in radius, with two tracking
 wheels:

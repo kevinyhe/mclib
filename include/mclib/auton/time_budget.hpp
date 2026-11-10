@@ -33,9 +33,10 @@ inline constexpr QTime kAutonomousPeriod = 15.0 * units::second;
 /**
  * @brief Smallest timeout ever handed to a step.
  *
- * The motion API reads a timeout of zero as "no timeout", so clamping a step
- * down to exactly zero would turn a nearly-expired budget into an unbounded
- * motion - the opposite of what was asked for. Everything clamps to this
+ * A timeout of zero is never what a nearly-expired budget means.
+ * ChassisController's scheduler-driven goals read zero as "no timeout", so
+ * the step would run unbounded. The blocking routines in motion.hpp reject
+ * zero: they return `InvalidValue` and do not move. Everything clamps to this
  * instead, which is one scheduler tick and change.
  */
 inline constexpr QTime kMinStepTimeout = 20.0 * units::millisecond;

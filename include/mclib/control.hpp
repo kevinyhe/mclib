@@ -11,6 +11,7 @@
 #include "mclib/control/async_motion.hpp"
 #include "mclib/control/pose_filter.hpp"
 #include "mclib/control/odometry.hpp"
+#include "mclib/control/odometry_fusion.hpp"
 #include "mclib/control/odometry_task.hpp"
 #include "mclib/control/profile.hpp"
 #include "mclib/control/robot_state.hpp"

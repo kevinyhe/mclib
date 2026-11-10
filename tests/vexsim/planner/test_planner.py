@@ -173,7 +173,7 @@ class ProjectTests(unittest.TestCase):
             "a section speed limit": any(section["speed_percent"] is not None for section in sections),
             "a point with its own heading": any(point["heading"] is not None for point in points),
             "a curve handle": any(point["handle_in"] is not None or point["handle_out"] is not None for point in points),
-            "a wall reset stall current": any(step.get("current_ma") not in (None, 2500) for step in steps),
+            "a wall reset stall current": any(step.get("current_ma") not in (None, 1000) for step in steps),
             "conditions": any(project["conditions"] != defaults["conditions"] for project in projects),
             "gains": any(project["gains"] != defaults["gains"] for project in projects),
             "speed-up and slow-down limits": any(project["slew"] != defaults["slew"] for project in projects),
@@ -459,7 +459,7 @@ class ExportTests(unittest.TestCase):
                      "{cascade::Action::When::End, 0, cascade::Mechanism::Claw, "
                      "static_cast<int>(cascade::ClawPreset::Closed)}",
                      "  pros::delay(15000);\n",
-                     "    wallReset(0_in, -63_in, 180_deg, 6_V, 4000_ms, 2500 * mclib::units::milliampere);\n",
+                     "    wallReset(0_in, -63_in, 180_deg, 3_V, 4000_ms, 1000 * mclib::units::milliampere);\n",
                      "Claw to Open: jaws 4.4 in apart after driving 8 in from the step start."):
             self.assertIn(text, routine)
         for gone in ("claw_motor", "toggle_arm", "ToggleArm", "Reached) return;", "TimedOut) return;", "if (!wallReset(",
@@ -1107,10 +1107,18 @@ class EngineTests(unittest.TestCase):
     def test_16_the_examples_that_show_one_feature_do_what_their_descriptions_say(self):
         names = ("points_arcs_and_swing", "keep_moving", "path_settings_and_gains", "worn_field", "no_inertial_sensor",
                  "override_wall_reset", "override_center_goal", "override_lift_heights")
-        wall_reset_at_its_defaults = dict(example("override_wall_reset"), start=dict(x=-37, y=-58, heading=180),
-                                          steps=[dict(type="wall_reset", x=-37, y=-62.7, heading=180)])
-        results = self.run_together(dict({name: example(name) for name in names},
-                                         wall_reset_at_its_defaults=wall_reset_at_its_defaults))
+        facing_the_wall = dict(example("override_wall_reset"), start=dict(x=-37, y=-58, heading=180))
+        wall_reset = dict(type="wall_reset", x=-37, y=-62.7, heading=180)
+        facing_up_the_open_floor = example("points_arcs_and_swing")
+        self.assertEqual(facing_up_the_open_floor["start"]["heading"], 0)
+        results = self.run_together(dict(
+            {name: example(name) for name in names},
+            wall_reset_at_its_defaults=dict(facing_the_wall, steps=[wall_reset]),
+            wall_reset_pushed_too_hard=dict(facing_the_wall, steps=[dict(wall_reset, volts=6, current_ma=2500)]),
+            reverse_arc_of_half_a_circle=dict(
+                facing_up_the_open_floor, steps=[dict(type="reverse_arc", heading=180, radius=18, timeout_ms=8000)]),
+            reverse_arc_that_only_goes_forward=dict(facing_up_the_open_floor,
+                                                    steps=[dict(type="reverse_arc", heading=90, radius=18)])))
 
         def messages(step):
             return [item["message"] for item in step["readings"]]
@@ -1119,6 +1127,20 @@ class EngineTests(unittest.TestCase):
             with self.subTest(name, check="every step ran"):
                 self.assertTrue(results[name]["legal"])
                 self.assertEqual(results[name]["summary"]["skipped_steps"], 0)
+
+        with self.subTest("a reverse arc of half a circle runs, though 180 deg from 0 deg has the radius's sign"):
+            step = results["reverse_arc_of_half_a_circle"]["steps"][0]
+            self.assertTrue(step["executed"], messages(step))
+            self.assertLess(step["position_error_in"], 5.0)
+            self.assertLess(step["heading_error_deg"], 4.0)
+            self.assertLess(step["duration_s"], 6.0)
+            lowest_y = min(frame["true_y"] for frame in results["reverse_arc_of_half_a_circle"]["trace"])
+            self.assertLess(lowest_y, facing_up_the_open_floor["start"]["y"] - 15)
+
+        with self.subTest("a reverse arc that can only be driven forward is refused with the reason"):
+            step = results["reverse_arc_that_only_goes_forward"]["steps"][0]
+            self.assertIn("Not run: A reverse arc needs the radius and the heading change to have opposite signs "
+                          "from where the robot is now. Flip the radius sign or change the heading.", messages(step))
 
         with self.subTest("points_arcs_and_swing"):
             steps = results["points_arcs_and_swing"]["steps"]
@@ -1162,8 +1184,16 @@ class EngineTests(unittest.TestCase):
             self.assertIn("Odometry was set to (-37, -62.7) facing 180°.", messages(steps[4]))
             self.assertLess(math.dist(steps[4]["true_pose"][:2], (-37, -62.7)), 0.5)
 
-        with self.subTest("the same wall reset at 6 V and 2500 mA"):
+        with self.subTest("a wall reset at its defaults, 3 V and 1000 mA"):
+            asked = results["wall_reset_at_its_defaults"]["project"]["steps"][0]
+            self.assertEqual((asked["volts"], asked["current_ma"]), (3, 1000))
             step = results["wall_reset_at_its_defaults"]["steps"][0]
+            self.assertIn("Detected the wall (motor stall).", messages(step))
+            self.assertIn("Odometry was set to (-37, -62.7) facing 180°.", messages(step))
+            self.assertLess(math.dist(step["true_pose"][:2], (-37, -62.7)), 0.5)
+
+        with self.subTest("the same wall reset at 6 V and 2500 mA"):
+            step = results["wall_reset_pushed_too_hard"]["steps"][0]
             self.assertEqual({contact["element"] for contact in step["contacts"]}, {"the red Alliance Station wall"})
             self.assertIn("Did not detect the wall: the motor current never stayed above 2500 mA.", messages(step))
             self.assertIn("Odometry was not set to the requested pose.", messages(step))

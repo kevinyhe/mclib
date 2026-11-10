@@ -62,6 +62,13 @@ struct HolonomicControllerConfig {
  * runs to its timeout. Heading is the pose's `theta` too, so the position and
  * the heading it steers by come from the same locked read.
  *
+ * `moveToPose()`, `moveToPoint()` and `followTrajectory()` only set a goal.
+ * They do not claim this subsystem, so a default drive command keeps running,
+ * and it writes the motors after `periodic()` on every scheduler pass: the
+ * goal never moves the robot. With a default command registered, use the
+ * `makeXxxCommand()` forms. They claim the subsystem for as long as the goal
+ * runs.
+ *
  * @code
  * mclib::HolonomicChassis drive({1}, {-2}, {3}, {-4}, mclib::device::Gearset::Green,
  *                               mclib::holonomic::Kind::Mecanum, imu);

@@ -131,6 +131,9 @@ public:
    * Chassis - `odometrySetupFrom(chassis)` - which is the normal setup. A
    * Chassis built with `imu == nullptr` computes heading from the drive
    * encoders, and this shifts that heading to `pose.theta` instead.
+   *
+   * The heading `driveTo()` and `correctHeading()` hold moves to `pose.theta`
+   * as well, so the next `driveTo()` drives straight along the new heading.
    */
   void setPose(const Pose2D& pose);
 

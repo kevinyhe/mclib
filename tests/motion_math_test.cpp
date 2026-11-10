@@ -594,6 +594,27 @@ int main() {
   CHECK((30.0 * degree).deg() != 30.0);
   CHECK_NEAR((30.0 * degree).deg(), 30.0, 1e-13);
 
+  // A reverse arc: the radius and the heading change have opposite signs.
+  using mclib::control::reverseArcTargetDeg;
+  CHECK_EQ(reverseArcTargetDeg(24.0, 0.0, -90.0).value(), -90.0);
+  CHECK_EQ(reverseArcTargetDeg(-24.0, 0.0, 90.0).value(), 90.0);
+  CHECK_EQ(reverseArcTargetDeg(24.0, 90.0, 0.0).value(), 0.0);
+  CHECK(!reverseArcTargetDeg(24.0, 0.0, 90.0).has_value());
+  CHECK(!reverseArcTargetDeg(-24.0, 0.0, -90.0).has_value());
+  CHECK(!reverseArcTargetDeg(24.0, 90.0, 180.0).has_value());
+  // Half a circle wraps to +180 or -180 on the heading's noise. Both are the
+  // same arc, driven the way a backward arc turns.
+  CHECK_EQ(reverseArcTargetDeg(18.0, -0.1, -180.0).value(), -180.0);
+  CHECK_EQ(reverseArcTargetDeg(18.0, 0.0, 180.0).value(), -180.0);
+  CHECK_EQ(reverseArcTargetDeg(18.0, 0.1, 180.0).value(), -180.0);
+  CHECK_EQ(reverseArcTargetDeg(-18.0, 0.1, -179.0).value(), 181.0);
+  CHECK_EQ(reverseArcTargetDeg(18.0, 0.0, 160.0).value(), -200.0);
+  CHECK(!reverseArcTargetDeg(18.0, 0.0, 159.0).has_value());
+  CHECK(!reverseArcTargetDeg(-18.0, 0.0, -159.0).has_value());
+  // A turn in place and an arc with nowhere to go keep their target.
+  CHECK_EQ(reverseArcTargetDeg(0.0, 0.0, 90.0).value(), 90.0);
+  CHECK_EQ(reverseArcTargetDeg(24.0, 45.0, 45.0).value(), 45.0);
+
   // The wallReset() "leave the IMU alone" sentinel has to survive unwrapping.
   CHECK(std::isnan(keep_current_heading.rad()));
   CHECK(std::isnan(keep_current_heading.deg()));

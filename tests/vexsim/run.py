@@ -387,7 +387,7 @@ class PhysicsBridge:
             sample.contents.heading = math.nan
 
     def run(self, action, a=0, b=0, heading=0, timeout=4000, direction=1,
-            stop=True, volts=12, current=2500, lead=0.5, min_volts=-1.0):
+            stop=True, volts=12, current=1000, lead=0.5, min_volts=-1.0):
         """@p min_volts is the motion's min_speed; negative is mclib's default."""
         if not math.isfinite(lead) or not 0 <= lead < 1:
             raise ValueError("boomerang lead must be in [0, 1)")
@@ -579,18 +579,25 @@ def scenarios():
         yield dict(name=f"stress/{name}", preset="six_motor_450", action=9,
                    args={"a": 90, "b": 24}, target=(24, 24), angle=90,
                    options=options, position_tolerance=2.5)
+    # curveCircleReverse() only backs round a centre on the right to a lower
+    # heading. To a higher one it returns InvalidValue without moving.
+    reverse_arc = 3
+
+    def safety_args(action, **extra):
+        return {"a": -60 if action == reverse_arc else 60, "b": 24, "stop": False, **extra}
+
     for fault in ("cancel", "disabled", "imu", "encoder"):
         for action in (0, 1, 2, 3, 4, 5, 6, 7, 9):
             yield dict(name=f"safety/{fault}/{action}", preset="six_motor_450",
-                       action=action, args={"a": 60, "b": 24, "stop": False},
+                       action=action, args=safety_args(action),
                        options={"fault": fault}, safety=True)
     for action in (0, 1, 2, 3, 4, 5, 6, 7, 9):
         yield dict(name=f"safety/timeout/{action}", preset="six_motor_450",
-                   action=action, args={"a": 60, "b": 24, "stop": False, "timeout": 200},
+                   action=action, args=safety_args(action, timeout=200),
                    timeout_safety=True)
     for name, options, threshold, expected in (
         ("no_contact", {}, 2500, False),
-        ("locked_default_threshold", {"locked": True}, 2500, True),
+        ("locked_default_threshold", {"locked": True}, 1000, True),
         ("locked_2000mA_threshold", {"locked": True}, 2000, True),
         ("body_pinned_wheels_free", {"constrained": True}, 2000, False),
     ):

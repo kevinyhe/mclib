@@ -458,6 +458,10 @@ Behavior:
   target.
 - `stop()` holds the current position. Use `BrakeMode::Hold` on the motors as
   well. `setManualVoltage(0.0)` goes limp.
+- `timeout_ms` ends the command, not the move. After it the loop still drives
+  to the target, so a blocked mechanism keeps pushing. To give up and hold
+  where it is, interrupt the command: `Command::withTimeout(std::move(move),
+  1500_ms)`.
 
 ## DiscreteActuatorMechanism
 

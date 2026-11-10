@@ -59,13 +59,28 @@ if (drive.wait() != MotionResult::Reached) {
 `wallReset()` returns `true` only after sustained wall contact, and then resets
 the pose. On failure it stops, returns `false` and leaves the pose unchanged.
 
-Contact means the drive motors average at least `current_threshold` and turn
-slower than `velocity_threshold` (5 RPM) for 50 ms. Wheels that slip against
-the wall keep turning, so a push that is too hard never counts. In the
-simulator a four-motor 450 RPM, 14 lb robot slips at about 70 RPM at 6 V and
-is never reset; at 3 V with a 1000 mA threshold it is reset in 0.5 s. Push
-with the lowest voltage that still moves the robot, set the threshold under
-what the motors draw at that voltage, and check the return value.
+Contact means the drive motors average at least `current_threshold` (1000 mA)
+and turn slower than `velocity_threshold` (5 RPM) for 50 ms. Wheels that slip
+against the wall keep turning, so a push that is too hard never counts. In
+the simulator, a 14 lb robot on four 450 RPM motors and 2.75 in omni wheels
+does this on the wall:
+
+| Push | Motor speed | Current, each motor |
+| --- | --- | --- |
+| 2 V | 0 RPM | 0.91 A |
+| 3 V | 0 RPM | 1.36 A |
+| 4 V | 27 RPM | 1.62 A |
+| 6 V | 98 RPM | 2.00 A |
+| 12 V | 356 RPM | 1.91 A |
+
+It is reset in 0.5 s at 3 V and never from 4 V up. Its motors never reach
+the V5 limit of 2.5 A, which was the default threshold before. Push with the
+lowest voltage that still moves the robot, set the threshold under what the
+motors draw at that voltage, and check the return value.
+
+Anything that holds the robot still reads as the wall: a game piece, another
+robot, or a push too weak to start it moving. The pose is then set short of
+the wall. Use `wallReset()` where nothing else can be in the way.
 
 ## Competition disable
 

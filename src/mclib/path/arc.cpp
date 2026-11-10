@@ -14,9 +14,15 @@ namespace path {
 
 ArcPlan planArc(const Pose2D& start, units::QAngle end_heading, units::QLength signed_radius,
                 units::QLength spacing) {
+  return planArcThrough(start, units::QAngle::fromBase(wrapAngle(end_heading.rad() - start.theta)),
+                        signed_radius, spacing);
+}
+
+ArcPlan planArcThrough(const Pose2D& start, units::QAngle signed_turn, units::QLength signed_radius,
+                       units::QLength spacing) {
   ArcPlan plan;
   const double r = signed_radius.in();
-  const double turn = wrapAngle(end_heading.rad() - start.theta);
+  const double turn = signed_turn.rad();
   if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(start.theta) ||
       !std::isfinite(r) || !std::isfinite(turn) || std::fabs(r) < 1e-9 ||
       std::fabs(turn) < 1e-9) {

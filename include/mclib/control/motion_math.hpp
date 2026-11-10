@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cmath>
+#include <optional>
 
 /**
  * @file motion_math.hpp
@@ -252,6 +253,44 @@ inline double slipSpeedLimit(double chase_power_gain, double radius_in) {
     return 0.0;
   }
   return std::sqrt(chase_power_gain * std::fabs(radius_in) * 9.8);
+}
+
+/// @brief How far short of half a circle a reverse arc's heading change may
+///        be and still be driven the other way round. See
+///        reverseArcTargetDeg().
+inline constexpr double kReverseArcHalfCircleSlackDeg = 20.0;
+
+/**
+ * @brief The heading a backward arc ends on, or nothing when the arc can
+ *        only be driven forward.
+ *
+ * Backing round a circle turns the heading away from the side its centre is
+ * on: with the centre on the robot's right, a positive radius, the heading
+ * falls. So a backward arc needs the radius and the heading change to have
+ * opposite signs.
+ *
+ * The target comes in wrapped to within 180 deg of the entry heading. A robot
+ * is rarely exactly on the heading its routine planned, so for half a circle
+ * the side it is off to picks the sign of the change. A change with the wrong
+ * sign that is within kReverseArcHalfCircleSlackDeg of half a circle is taken
+ * the other way round: 175 deg up becomes 185 deg down.
+ *
+ * A zero radius is a turn in place, which has no forward or backward, and no
+ * heading change is no arc. Both keep their target.
+ *
+ * @param signed_radius_in   Positive puts the centre on the robot's right.
+ * @param entry_heading_deg  The heading the arc starts on.
+ * @param target_heading_deg The heading to end on, within 180 deg of
+ *                           @p entry_heading_deg.
+ */
+inline std::optional<double> reverseArcTargetDeg(double signed_radius_in,
+                                                 double entry_heading_deg,
+                                                 double target_heading_deg) {
+  const double change_deg = target_heading_deg - entry_heading_deg;
+  const bool turns_the_way_backing_turns = !(signed_radius_in * change_deg > 0.0);
+  if (turns_the_way_backing_turns) return target_heading_deg;
+  if (std::fabs(change_deg) < 180.0 - kReverseArcHalfCircleSlackDeg) return std::nullopt;
+  return target_heading_deg - std::copysign(360.0, change_deg);
 }
 
 }  // namespace control

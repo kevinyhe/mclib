@@ -44,6 +44,9 @@ MAX_STATES = 40000
 MOTION_RESULTS = ("Reached", "TimedOut", "Cancelled", "Disabled", "InvalidValue", "NoDrive")
 #: The min_speed that makes an mclib motion use its own min_output floor
 MCLIB_DEFAULT_MIN_SPEED = -1.0
+#: curveCircleReverse() backs the other way round for a same-sign heading change this large or larger:
+#: 180 less mclib's kReverseArcHalfCircleSlackDeg
+REVERSE_ARC_HALF_CIRCLE_FROM_DEG = 160.0
 ACTIONS = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4, turn_to_point=5, point=6, boomerang=7,
                wall_reset=8)
 #: A step that ends further than this from its target, or further off its
@@ -431,9 +434,11 @@ def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan
         return rig.spin_roller(step, timeout_ms)
     if kind == "path":
         return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan)
-    if kind == "reverse_arc" and math.remainder(step["heading"] - bridge.pose()[2], 360) * step["radius"] > 1e-8:
-        raise ValueError("A reverse arc needs the radius and the heading change to have opposite signs "
-                         "from where the robot is now. Flip the radius sign or change the heading")
+    if kind == "reverse_arc":
+        change = math.remainder(step["heading"] - bridge.pose()[2], 360)
+        if change * step["radius"] > 1e-8 and abs(change) < REVERSE_ARC_HALF_CIRCLE_FROM_DEG:
+            raise ValueError("A reverse arc needs the radius and the heading change to have opposite signs "
+                             "from where the robot is now. Flip the radius sign or change the heading")
     if kind == "wall_reset" and project["field"] == "open":
         bridge.sim.dynamics.locked = True
     first = step.get("distance", step.get("x", step.get("heading", 0)))
@@ -442,7 +447,7 @@ def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan
     return bridge.run(ACTIONS[kind], a=first, b=second, heading=step.get("heading", 0),
                       timeout=timeout_ms, direction=step.get("direction", 1), stop=not step["chain"],
                       volts=step["volts"], min_volts=MCLIB_DEFAULT_MIN_SPEED if min_volts is None else min_volts,
-                      current=step.get("current_ma", 2500), lead=step.get("lead", .5))
+                      current=step.get("current_ma", 1000), lead=step.get("lead", .5))
 
 
 def path_gap(frames, states):

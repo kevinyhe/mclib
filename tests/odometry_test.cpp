@@ -446,6 +446,44 @@ void testTickPublishesToRobotState() {
 
 }  // namespace
 
+void testOnlyAResetThatMovesThePoseIsAJump() {
+  std::printf("-- resetOdometry() counts a jump only when it moves the pose\n");
+  mclib::control::resetOdometry(Pose2D{1.0, 2.0, 0.5});
+  const double start = mclib::control::odometryJumpCount();
+
+  // Taring the drive encoders resets to the pose odometry already has.
+  mclib::control::resetOdometry(mclib::control::robotState().pose());
+  CHECK_EQ(static_cast<double>(mclib::control::odometryJumpCount()), start);
+
+  mclib::control::resetOdometry(Pose2D{1.0, 2.0, 0.6});
+  CHECK_EQ(static_cast<double>(mclib::control::odometryJumpCount()), start + 1);
+
+  const mclib::control::OdometryReading before_jump = mclib::control::readOdometry();
+  CHECK_EQ(static_cast<double>(before_jump.jumps), start + 1);
+  CHECK_NEAR(before_jump.pose.theta, 0.6, 1e-12);
+
+  // A correction worked out before a jump would undo the jump. It is refused.
+  mclib::control::resetOdometry(Pose2D{30.0, 40.0, 0.6});
+  CHECK(!mclib::control::correctOdometryPosition(1.1, 2.1, before_jump.jumps));
+  CHECK_NEAR(mclib::control::robotState().pose().x, 30.0, 1e-12);
+  CHECK_NEAR(mclib::control::robotState().pose().y, 40.0, 1e-12);
+
+  // One worked out from the pose as it is now is written, and is not a jump.
+  const mclib::control::OdometryReading now = mclib::control::readOdometry();
+  CHECK(mclib::control::correctOdometryPosition(30.5, 40.5, now.jumps));
+  CHECK_NEAR(mclib::control::robotState().pose().x, 30.5, 1e-12);
+  CHECK_EQ(static_cast<double>(mclib::control::odometryJumpCount()), start + 2);
+
+  // A correction from outside, a snapshot's, is a jump when it moves the
+  // position and not when it does not.
+  CHECK(mclib::control::correctOdometryPosition(30.5, 40.5));
+  CHECK_EQ(static_cast<double>(mclib::control::odometryJumpCount()), start + 2);
+  CHECK(mclib::control::correctOdometryPosition(31.0, 40.5));
+  CHECK_EQ(static_cast<double>(mclib::control::odometryJumpCount()), start + 3);
+  CHECK(!mclib::control::correctOdometryPosition(NAN, 40.5));
+  CHECK_EQ(static_cast<double>(mclib::control::odometryJumpCount()), start + 3);
+}
+
 int main() {
   testFrameStraightAhead();
   testFrameMatchesHeadingVector();
@@ -457,5 +495,6 @@ int main() {
   testHorizontalTrackingWheel();
   testResetIsNotADelta();
   testTickPublishesToRobotState();
+  testOnlyAResetThatMovesThePoseIsAJump();
   return mclib::test::summary("odometry");
 }

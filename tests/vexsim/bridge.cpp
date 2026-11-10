@@ -3,6 +3,7 @@
 #include "mclib/control/motion.hpp"
 #include "mclib/control/motion_config.hpp"
 #include "mclib/control/odometry.hpp"
+#include "mclib/control/odometry_fusion.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/characterize.hpp"
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 // Set by code linked next to this bridge that runs every time the simulated
 // clock moves, the way the command scheduler runs mechanisms on the robot.
@@ -53,6 +55,7 @@ mclib::control::RamseteConfig ramsete_config;
 constexpr double kFieldOffsetIn = 72.0;
 struct FusionRig {
   std::unique_ptr<mclib::control::PoseFusion> fusion;
+  std::optional<mclib::control::OdometryFusion> on_odometry;
   std::vector<double> readings;  // latest, -1 = none since last tick
 } fusion_rig;
 mclib::path::TrajectoryConstraints ramsete_limits;
@@ -95,21 +98,13 @@ struct SimDrive : mclib::control::DriveHardware {
   const mclib::units::DriveGeometry& driveGeometry() const override { return geometry; }
 } drive;
 
-// What startOdometry() does with OdometrySetup::fusion, after each tick.
-void runFusion() {
-  const auto corrected =
-      fusion_rig.fusion->step(mclib::control::robotState().pose(), sample.millis);
-  if (corrected.has_value())
-    mclib::control::correctOdometryPosition(corrected->x(), corrected->y());
-}
-
 void refresh(std::uint32_t ms) {
   advance(ms, &sample);
   if (sample.cancel) mclib::control::requestCancel();
   last_integrated_pose = mclib::control::odometryTick(
       {drive.headingDeg() * std::acos(-1.0) / 180,
        drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal});
-  if (fusion_rig.fusion) runFusion();
+  if (fusion_rig.on_odometry) fusion_rig.on_odometry->step(sample.millis);
   if (sim_after_refresh_hook) sim_after_refresh_hook(sample.millis);
 }
 }
@@ -244,7 +239,7 @@ extern "C" void sim_filter_enable(const double* sensors, int n, double odom_alon
     inputs.push_back(input);
   }
   fusion_rig.fusion = std::make_unique<mclib::control::PoseFusion>(config, inputs);
-  fusion_rig.fusion->reset(mclib::control::robotState().pose());
+  fusion_rig.on_odometry.emplace(*fusion_rig.fusion);
 }
 
 // Also blend in the simulated GPS, assuming @p sigma_in of position error.

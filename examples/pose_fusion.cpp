@@ -230,14 +230,21 @@ constexpr double gps_heading_sigma_deg = 2.0;
 
 void watchPoseFilter() {
   mclib::control::PoseFilter filter(fusion_config.filter);
-  mclib::Pose2D previous_odometry = chassis.getPose();
+  mclib::control::OdometryReading previous = mclib::control::readOdometry();
   // The start pose is known to 0.5 in and 0.5 deg.
-  filter.reset(previous_odometry, 0.5, 0.5);
+  filter.reset(previous.pose, 0.5, 0.5);
 
   while (true) {
-    const mclib::Pose2D odometry = chassis.getPose();
-    filter.predict(previous_odometry, odometry);
-    previous_odometry = odometry;
+    const mclib::control::OdometryReading odometry =
+        mclib::control::readOdometry();
+    if (odometry.jumps != previous.jumps) {
+      // setPose(), a wall reset or a snapshot set the pose. That is not
+      // distance driven, so the filter starts again from the new pose.
+      filter.reset(odometry.pose, 0.5, 0.5);
+    } else {
+      filter.predict(previous.pose, odometry.pose);
+    }
+    previous = odometry;
 
     for (const snapshot::DistanceSensorConfig& sensor : distance_sensors) {
       filter.updateDistance(sensor.geometry(), inchesFrom(sensor));
@@ -365,14 +372,13 @@ void initialize() {
   imu->reset(true);
 
   // The start: backed up against the y = 0 wall, 36 in along it, facing up
-  // the field. setPose() sets the IMU heading and the odometry pose together.
+  // the field. setPose() sets the IMU heading, the odometry pose and the
+  // heading driveTo() holds together.
   //
-  // It comes before startOdometry() here because the filter starts from the
-  // pose odometry has at that moment. The filter reads a later jump in the
-  // odometry pose as distance driven, and grows less sure by that much. A
-  // snapshot or a wall reset is a short jump. After a long one, such as a
-  // setPose() at the start of autonomous, call
-  // fusion.reset(chassis.getPose()).
+  // The filter starts from the pose odometry has when startOdometry() runs.
+  // When the pose is set later, by setPose(), a wall reset or a snapshot, the
+  // odometry task restarts the filter at the new pose. A filter you step
+  // yourself has to do the same, as watchPoseFilter() does.
   chassis.setPose(36_in, centre_to_back, 0_deg);
 
   auto odometry = mclib::control::odometrySetupFrom(chassis);

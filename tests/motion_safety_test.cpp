@@ -76,7 +76,7 @@ int main() {
     [] { return turnToAngle(90_deg, 100_ms, false); },
     [] { return driveTo(24_in, 100_ms, false); },
     [] { return curveCircle(90_deg, 24_in, 100_ms, false); },
-    [] { return curveCircleReverse(90_deg, 24_in, 100_ms, false); },
+    [] { return curveCircleReverse(-90_deg, 24_in, 100_ms, false); },
     [] { return swing(90_deg, 1, 100_ms, false); },
     [] { return turnToPoint(24_in, 24_in, 1, 100_ms); },
     [] { return moveToPoint(0_in, 24_in, 1, 100_ms, false); },
@@ -1151,7 +1151,7 @@ int main() {
       [](bool exit, double range) {
         return curveCircle(90_deg, 24_in, 100_ms, exit, 12_V, -1_V, false, range * 1_in); },
       [](bool exit, double range) {
-        return curveCircleReverse(90_deg, 24_in, 100_ms, exit, 12_V, -1_V, range * 1_in); },
+        return curveCircleReverse(-90_deg, 24_in, 100_ms, exit, 12_V, -1_V, range * 1_in); },
       [](bool exit, double range) {
         return swing(90_deg, 1, 100_ms, exit, 12_V, -1_V, range * 1_deg); },
       [](bool exit, double range) {
@@ -1174,6 +1174,60 @@ int main() {
         CHECK_EQ(hw.right, 0);
       }
     }
+
+    // A reverse arc whose centre and heading change are on the same side can
+    // only be driven forward. Rejected before the drive moves.
+    const auto forward_only_reverse_arc_is_rejected = [&] {
+      for (const bool exit : {true, false}) {
+        for (const double side : {1.0, -1.0}) {
+          start_at_origin();
+          hw.left = hw.right = 6;
+          CHECK(curveCircleReverse(side * 90_deg, side * 24_in, 100_ms, exit) ==
+                MotionResult::InvalidValue);
+          CHECK_EQ(now_ms, 0);
+          CHECK_EQ(hw.left, 0);
+          CHECK_EQ(hw.right, 0);
+
+          start_at_origin();
+          CHECK(curveCircle(side * 90_deg, side * 24_in, 100_ms, exit, 12_V, -1_V, true) ==
+                MotionResult::InvalidValue);
+          CHECK_EQ(now_ms, 0);
+        }
+      }
+    };
+    forward_only_reverse_arc_is_rejected();
+    useRamseteForArcs(ramsete_config, limits);
+    forward_only_reverse_arc_is_rejected();
+    useEncoderArcs();
+
+    // Half a circle back. The heading change wraps to +180 or -180 with the
+    // side of 0 deg the robot starts on. Both are backed round the same way,
+    // by the same controller.
+    const auto half_circle_backs_round = [&](MotionPhase stopping_arc_phase) {
+      for (const double entry_deg : {-0.1, 0.0, 0.1}) {
+        for (const bool exit : {true, false}) {
+          start_at_origin();
+          hw.heading = entry_deg;
+          const MotionPhase expected_phase = exit ? stopping_arc_phase : MotionPhase::Arc;
+          bool stayed_in_phase = true;
+          double lowest_left_volts = 0, lowest_right_volts = 0;
+          on_delay = [&] {
+            stayed_in_phase &= robotState().motionTelemetry().phase == expected_phase;
+            lowest_left_volts = std::min(lowest_left_volts, hw.left);
+            lowest_right_volts = std::min(lowest_right_volts, hw.right);
+          };
+          CHECK(curveCircleReverse(180_deg, 18_in, 100_ms, exit) == MotionResult::TimedOut);
+          on_delay = {};
+          CHECK(stayed_in_phase);
+          CHECK(lowest_left_volts < -1);
+          CHECK(lowest_right_volts < 0);
+        }
+      }
+    };
+    half_circle_backs_round(MotionPhase::Arc);
+    useRamseteForArcs(ramsete_config, limits);
+    half_circle_backs_round(MotionPhase::Pursuit);
+    useEncoderArcs();
   }
 
   // A stopping moveToPoint() on a drive that slides sideways, like an all-omni

@@ -6,7 +6,7 @@
 #include "mclib/control/odometry_task.hpp"
 
 #include "mclib/control/chassis_io.hpp"
-#include "mclib/control/pose_filter.hpp"
+#include "mclib/control/odometry_fusion.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/utils.hpp"
 #include "pros/rtos.hpp"
@@ -77,22 +77,21 @@ bool startOdometry(const OdometrySetup& setup, QTime period) {
   g_setup = setup;
   setOdometryConfig(odometryConfigFrom(g_setup));
   resetOdometry(robotState().pose());
+  // Built here, not on the task: the task may not run before a setPose() that
+  // follows this call, and that jump has to be seen.
+  std::optional<OdometryFusion> fusion;
   if (g_setup.fusion != nullptr) {
-    g_setup.fusion->reset(robotState().pose());
+    fusion.emplace(*g_setup.fusion);
   }
   const std::uint32_t period_ms =
       static_cast<std::uint32_t>(period.ms() < 1.0 ? 1.0 : period.ms());
   g_task = std::make_unique<pros::Task>(
-      [period_ms]() {
+      [period_ms, fusion]() mutable {
         std::uint32_t now = pros::millis();
         while (g_should_run.load()) {
           odometryTick(sampleOdometrySensors(g_setup));
-          if (g_setup.fusion != nullptr) {
-            const std::optional<Vec2> corrected =
-                g_setup.fusion->step(robotState().pose(), pros::millis());
-            if (corrected.has_value()) {
-              correctOdometryPosition(corrected->x(), corrected->y());
-            }
+          if (fusion.has_value()) {
+            fusion->step(pros::millis());
           }
           pros::Task::delay_until(&now, period_ms);
         }

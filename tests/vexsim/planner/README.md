@@ -88,12 +88,14 @@ the motors to make them stall.
 
 On a game field the robot pushes on the real wall, and `wallReset()` only
 counts a stall when the motors draw the stall current and turn slower than
-5 RPM. At the step's defaults, 6 V and 2500 mA, the Override robot's wheels
-slip on the tiles at about 70 RPM and draw 2.05 A a motor, so the wall is
-never found. Lower the step's Max voltage until the wheels stop, and set
-the stall current under what the motors draw then: 3 V and 1000 mA work for
-that robot. [override_wall_reset.json](examples/override_wall_reset.json)
-shows it. A wall fixes the heading and the coordinate across it. It says
+5 RPM. The step's defaults are 3 V and 1000 mA, which hold the Override
+robot still on the wall at 1.36 A a motor. From 4 V up its wheels slip on
+the tiles, its motors turn at 98 RPM at 6 V, and the wall is never found.
+If a robot's wheels slip, lower the step's Max voltage until they stop, and
+set the stall current under what the motors draw then.
+[override_wall_reset.json](examples/override_wall_reset.json) pushes at 2 V,
+where the motors draw 0.91 A, with the stall current at 800 mA. A
+wall fixes the heading and the coordinate across it. It says
 nothing about the coordinate along it, so set that one to what odometry
 already has.
 
@@ -598,7 +600,7 @@ field.
 | [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall, turn at 6 V and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 26.5 s. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin |
 | [override_center_goal.json](examples/override_center_goal.json) | grip the blue/red stack at (0, -23.5) and set it on the Center Goal, lifting during the drive; 5 points each for red and blue |
 | [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.94 in tall at Top |
-| [override_wall_reset.json](examples/override_wall_reset.json) | a wall reset on red's wall at 3 V and 1000 mA; at the default 6 V the wheels slip and the wall is never found |
+| [override_wall_reset.json](examples/override_wall_reset.json) | a wall reset on red's wall at 2 V with the stall current lowered to 800 mA; at 6 V the wheels slip and the wall is never found |
 
 ## Files
 

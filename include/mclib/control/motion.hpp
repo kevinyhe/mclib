@@ -63,11 +63,19 @@ struct RamseteConfig;
  *
  * Every routine takes `min_speed`, a floor on the output voltage, defaulting
  * to `-1_V`. Negative means "use `MotionConfig::min_voltage`" - the stiction
- * floor, **1.5 V of a 12 V rail** by default, applied unconditionally in
- * `turnToAngle()`'s and `swing()`'s chained branches and in `turnToPoint()`,
- * and gated behind chaining elsewhere. It was 10 V - 83% of the rail as a
- * *minimum* - which is almost certainly a leftover from a 0..127 output scale;
- * see `MotionConfig::min_voltage` in `mclib/control/motion_config.hpp`.
+ * floor, **1.5 V of a 12 V rail** by default. Where the floor applies:
+ *
+ * - `turnToAngle()` and `swing()`: on their chained (`exit` false) branches.
+ * - `turnToPoint()`: always.
+ * - `boomerang()`: whenever it is chained.
+ * - `driveTo()`, `curveCircle()` and `moveToPoint()`: when the call passes a
+ *   `min_speed` of zero or more. A chained call that leaves `min_speed` at
+ *   its default gets no floor while `MotionConfig::dir_change_end` is true,
+ *   which is the default.
+ *
+ * The floor was 10 V - 83% of the rail as a *minimum* - which is almost
+ * certainly a leftover from a 0..127 output scale; see
+ * `MotionConfig::min_voltage` in `mclib/control/motion_config.hpp`.
  */
 
 namespace mclib::control {
@@ -113,8 +121,8 @@ const char* toString(MotionResult result);
  * `followTrajectory()` with @p config, settle included. The call's
  * `time_limit` and `max_output` still apply.
  *
- * The encoder arc still runs for a chained arc (`exit` false), a zero radius,
- * and `curveCircleReverse()` / `reverse` when the geometry says forward.
+ * The encoder arc still runs for a chained arc (`exit` false) and a zero
+ * radius.
  *
  * @param config RAMSETE gains and measured feedforward; `kV` must be
  *        positive, or this goes back to the encoder arcs like
@@ -164,7 +172,16 @@ mclib::control::MotionResult turnToAngle(QAngle turn_angle,
                                          QAngle early_exit_range = 0.0 * mclib::units::degree);
 
 /**
- * @brief Drive straight a relative distance, holding the current heading.
+ * @brief Drive straight a relative distance, holding the held heading.
+ *
+ * The held heading is where the last motion left it, not the heading the
+ * robot has when this call starts. A turn, swing, arc or boomerang that
+ * reaches its target leaves its target heading, so after a turn that settled
+ * 2 degrees short driveTo() steers those 2 degrees out as it drives. A
+ * moveToPoint(), a turnToPoint(), a followTrajectory(), and any motion that
+ * times out, fails or is cancelled leave the heading the robot had when they
+ * ended. `Chassis::setPose()` and `wallReset()` move the held heading to the
+ * heading they set.
  *
  * `MotionConfig::drive_distance_source` picks how distance is measured. By
  * default it is the odometry pose's travel along the starting heading when a
@@ -207,8 +224,19 @@ mclib::control::MotionResult driveTo(QLength distance,
  * @param exit         True stops and holds at the end.
  * @param max_output   Voltage cap.
  * @param min_speed    Voltage floor; negative selects the `MotionConfig::min_voltage` default.
- * @param reverse      Forces the drive direction backward regardless of which
- *                     way the heading has to move.
+ * @param reverse      Requires the arc to be driven backward. Backing round
+ *                     a circle turns the heading away from the side its
+ *                     centre is on, so @p center_radius and the heading change
+ *                     must have opposite signs. With the same sign there is no
+ *                     backward arc: the call returns `InvalidValue` and the
+ *                     robot does not move, and prints why. Half a circle is
+ *                     the exception. The robot is rarely exactly on its
+ *                     planned heading, and the side it is off to decides
+ *                     which side of 180 deg the change falls: a same-sign
+ *                     change of 160 deg or more is backed round the other
+ *                     way, up to 200 deg.
+ *                     Without @p reverse the arc already backs up whenever the
+ *                     signs differ.
  * @param early_exit_range Chained only: end once this much of the arc is left,
  *                     measured along the outer wheel's path.
  * @return How the motion ended. See MotionResult.
@@ -222,7 +250,13 @@ mclib::control::MotionResult curveCircle(QAngle result_angle,
                                          bool reverse = false,
                                          QLength early_exit_range = 0.0 * mclib::units::inch);
 
-/// @brief `curveCircle()` with @p reverse forced on. See curveCircle().
+/**
+ * @brief `curveCircle()` with @p reverse on. See curveCircle().
+ *
+ * Returns `InvalidValue` without moving when @p center_radius and the heading
+ * change have the same sign, because that arc can only be driven forward. A
+ * half circle runs whichever sign its heading change wraps to.
+ */
 mclib::control::MotionResult curveCircleReverse(
     QAngle result_angle,
     QLength center_radius,
@@ -275,10 +309,18 @@ void correctHeading();
  * @param reset_heading      Absolute heading to stamp onto the IMU, or
  *                           #keep_current_heading to leave the IMU alone.
  * @param drive_power        Voltage to push with. Negative drives backward.
+ *                           Push gently: wheels that slip against the wall
+ *                           keep turning and never count as stalled. In the
+ *                           physics simulator a 14 lb robot on four 2.75 in
+ *                           omni wheels holds still on the wall at 3 V and
+ *                           slips from 4 V up.
  * @param time_limit         Give up after this long without changing pose.
  * @param current_threshold  Stall requires at least this average motor current.
- *                           Tune below the available current at the chosen
- *                           voltage and motor temperature/current limit.
+ *                           Tune below what the motors draw stalled at the
+ *                           chosen voltage. That robot draws 0.91 A a motor at
+ *                           2 V and 1.36 A at 3 V, and never more than 2.0 A
+ *                           at any voltage, so a threshold at the V5 motor's
+ *                           2.5 A limit is never met.
  * @param velocity_threshold ...and below this average motor speed, for five
  *                           consecutive 10 ms ticks.
  * @return True only after sustained contact and a pose reset. False on timeout,
@@ -289,7 +331,7 @@ bool wallReset(QLength reset_x,
                QAngle reset_heading,
                QVoltage drive_power,
                QTime time_limit,
-               QCurrent current_threshold = 2500.0 * mclib::units::milliampere,
+               QCurrent current_threshold = 1000.0 * mclib::units::milliampere,
                QAngularVelocity velocity_threshold = 5.0 * mclib::units::rpm);
 
 /**

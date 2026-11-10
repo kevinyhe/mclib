@@ -43,6 +43,13 @@ using ChassisControllerConfig = control::MotionConfig;
  * corresponding free function from `motion.hpp` on its own task and cancels it
  * cooperatively; those are the routines an autonomous is normally built from.
  *
+ * `driveDistance()` and `turnToHeading()` only set a goal. They do not claim
+ * this subsystem, so a default drive command keeps running, and it writes the
+ * motors after `periodic()` on every scheduler pass: the goal never moves the
+ * robot. With a default command registered, use `makeDriveDistanceCommand()`
+ * and `makeTurnToHeadingCommand()`. They claim the subsystem for as long as
+ * the goal runs.
+ *
  * Constructing a ChassisController binds its Chassis as the drivetrain those
  * free functions run on (`control::bindDrive()`) and installs its config as
  * the active `control::motionConfig()`. One ChassisController per program.
@@ -154,7 +161,7 @@ public:
       QAngle reset_heading,
       QVoltage drive_power,
       QTime time_limit,
-      QCurrent current_threshold = 2500.0 * units::milliampere,
+      QCurrent current_threshold = 1000.0 * units::milliampere,
       QAngularVelocity velocity_threshold = 5.0 * units::rpm);
   std::unique_ptr<Command> makeTurnToPointCommand(
       QLength x,

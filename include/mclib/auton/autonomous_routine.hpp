@@ -107,9 +107,11 @@ public:
     MotionStep& reversed(bool reverse = true);
     MotionStep& withOverturn(bool overturn = true);
     MotionStep& withoutOverturn();
-    /// @brief Voltage `wallReset()` pushes into the wall with. Negative reverses.
+    /// @brief Voltage `wallReset()` pushes into the wall with. Negative
+    ///        reverses. -3 V unless set.
     MotionStep& withDrivePower(QVoltage drive_power);
     /// @brief Motor current above which `wallReset()` calls it a stall.
+    ///        1000 mA unless set.
     MotionStep& withCurrentThreshold(QCurrent current_threshold);
     /// @brief Motor speed below which `wallReset()` calls it a stall.
     MotionStep& withVelocityThreshold(QAngularVelocity velocity_threshold);
@@ -281,6 +283,18 @@ public:
    * routine.driveTo(24_in, 1_s)
    *        .trigger(drive.makeCorrectHeadingCommand())
    *        .turnToAngle(90_deg, 800_ms);
+   * @endcode
+   *
+   * Sharing covers every subsystem a step of this routine requires, not only
+   * the chassis. A later `then()` or `add()` step on the same subsystem does
+   * not stop the triggered command: both run, and both write to it. To
+   * replace a triggered command, trigger its replacement. A newer trigger
+   * stops an older one on the same subsystem.
+   *
+   * @code
+   * routine.trigger(intake.makeForwardCommand())
+   *        .driveTo(24_in, 1_s)
+   *        .trigger(intake.makeStopCommand());  // ends the forward command
    * @endcode
    *
    * Subsystems the routine does not hold are claimed the usual way, so
@@ -567,8 +581,9 @@ private:
     bool reverse = false;
     bool overturn = true;
     /// @brief Negative drives backward into the wall, which is the usual case.
-    QVoltage drive_power = -4.0 * units::volt;
-    QCurrent current_threshold = 2500.0 * units::milliampere;
+    ///        3 V, because wheels that slip on the wall never count as stalled.
+    QVoltage drive_power = -3.0 * units::volt;
+    QCurrent current_threshold = 1000.0 * units::milliampere;
     QAngularVelocity velocity_threshold = 5.0 * units::rpm;
     /**
      * @brief The timeout the command is built with. Zero means none.
