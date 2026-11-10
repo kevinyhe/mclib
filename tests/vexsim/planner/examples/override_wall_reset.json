@@ -1,0 +1,18 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: reset odometry on red's wall",
+  "description": "Drives 5 in off red's wall, turns, drives 37 in between the neutral left Goal and the Cups on the wall, turns to face the wall and resets its odometry on it. After the two turns odometry is 1.2 in from the real robot. The wall reset pushes at 3 V with a 1000 mA stall current, finds the wall in 0.5 s and leaves odometry within 0.1 in. At a wall reset's defaults, 6 V and 2500 mA, this robot's wheels slip against the wall at about 70 RPM and each motor draws 2.05 A, so wallReset() never sees a stall and odometry is not reset. The wall gives y and the heading. It says nothing about x, so the step sets x to what odometry already had.",
+  "field": "override",
+  "preload": "none",
+  "robot": {"preset": "override_cascade", "tracking": "horizontal"},
+  "slew": {"speed_up_v": 0.3, "slow_down_v": 1},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
+  "steps": [
+    {"type": "drive", "note": "far enough off the wall to turn twice without touching it", "distance": 5},
+    {"type": "turn", "note": "face along red's wall", "heading": 270},
+    {"type": "drive", "note": "between the neutral left Goal and the Cups on the wall", "distance": 37},
+    {"type": "turn", "note": "face red's wall", "heading": 180},
+    {"type": "wall_reset", "note": "3 V stalls the wheels on the wall; 6 V only spins them", "x": -37, "y": -62.7, "heading": 180, "volts": 3, "current_ma": 1000}
+  ]
+}

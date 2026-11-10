@@ -1,0 +1,22 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: the lift at every height",
+  "description": "Moves the lift to each of its nine heights with the drive still, so the report gives how long each move takes: 0.12 to 0.45 s between neighbouring heights, 1.00 s from Over a stack on a Neutral Goal to Top, and 1.53 s from Top back down. A lift step gets 1.5 s unless you change it, so the last step has a 2.5 s time limit. At Top the robot is 49.94 in tall; the limit is 50 in. Use the times to place lift actions in a drive.",
+  "field": "override",
+  "preload": "none",
+  "robot": {"preset": "override_cascade", "tracking": "horizontal"},
+  "slew": {"speed_up_v": 0.3, "slow_down_v": 1},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
+  "steps": [
+    {"type": "lift", "lift_preset": "off_the_floor"},
+    {"type": "lift", "lift_preset": "on_neutral_goal"},
+    {"type": "lift", "lift_preset": "over_neutral_goal"},
+    {"type": "lift", "lift_preset": "on_center_goal"},
+    {"type": "lift", "lift_preset": "over_center_goal"},
+    {"type": "lift", "lift_preset": "on_stack_on_neutral_goal"},
+    {"type": "lift", "lift_preset": "over_stack_on_neutral_goal"},
+    {"type": "lift", "note": "as high as the lift goes", "lift_preset": "top"},
+    {"type": "lift", "note": "all the way back down; 40 in takes longer than the 1.5 s a lift step gets", "lift_preset": "down", "timeout_ms": 2500}
+  ]
+}
