@@ -108,7 +108,10 @@ struct MotionConfig {
   PIDExit turn_exit{1.0, 3.0, 50.0 * units::millisecond,
                     250.0 * units::millisecond, 4.5};
 
-  /// @brief Voltage cap when a motion does not name its own.
+  /// @brief Voltage cap for ChassisController::driveDistance() and
+  ///        turnToHeading() when a call does not name its own. The blocking
+  ///        routines in motion.hpp do not read it: their `max_output`
+  ///        parameter defaults to 12 V.
   QVoltage max_voltage = 12.0 * units::volt;
 
   /**
@@ -121,8 +124,8 @@ struct MotionConfig {
    * is about 12% - enough to creep a geared V5 drive, little enough that
    * arriving is gentle. Zero disables it.
    *
-   * The blocking routines apply it on their chained (`exit == false`)
-   * branches and whenever the caller passes an explicit `min_speed`; the
+   * Where the blocking routines apply it is listed under "`min_speed` and
+   * the -1 sentinel" in motion.hpp: it differs from routine to routine. The
    * scheduler-driven driveDistance() applies it whenever it is non-zero. A
    * stopping moveToPoint() stops applying it once it turns in place within
    * 8 in of the target, or comes within distance_exit.small_error of the
@@ -147,7 +150,8 @@ struct MotionConfig {
    */
   double chase_power = 10.0;
 
-  /// @brief Whether straight moves and correctHeading() steer on the IMU at all.
+  /// @brief Whether correctHeading() and ChassisController::driveDistance()
+  ///        steer on the IMU. The blocking driveTo() always holds its heading.
   bool heading_correction = true;
 
   /**

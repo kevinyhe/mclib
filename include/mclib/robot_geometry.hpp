@@ -81,8 +81,12 @@ static_assert(declared_vertical_tracking_wheel.gear_ratio > 0.0,
  *        revolution, 11.375 in between the wheel contact patches, drive
  *        encoders geared 1:1 to the wheels.
  *
- * Mutable so a program can assign its own numbers in `initialize()` before
- * building the Chassis, if it would rather not edit a library header.
+ * Mutable so a program can assign its own numbers before it builds the
+ * Chassis, if it would rather not edit a library header. A Chassis copies the
+ * geometry when it is constructed, and one declared at namespace scope is
+ * constructed before `initialize()` runs: assigning here in `initialize()`
+ * does not reach it. For that Chassis, pass your own `units::DriveGeometry`
+ * to its constructor.
  */
 inline units::DriveGeometry robot_drive_geometry = detail::declared_drive_geometry;
 

@@ -167,7 +167,11 @@ public:
   /**
    * @brief Move to @p target and finish on arrival.
    * @param timeout_ms A value above 0.0 also finishes the command after that
-   *        many milliseconds, whether or not the mechanism arrived.
+   *        many milliseconds, whether or not the mechanism arrived. The
+   *        timeout ends the wait, not the move: the loop goes on driving to
+   *        @p target. To give up on a blocked mechanism, end the command from
+   *        outside with `Command::withTimeout()` or a race. That interrupts
+   *        it, and an interrupted move holds where the mechanism is.
    */
   std::unique_ptr<Command> makeMoveToCommand(double target,
                                              double timeout_ms = 0.0);

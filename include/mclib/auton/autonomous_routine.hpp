@@ -285,6 +285,18 @@ public:
    *        .turnToAngle(90_deg, 800_ms);
    * @endcode
    *
+   * Sharing covers every subsystem a step of this routine requires, not only
+   * the chassis. A later `then()` or `add()` step on the same subsystem does
+   * not stop the triggered command: both run, and both write to it. To
+   * replace a triggered command, trigger its replacement. A newer trigger
+   * stops an older one on the same subsystem.
+   *
+   * @code
+   * routine.trigger(intake.makeForwardCommand())
+   *        .driveTo(24_in, 1_s)
+   *        .trigger(intake.makeStopCommand());  // ends the forward command
+   * @endcode
+   *
    * Subsystems the routine does not hold are claimed the usual way, so
    * `.trigger(intake.makeForwardCommand())` still displaces the intake's
    * default command.

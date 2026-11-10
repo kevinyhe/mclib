@@ -63,11 +63,19 @@ struct RamseteConfig;
  *
  * Every routine takes `min_speed`, a floor on the output voltage, defaulting
  * to `-1_V`. Negative means "use `MotionConfig::min_voltage`" - the stiction
- * floor, **1.5 V of a 12 V rail** by default, applied unconditionally in
- * `turnToAngle()`'s and `swing()`'s chained branches and in `turnToPoint()`,
- * and gated behind chaining elsewhere. It was 10 V - 83% of the rail as a
- * *minimum* - which is almost certainly a leftover from a 0..127 output scale;
- * see `MotionConfig::min_voltage` in `mclib/control/motion_config.hpp`.
+ * floor, **1.5 V of a 12 V rail** by default. Where the floor applies:
+ *
+ * - `turnToAngle()` and `swing()`: on their chained (`exit` false) branches.
+ * - `turnToPoint()`: always.
+ * - `boomerang()`: whenever it is chained.
+ * - `driveTo()`, `curveCircle()` and `moveToPoint()`: when the call passes a
+ *   `min_speed` of zero or more. A chained call that leaves `min_speed` at
+ *   its default gets no floor while `MotionConfig::dir_change_end` is true,
+ *   which is the default.
+ *
+ * The floor was 10 V - 83% of the rail as a *minimum* - which is almost
+ * certainly a leftover from a 0..127 output scale; see
+ * `MotionConfig::min_voltage` in `mclib/control/motion_config.hpp`.
  */
 
 namespace mclib::control {
@@ -164,7 +172,16 @@ mclib::control::MotionResult turnToAngle(QAngle turn_angle,
                                          QAngle early_exit_range = 0.0 * mclib::units::degree);
 
 /**
- * @brief Drive straight a relative distance, holding the current heading.
+ * @brief Drive straight a relative distance, holding the held heading.
+ *
+ * The held heading is where the last motion left it, not the heading the
+ * robot has when this call starts. A turn, swing, arc or boomerang that
+ * reaches its target leaves its target heading, so after a turn that settled
+ * 2 degrees short driveTo() steers those 2 degrees out as it drives. A
+ * moveToPoint(), a turnToPoint(), a followTrajectory(), and any motion that
+ * times out, fails or is cancelled leave the heading the robot had when they
+ * ended. `Chassis::setPose()` and `wallReset()` move the held heading to the
+ * heading they set.
  *
  * `MotionConfig::drive_distance_source` picks how distance is measured. By
  * default it is the odometry pose's travel along the starting heading when a

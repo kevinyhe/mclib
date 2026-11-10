@@ -132,6 +132,11 @@ public:
    * instead of running forever. On a normal finish it returns the conveyor to
    * Stopped; on a latched jam it leaves the state alone so isJammed() still
    * reads true afterward (the motors are held at zero volts either way).
+   *
+   * Any change of state clears a latched jam. A default command that sets a
+   * state, such as makeStopCommand(), runs on the scheduler pass after this
+   * command ends and clears it, so isJammed() is true for that one pass only.
+   * To keep it readable, give the conveyor idleCommand() as its default.
    */
   std::unique_ptr<Command> makeIndexCommand(double timeout_ms = 0.0);
 
