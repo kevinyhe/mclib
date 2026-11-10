@@ -1,0 +1,24 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: take a Match Load and score it",
+  "description": "Waits 15 s, to the start of the Driver Controlled Period, when Match Loads are first allowed (SG11a). The Drive Team stands a Cup with a red/yellow Pin in it, red half up, under the red right Loader. The robot drives the front of its frame onto the wall at 3 V, so the stack sits at the back of the claw's V, and closes the claw on the Cup and the Pin. It lifts the stack 0.5 in off the foam, backs 60 in along the right wall, turns toward the neutral bottom Goal at 6 V, and sets the stack on the Goal's Pin. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin. The Goal stops the robot about 1 s into the 2 s drive to it. The red half scores 5 points for red. The run ends 26.5 s into the match.",
+  "field": "override",
+  "preload": "none",
+  "robot": {"preset": "override_cascade", "tracking": "horizontal"},
+  "slew": {"speed_up_v": 0.3, "slow_down_v": 1},
+  "start": {"x": 58.77, "y": -54.7, "heading": 180},
+  "steps": [
+    {"type": "wait", "note": "wait for the Driver Controlled Period", "wait_ms": 15000},
+    {"type": "match_load", "loader": "red_right", "match_load_pin": "red_red_up"},
+    {"type": "drive", "note": "the frame onto the wall at 3 V, the stack at the back of the claw's V", "distance": 8, "volts": 3, "timeout_ms": 2000},
+    {"type": "claw", "note": "close on the Cup and the Pin", "claw_preset": "closed"},
+    {"type": "lift", "note": "lift the Cup off the foam so it does not drag and tip as the robot backs out", "lift_preset": "off_the_floor"},
+    {"type": "drive", "note": "back out along the wall, past the red bottom Goal, the stack still low", "distance": -60},
+    {"type": "turn", "note": "toward the Goal at 6 V; at 12 V the stack swings forward in the jaws", "heading": -24.4, "volts": 6},
+    {"type": "drive", "note": "the bite onto the Goal, the stack well over its Pin; the Goal stops it 1 s in", "distance": 23.1, "timeout_ms": 2000, "actions": [{"when": "distance", "value": 3, "mechanism": "lift", "preset": "over_stack_on_neutral_goal"}]},
+    {"type": "lift", "note": "set the Cup's rim on the Goal's Pin", "lift_preset": "on_neutral_goal"},
+    {"type": "claw", "claw_preset": "open"},
+    {"type": "drive", "note": "back away, then lower the lift", "distance": -8, "actions": [{"when": "time", "value": 300, "mechanism": "lift", "preset": "down"}]}
+  ]
+}

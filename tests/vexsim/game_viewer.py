@@ -19,7 +19,7 @@ import sys
 from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
-from builder.native_viewer import (NativeViewerError, THREE_FILES, _field, _read,
+from planner.native_viewer import (NativeViewerError, THREE_FILES, _field, _read,
                                    _replace_once, _replace_region)
 
 ROOT = Path(__file__).resolve().parents[2]

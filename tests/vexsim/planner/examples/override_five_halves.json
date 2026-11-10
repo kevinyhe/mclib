@@ -1,0 +1,355 @@
+{
+ "format": "mclib-path-planner",
+ "version": 1,
+ "name": "Override: five Pin halves with both Toggles",
+ "description": "Rolls the left Toggle to red, drops the red preload into the red left Goal, puts the yellow stack at (23.5, -23.5) on it, carries the yellow stack at (47.1, -47.1) up the right wall to the neutral bottom Goal, then backs onto the bottom Toggle and rolls it to red. Every move but one is a chained path, so the robot does not stop between them, and the lift and claw move during the paths. After taking the stack at (47.1, -47.1) it curves straight into the lane up the right wall, and from the neutral bottom Goal it backs out and curves onto the Toggle in one path. The one turn in place is after taking the stack at (23.5, -23.5): curving there slid the robot sideways and lost the next stack. Red has 30 at 15 s (3 halves) and 50 at the end, 16.8 s (5 halves). Every grab and drop needs the robot within about 0.5 in, so a start 0.25 in off can lose the second stack or knock the first one off the Goal.",
+ "field": "override",
+ "preload": "red",
+ "robot": {
+  "preset": "override_cascade",
+  "tracking": "horizontal"
+ },
+ "slew": {
+  "speed_up_v": 0.3,
+  "slow_down_v": 1
+ },
+ "path_defaults": {
+  "speed_percent": 70,
+  "accel_ips2": 60,
+  "cornering_ips2": 40,
+  "ramsete_b": 50,
+  "ramsete_zeta": 0.7
+ },
+ "start": {
+  "x": 0,
+  "y": -61.7,
+  "heading": 0
+ },
+ "steps": [
+  {
+   "type": "roller",
+   "roller_deg": 470,
+   "roller_volts": 12,
+   "press_volts": 3,
+   "timeout_ms": 2000
+  },
+  {
+   "type": "path",
+   "chain": true,
+   "points": [
+    {
+     "x": 18.5,
+     "y": -46.21,
+     "heading": 100
+    }
+   ],
+   "sections": [
+    {
+     "speed_percent": 60,
+     "reverse": false
+    }
+   ],
+   "actions": [
+    {
+     "when": "start",
+     "mechanism": "lift",
+     "preset": "on_neutral_goal"
+    },
+    {
+     "when": "time",
+     "mechanism": "lift",
+     "preset": "off_the_floor",
+     "value": 1357
+    },
+    {
+     "when": "end",
+     "mechanism": "claw",
+     "preset": "open"
+    }
+   ]
+  },
+  {
+   "type": "wait",
+   "wait_ms": 120
+  },
+  {
+   "type": "path",
+   "chain": true,
+   "points": [
+    {
+     "x": 7,
+     "y": -57,
+     "heading": 25
+    },
+    {
+     "x": 20.84,
+     "y": -28.12,
+     "heading": 30
+    }
+   ],
+   "sections": [
+    {
+     "speed_percent": 50,
+     "reverse": true
+    },
+    {
+     "speed_percent": 70,
+     "reverse": false
+    }
+   ],
+   "actions": [
+    {
+     "when": "start",
+     "mechanism": "lift",
+     "preset": "on_neutral_goal"
+    },
+    {
+     "when": "time",
+     "mechanism": "lift",
+     "preset": "down",
+     "value": 450
+    },
+    {
+     "when": "end",
+     "mechanism": "claw",
+     "preset": "closed"
+    }
+   ]
+  },
+  {
+   "type": "wait",
+   "wait_ms": 100
+  },
+  {
+   "type": "turn",
+   "heading": 171.9,
+   "chain": false,
+   "actions": [
+    {
+     "when": "start",
+     "mechanism": "lift",
+     "preset": "over_neutral_goal"
+    }
+   ]
+  },
+  {
+   "type": "path",
+   "chain": true,
+   "points": [
+    {
+     "x": 22.82,
+     "y": -42.02,
+     "heading": 171.9
+    }
+   ],
+   "sections": [
+    {
+     "speed_percent": 50,
+     "reverse": false
+    }
+   ],
+   "actions": [
+    {
+     "when": "time",
+     "mechanism": "lift",
+     "preset": "off_the_floor",
+     "value": 717
+    },
+    {
+     "when": "end",
+     "mechanism": "claw",
+     "preset": "open"
+    }
+   ]
+  },
+  {
+   "type": "wait",
+   "wait_ms": 160
+  },
+  {
+   "type": "path",
+   "chain": true,
+   "points": [
+    {
+     "x": 22.11,
+     "y": -37.07,
+     "heading": 171.9
+    },
+    {
+     "x": 19.5,
+     "y": -32,
+     "heading": 130
+    },
+    {
+     "x": 42.48,
+     "y": -44.44,
+     "heading": 120
+    }
+   ],
+   "sections": [
+    {
+     "speed_percent": 50,
+     "reverse": true
+    },
+    {
+     "speed_percent": 50,
+     "reverse": true
+    },
+    {
+     "speed_percent": 70,
+     "reverse": false
+    }
+   ],
+   "actions": [
+    {
+     "when": "start",
+     "mechanism": "lift",
+     "preset": "over_neutral_goal"
+    },
+    {
+     "when": "time",
+     "mechanism": "lift",
+     "preset": "down",
+     "value": 450
+    },
+    {
+     "when": "end",
+     "mechanism": "claw",
+     "preset": "closed"
+    }
+   ]
+  },
+  {
+   "type": "wait",
+   "wait_ms": 100
+  },
+  {
+   "type": "path",
+   "chain": true,
+   "sections": [
+    {
+     "speed_percent": 35,
+     "reverse": false
+    },
+    {
+     "speed_percent": 35,
+     "reverse": false
+    },
+    {
+     "speed_percent": 75,
+     "reverse": false
+    },
+    {
+     "speed_percent": 75,
+     "reverse": false
+    },
+    {
+     "speed_percent": 45,
+     "reverse": false
+    }
+   ],
+   "actions": [
+    {
+     "when": "start",
+     "mechanism": "lift",
+     "preset": "off_the_floor"
+    },
+    {
+     "when": "distance",
+     "mechanism": "lift",
+     "preset": "over_neutral_goal",
+     "value": 30
+    },
+    {
+     "when": "time",
+     "mechanism": "lift",
+     "preset": "on_neutral_goal",
+     "value": 3282
+    },
+    {
+     "when": "end",
+     "mechanism": "claw",
+     "preset": "open"
+    }
+   ],
+   "points": [
+    {
+     "x": 53.16,
+     "y": -44.44,
+     "heading": 60.0,
+     "handle_in": 3.82,
+     "handle_out": 3.82
+    },
+    {
+     "x": 58.5,
+     "y": -35.19,
+     "heading": 0.0,
+     "handle_in": 3.82
+    },
+    {
+     "x": 58.5,
+     "y": -11.23,
+     "heading": 0.0,
+     "handle_out": 6.81
+    },
+    {
+     "x": 54.13,
+     "y": 8.47,
+     "heading": -25.0,
+     "handle_in": 6.81
+    },
+    {
+     "x": 49.06,
+     "y": 19.35,
+     "heading": -25.0
+    }
+   ],
+   "start_handle": 3.82
+  },
+  {
+   "type": "wait",
+   "wait_ms": 150
+  },
+  {
+   "type": "path",
+   "chain": true,
+   "points": [
+    {
+     "x": 51.6,
+     "y": 13.9,
+     "heading": -25
+    },
+    {
+     "x": 61.7,
+     "y": 0.0,
+     "heading": -90.0
+    }
+   ],
+   "sections": [
+    {
+     "speed_percent": 50,
+     "reverse": true
+    },
+    {
+     "speed_percent": 40,
+     "reverse": true
+    }
+   ],
+   "actions": [
+    {
+     "when": "time",
+     "mechanism": "lift",
+     "preset": "down",
+     "value": 300
+    }
+   ]
+  },
+  {
+   "type": "roller",
+   "roller_deg": 340,
+   "roller_volts": 12,
+   "press_volts": 3,
+   "timeout_ms": 2000
+  }
+ ]
+}

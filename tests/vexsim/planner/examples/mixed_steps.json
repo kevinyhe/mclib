@@ -1,0 +1,17 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Path, turn, boomerang and wall reset",
+  "description": "A path followed by other mclib motions: a turn, a backward drive, a boomerang and a wall reset.",
+  "start": {"x": -36, "y": -48, "heading": 0},
+  "steps": [
+    {"type": "path", "note": "to the first goal",
+     "points": [{"x": -36, "y": -12}, {"x": -12, "y": 12}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": 50, "reverse": false}]},
+    {"type": "turn", "heading": 180},
+    {"type": "drive", "distance": -24},
+    {"type": "boomerang", "x": 24, "y": 24, "heading": 90, "lead": 0.5},
+    {"type": "turn", "heading": 0},
+    {"type": "wall_reset", "x": 24, "y": 63, "heading": 0}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Wheel slip with drive encoders",
+  "description": "A boomerang tracked by the drive encoders only. Wheel slip moves odometry away from the real robot. Switch Odometry sensors to tracking wheels and run again to compare.",
+  "robot": {"tracking": "drive"},
+  "start": {"x": 0, "y": -24, "heading": 0},
+  "steps": [
+    {"type": "boomerang", "x": 24, "y": 0, "heading": 90, "lead": 0.5}
+  ]
+}

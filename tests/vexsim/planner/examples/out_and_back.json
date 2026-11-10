@@ -1,0 +1,12 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Out and back",
+  "description": "Drive out to a goal, stop, and back up along a curve. The robot stops where the direction changes.",
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 0, "y": -12}, {"x": 24, "y": 24}, {"x": -12, "y": -24}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": null, "reverse": false},
+                  {"speed_percent": 60, "reverse": true}]}
+  ]
+}
