@@ -5,6 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+## 0.4.1
+
+Upgrading from 0.4.0:
+
+- `wallReset()` stalls at 1000 mA by default, not 2500 mA, and
+  `Routine::wallReset()` pushes at 3 V, not 4 V. A reset that never
+  happened may now happen. Anything that holds the robot still for 50 ms
+  reads as the wall: a game piece, another robot, or a push too weak to
+  start it moving. Check the return value, and pass your own voltage and
+  threshold if your drive stalls on something else first.
+- `curveCircleReverse()` returns `InvalidValue` and does not move when the
+  radius and the heading change have the same sign. It used to back the
+  wrong way until its time limit. Flip the sign of the radius.
+- After `Chassis::setPose()` to a new heading, `driveTo()` holds the new
+  heading. It used to turn back toward the old one.
+- `Routine::MotionStep::reversed(false)` drives the step forward. It used
+  to leave a reversed step reversed.
+- `control::correctOdometryPosition(x, y)` counts as setting the pose. A
+  `PoseFusion` on the odometry task restarts there.
+- `CommandController::getTrigger()` returns a trigger the controller owns.
+  Remove any `delete` of it.
+
 ### Added
 
 - Path planner (`tests/vexsim/planner`), replacing the motion builder.
