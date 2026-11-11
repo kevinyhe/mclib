@@ -28,6 +28,20 @@ jobs:
             exit 1
           fi
 
+      - name: Take the release notes from the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## $version" '$0 == heading {inside=1; next} inside && /^## / {exit} inside' CHANGELOG.md | sed '/./,$!d' > "$RUNNER_TEMP/changelog-section.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/changelog-section.md"; then
+            echo "CHANGELOG.md has no \"## $version\" section." >&2
+            exit 1
+          fi
+          {
+            echo "Install with \`pros c fetch mclib@$version.zip\` then \`pros c apply mclib\`."
+            echo
+            cat "$RUNNER_TEMP/changelog-section.md"
+          } > "$RUNNER_TEMP/release-notes.md"
+
       - name: Run the test suite
         run: make -j"$(nproc)" test
 
@@ -57,4 +71,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" mclib@*.zip \
             --title "$GITHUB_REF_NAME" \
-            --notes "Install with \`pros c fetch mclib@${GITHUB_REF_NAME#v}.zip\` then \`pros c apply mclib\`. See the [changelog](https://github.com/kevinyhe/mclib/blob/main/CHANGELOG.md)."
+            --notes-file "$RUNNER_TEMP/release-notes.md"

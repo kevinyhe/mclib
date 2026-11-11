@@ -44,14 +44,14 @@ python3 tests/vexsim/run.py --tracking-mode two --output /tmp/sim-two
 python3 tests/vexsim/check_baseline.py two /tmp/sim-two/results.json --update
 ```
 
-The path planner tests, on the `drive` leg, also need the Override field
-shapes that vexsim's `tools/override_cad.py` cuts from VEX's field CAD. They
-are made from VEX's CAD, so they are in a private repo, `kevinyhe/vexsim-cad`,
-and the job copies them into `vexsim/cad/override/`. It reads that repo with
-a read-only deploy key, the `VEXSIM_CAD_DEPLOY_KEY` secret on mclib. Without
-the secret the `drive` leg fails and says so, except on pull requests from
-forks, which get no secrets: there the planner steps skip. To add or replace
-the key:
+The `Path planner` job runs the planner tests and the browser smoke test as
+two parallel legs. Both need the Override field shapes that vexsim's
+`tools/override_cad.py` cuts from VEX's field CAD. They are made from VEX's
+CAD, so they are in a private repo, `kevinyhe/vexsim-cad`, and the job copies
+them into `vexsim/cad/override/`. It reads that repo with a read-only deploy
+key, the `VEXSIM_CAD_DEPLOY_KEY` secret on mclib. Without the secret the job
+fails and says so, except on pull requests from forks, which get no secrets:
+there the planner steps skip. To add or replace the key:
 
 ```sh
 ssh-keygen -t ed25519 -N "" -C "mclib CI reads vexsim-cad" -f /tmp/vexsim_cad_deploy
@@ -61,13 +61,18 @@ gh secret set VEXSIM_CAD_DEPLOY_KEY -R kevinyhe/mclib < /tmp/vexsim_cad_deploy
 rm /tmp/vexsim_cad_deploy /tmp/vexsim_cad_deploy.pub
 ```
 
-That leg installs `mujoco` and `numpy` at the versions in
+The job installs `mujoco` and `numpy` at the versions in
 [requirements.txt](requirements.txt), the ones the planner tests pass with.
 
 ## Scenarios
 
-- Three drivetrains: four-motor 200 RPM, six-motor 450 RPM, and a faster
-  four-inch-wheel `speed_base`.
+- Four drivetrains: four-motor 200 RPM, six-motor 450 RPM, a faster
+  four-inch-wheel `speed_base`, and `override_cascade`, the drive of an
+  Override cascade robot (four 450 RPM motors on 2.75 in omnis, 14 lb, one
+  sideways tracking wheel at the centre). It has no forward
+  tracking wheel, so it runs only in the `drive` and `horizontal` modes. With
+  its sideways wheel all 16 moves pass; with drive encoders alone the arcs and
+  the boomerang end 4.9-6.9 in off.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   arcs and swings, at default gains.
 - The same two arcs through `followTrajectory()` (RAMSETE):
