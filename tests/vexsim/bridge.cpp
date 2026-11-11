@@ -16,9 +16,13 @@
 #include "mclib/path/trajectory.hpp"
 #include "mclib/math.hpp"
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 
 // Set by code linked next to this bridge that runs every time the simulated
 // clock moves, the way the command scheduler runs mechanisms on the robot.
@@ -108,11 +112,67 @@ void refresh(std::uint32_t ms) {
   if (fusion_rig.on_odometry) fusion_rig.on_odometry->step(sample.millis);
   if (sim_after_refresh_hook) sim_after_refresh_hook(sample.millis);
 }
+
+// An AsyncMotion runs on its own thread, but the simulated clock only moves
+// in pros::delay(). So the motion thread and the caller take turns, one
+// running at a time: the caller's delay() lets the motion run until the
+// motion's own delay() has moved the clock, and then the caller goes on.
+namespace lockstep {
+std::mutex mutex;
+std::condition_variable turn_changed;
+bool motion_turn = false;
+bool motion_alive = false;
+bool clock_moved = false;
+thread_local bool on_motion_thread = false;
+
+void handOver(std::unique_lock<std::mutex>& lock, bool to_motion) {
+  motion_turn = to_motion;
+  turn_changed.notify_all();
+  turn_changed.wait(lock, [to_motion] { return motion_turn != to_motion; });
 }
+
+void delay(std::uint32_t ms) {
+  if (on_motion_thread) {
+    refresh(ms);
+    std::unique_lock<std::mutex> lock(mutex);
+    clock_moved = true;
+    handOver(lock, false);
+    return;
+  }
+  std::unique_lock<std::mutex> lock(mutex);
+  if (motion_alive) {
+    clock_moved = false;
+    handOver(lock, true);
+    if (clock_moved) return;
+  }
+  lock.unlock();
+  refresh(ms);
+}
+}  // namespace lockstep
+}  // namespace
+
+namespace mclib::control::detail {
+std::thread startMotionThread(std::function<void()> body) {
+  std::lock_guard<std::mutex> lock(lockstep::mutex);
+  lockstep::motion_alive = true;
+  return std::thread([body = std::move(body)] {
+    lockstep::on_motion_thread = true;
+    {
+      std::unique_lock<std::mutex> lock(lockstep::mutex);
+      lockstep::turn_changed.wait(lock, [] { return lockstep::motion_turn; });
+    }
+    body();
+    std::lock_guard<std::mutex> lock(lockstep::mutex);
+    lockstep::motion_alive = false;
+    lockstep::motion_turn = false;
+    lockstep::turn_changed.notify_all();
+  });
+}
+}  // namespace mclib::control::detail
 
 namespace pros {
 extern "C" std::uint32_t millis() { return sample.millis; }
-extern "C" void delay(std::uint32_t ms) { refresh(ms); }
+extern "C" void delay(std::uint32_t ms) { lockstep::delay(ms); }
 namespace battery {
 std::int32_t get_voltage() { return static_cast<std::int32_t>(sample.battery_mv); }
 }
@@ -338,12 +398,12 @@ extern "C" int sim_characterize(const char* path, int which) {
 // sideways tracking wheel is the one sim_set_horizontal_tracker() set up.
 // Returns the MotionResult, or -1 when the file won't open.
 extern "C" int sim_characterize_grip(const char* path, int which, double sideways_diameter_in) {
-  static mclib::telemetry::RowBuffer<8192> buffer;
+  static mclib::telemetry::RowBuffer<16384> buffer;
   std::FILE* file = std::fopen(path, "w");
   if (file == nullptr) return -1;
   mclib::telemetry::FileSink sink(file);
   mclib::telemetry::Logger log(sink, buffer, {.period = 10 * mclib::units::millisecond,
-                                              .max_rows = 8000});
+                                              .max_rows = 16000});
   const mclib::control::TrackingWheelSensor sideways{
       [] { return sample.horizontal; },
       {mclib::units::Wheel::fromDiameter(sideways_diameter_in * mclib::units::inch),

@@ -134,14 +134,28 @@ On the robot, run `characterizeGrip()` and `characterizeWallPush()` through a
 `GripLog` (`mclib/control/characterize.hpp`);
 [examples/tire_grip.cpp](../../examples/tire_grip.cpp) is a whole program.
 
-| Runs | Phase | What it shows | Needs |
+| Runs | Phase | What it shows | Farthest from the start, in vexsim |
 | --- | --- | --- | --- |
-| Spins at 4, 8, 12 V, both ways | 4 | how hard the wheels scrub turning in place | |
-| Circles from 6/3 V to 12/3 V, both ways | 5 | how far the robot slides sideways, on the sideways tracking wheel | a clear 6 ft by 6 ft |
-| 12 V launches, forward and back | 6 | wheelspin off the line | about 3 ft each way |
+| Spins at 4, 8, 12 V for 1.5 s, both ways | 4 | how hard the wheels scrub turning in place | 0 in |
+| Circles at 6/3, 9/4.5, 12/6 and 12/3 V for 2 s, both ways | 5 | how far the robot slides sideways, on the sideways tracking wheel | 48, 54, 59 and 35 in |
+| 12 V launches for 0.8 s, forward and back | 6 | wheelspin off the line | 50 in |
 | A push into a wall, 0 to 12 V over 3 s | 7 | the voltage where the wheels break loose, and how fast they spin sliding | the front square against a wall |
 
-The first three take about 51 s and the wall push 4 s. Then:
+Every run starts from rest where the robot started. After each one the
+robot coasts at 0 V for 1 s, drives back with `moveToPoint()` and
+`turnToAngle()` on odometry, and waits 1 s; those rows are phase 0. So
+odometry must be running. The first three kinds take about 90 s and the
+wall push 4 s.
+
+Space, measured in vexsim on `override_cascade` with vexsim's grip: the
+robot's centre went up to 45 in forward, 53 in back, 55 in left and 56 in
+right of where it started. Add half the robot on each side. With more grip
+the circles are wider: at 1.0 forward and 0.45 sideways, the 9/4.5 V and
+12/6 V circles went 72 and 71 in out, and the whole routine 62 in forward, 53 in
+back, 65 in left and 63 in right. With little grip the drive encoders count
+slip as travel and the returns drift: at 0.6 forward and 0.18 sideways, the
+last run started 31 in from the first. Shorten `GripTests::circle_time` or
+drop a circle if the space is tight. Then:
 
 ```sh
 python3 tests/vexsim/fit_grip.py grip000.csv wall000.csv --vexsim ../vexsim

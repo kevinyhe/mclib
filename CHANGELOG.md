@@ -10,7 +10,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - `characterizeGrip()` and `characterizeWallPush()` with a `GripLog`
   (`mclib/control/characterize.hpp`): spins, circles, launches and a push
   into a wall, open loop, logged with the sideways tracking wheel and the
-  battery voltage. `examples/tire_grip.cpp` is a whole program.
+  battery voltage. Between runs the robot drives back to where it started
+  with `moveToPoint()` and `turnToAngle()`, so it needs odometry running.
+  `examples/tire_grip.cpp` is a whole program.
+- The vexsim bridge runs an `AsyncMotion` in turns with its caller, so
+  `traceMotion()` and code that drives while logging run in the simulator.
 - `tests/vexsim/fit_grip.py` fits vexsim's tire grip (forward and sideways,
   static and sliding) to those logs, and `test_fit_grip.py` checks that it
   gives back grip vexsim was given.

@@ -170,11 +170,15 @@ struct GripTests {
       {9.0 * units::volt, 4.5 * units::volt},
       {12.0 * units::volt, 6.0 * units::volt},
       {12.0 * units::volt, 3.0 * units::volt}};
-  QTime circle_time = 3.0 * units::second;
+  QTime circle_time = 2.0 * units::second;
   /// @brief Full-voltage start forward, then back.
   QVoltage launch = 12.0 * units::volt;
   QTime launch_time = 0.8 * units::second;
-  /// @brief At 0 V between runs, long enough for the robot to stop.
+  /// @brief Time limit for each motion back to the start: moveToPoint(),
+  ///        then turnToAngle().
+  QTime return_time = 8.0 * units::second;
+  /// @brief At 0 V after each run and again after each return, long enough
+  ///        for the robot to stop.
   QTime pause = 1.0 * units::second;
 };
 
@@ -185,12 +189,24 @@ struct GripTests {
  * Spins (phase 4) show how hard the wheels scrub when the robot turns in
  * place. Circles (phase 5) show how far it slides sideways, which the
  * sideways tracking wheel measures. Launches (phase 6) show wheelspin off
- * the line. With the defaults it takes about 51 s and needs a clear 6 ft by
- * 6 ft of tiles: the circles are up to 5 ft across, and each launch covers
- * about 3 ft. Stops on cancel, disable or a fault, like any motion.
+ * the line.
+ *
+ * Every run starts from rest where the robot started. After each run it
+ * coasts at 0 V for `pause`, drives back with moveToPoint() and turnToAngle()
+ * on the odometry pose, and waits `pause` at 0 V; those rows are phase 0.
+ * Start odometry first. The drive encoders count wheel slip as travel, so a
+ * run can start a few inches from the first one.
+ *
+ * With the defaults it takes about 90 s. In vexsim, with vexsim's grip on
+ * the `override_cascade` robot, the robot's centre went up to 45 in forward,
+ * 53 in back, 55 in left and 56 in right of where it started, and no run
+ * went more than 59 in from it. More grip makes the circles wider.
+ * Stops on cancel, disable or a fault, like any motion.
  *
  * @return `InvalidValue` without moving when a voltage is not in (0, 12] V
- *         or a time is not positive.
+ *         or a time is not positive, and `InvalidValue` after the first run
+ *         when the odometry pose has not moved. A drive back that does not
+ *         finish within `return_time` ends the routine with `TimedOut`.
  */
 MotionResult characterizeGrip(GripLog& log, const GripTests& tests = {});
 

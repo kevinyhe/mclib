@@ -9,8 +9,10 @@
 // robot is a 4-motor, 450 rpm drive on 2.75 in omnis with one sideways
 // tracking wheel at its centre. Change the ports and numbers to match yours.
 //
-// 1. Clear 3 by 3 tiles. Put the robot in the middle and run autonomous: about
-//    51 s of spins, circles and launches, logged to /usd/grip000.csv.
+// 1. Put the robot where its centre can go 45 in forward, 53 in back and 56 in
+//    to either side, plus half the robot, and run autonomous: about 90 s of
+//    spins, circles and launches, logged to /usd/grip000.csv. After each run
+//    it drives back to where it started, on odometry.
 // 2. Put the robot's front square against a field wall and press A in driver
 //    control: 4 s of pushing, logged to /usd/wall000.csv.
 // 3. On a computer:

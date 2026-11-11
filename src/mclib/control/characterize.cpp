@@ -94,23 +94,57 @@ bool validTests(const GripTests& tests) {
   for (const auto& [outer, inner] : tests.circles)
     if (!validVolts(outer) || !validVolts(inner)) return false;
   return validVolts(tests.launch) && validTime(tests.spin_time) && validTime(tests.circle_time) &&
-         validTime(tests.launch_time) && validTime(tests.pause);
+         validTime(tests.launch_time) && validTime(tests.pause) && validTime(tests.return_time);
 }
 
-MotionResult holdThenPause(GripLog& log, int phase, double left, double right, QTime time,
-                           QTime pause) {
-  const MotionResult result = hold(log, phase, left, right, time.ms());
-  if (result != MotionResult::Reached) return result;
-  return hold(log, 0, 0, 0, pause.ms());
+bool samePose(const Pose2D& a, const Pose2D& b) {
+  return a.x == b.x && a.y == b.y && a.theta == b.theta;
+}
+
+MotionResult driveBackTo(GripLog& log, const Pose2D& start, QTime time_limit) {
+  const Pose2D here = robotState().pose();
+  const double start_ahead =
+      std::sin(here.theta) * (start.x - here.x) + std::cos(here.theta) * (start.y - here.y);
+  const int direction = start_ahead >= 0 ? 1 : -1;
+  AsyncMotion returning = AsyncMotion::start([start, direction, time_limit] {
+    const MotionResult moved =
+        ::moveToPoint(start.x * units::inch, start.y * units::inch, direction, time_limit);
+    if (moved != MotionResult::Reached) return moved;
+    return ::turnToAngle(QAngle::fromBase(start.theta), time_limit);
+  });
+  while (returning.isRunning()) {
+    const MotionTelemetry t = robotState().motionTelemetry();
+    const double drive = std::isfinite(t.drive_volts) ? t.drive_volts : 0.0;
+    const double yaw = std::isfinite(t.yaw_volts) ? t.yaw_volts : 0.0;
+    log.record(0, drive + yaw, drive - yaw);
+    pros::delay(10);
+  }
+  return returning.wait();
+}
+
+// One open-loop run from @p start, then back to it and still for the next.
+// The robot coasts to a stop before driving back: braking from speed skids
+// the wheels, and the drive encoders then lose track of where it is.
+MotionResult runFromStart(GripLog& log, const Pose2D& start, const GripTests& tests, int phase,
+                          double left, double right, QTime time) {
+  const MotionResult ran = hold(log, phase, left, right, time.ms());
+  if (ran != MotionResult::Reached) return ran;
+  const MotionResult coasted = hold(log, 0, 0, 0, tests.pause.ms());
+  if (coasted != MotionResult::Reached) return coasted;
+  if (samePose(robotState().pose(), start)) return MotionResult::InvalidValue;
+  const MotionResult returned = driveBackTo(log, start, tests.return_time);
+  if (returned != MotionResult::Reached) return returned;
+  return hold(log, 0, 0, 0, tests.pause.ms());
 }
 
 MotionResult runGripTests(GripLog& log, const GripTests& tests) {
   constexpr int kSpin = 4, kCircle = 5, kLaunch = 6;
+  const Pose2D start = robotState().pose();
   for (const QVoltage v : tests.spins) {
     for (const double direction : {1.0, -1.0}) {
       const double left = direction * v.volts();
       const MotionResult result =
-          holdThenPause(log, kSpin, left, -left, tests.spin_time, tests.pause);
+          runFromStart(log, start, tests, kSpin, left, -left, tests.spin_time);
       if (result != MotionResult::Reached) return result;
     }
   }
@@ -119,14 +153,14 @@ MotionResult runGripTests(GripLog& log, const GripTests& tests) {
       const double left = turning_right ? outer.volts() : inner.volts();
       const double right = turning_right ? inner.volts() : outer.volts();
       const MotionResult result =
-          holdThenPause(log, kCircle, left, right, tests.circle_time, tests.pause);
+          runFromStart(log, start, tests, kCircle, left, right, tests.circle_time);
       if (result != MotionResult::Reached) return result;
     }
   }
   for (const double direction : {1.0, -1.0}) {
     const double volts = direction * tests.launch.volts();
     const MotionResult result =
-        holdThenPause(log, kLaunch, volts, volts, tests.launch_time, tests.pause);
+        runFromStart(log, start, tests, kLaunch, volts, volts, tests.launch_time);
     if (result != MotionResult::Reached) return result;
   }
   return MotionResult::Reached;

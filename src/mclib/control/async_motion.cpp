@@ -23,6 +23,14 @@ namespace mclib {
 namespace control {
 
 namespace detail {
+#if defined(MCLIB_HOST_BUILD)
+// The vexsim bridge replaces this: its clock moves only inside pros::delay(),
+// so the motion thread and the caller have to take turns.
+__attribute__((weak)) std::thread startMotionThread(std::function<void()> body) {
+  return std::thread(std::move(body));
+}
+#endif
+
 struct AsyncMotionState {
   std::atomic_bool done{false};
   std::atomic<int> result{static_cast<int>(MotionResult::Cancelled)};
@@ -141,7 +149,7 @@ AsyncMotion AsyncMotion::start(std::function<MotionResult()> motion) {
     state->done.store(true);
   };
 #if defined(MCLIB_HOST_BUILD)
-  state->thread = std::thread(std::move(body));
+  state->thread = detail::startMotionThread(std::move(body));
 #else
   state->task = std::make_unique<pros::Task>(std::move(body), "mclib motion");
 #endif
