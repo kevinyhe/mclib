@@ -511,8 +511,13 @@ def measure_feedforward(lib, preset, tracking_mode, cache):
     return cache[key]
 
 
+# The robot's owner's Override cascade drive has one sideways tracking wheel
+# and no forward one, so it runs with drive encoders alone or with that wheel.
+CASCADE_TRACKING_MODES = ("drive", "horizontal")
+
+
 def scenarios():
-    for preset in ("four_motor_200", "six_motor_450", "speed_base"):
+    for preset in ("four_motor_200", "six_motor_450", "speed_base", "override_cascade"):
         for name, action, args, target, angle in (
             ("drive_forward", 1, {"a": 24}, (0, 24), 0),
             ("drive_reverse", 1, {"a": -24}, (0, -24), 0),
@@ -535,6 +540,8 @@ def scenarios():
         ):
             yield dict(name=f"{preset}/{name}", preset=preset, action=action,
                        args=args, target=target, angle=angle,
+                       tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
+                                       else TRACKING_MODES),
                        position_tolerance=(1.5 if action == 7 else
                                            2.5 if name.endswith("_ramsete_config") else
                                            5.5 if action in (2, 3) else 2.5))
@@ -623,7 +630,8 @@ def main():
     parser.add_argument("--ramsete-accel", type=float, default=60.0,
                         help="Planned acceleration for the ramsete_* scenarios, in/s^2 (default: 60)")
     args = parser.parse_args()
-    cases = [case for case in scenarios() if args.filter in case["name"]]
+    cases = [case for case in scenarios() if args.filter in case["name"] and
+             args.tracking_mode in case.get("tracking_modes", TRACKING_MODES)]
     if not cases:
         parser.error("no scenarios matched --filter")
     if not 0 < args.motion_timeout_ms <= 20000:

@@ -7,6 +7,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- The physics scenarios also run vexsim's `override_cascade` drive, in the
+  `drive` and `horizontal` modes: four 450 rpm motors on 2.75 in omnis and
+  one sideways tracking wheel.
+
 - `curveCircle()` and `curveCircleReverse()` keep their heading correction
   whole when a side would pass the voltage cap, and slow the arc instead.
   They stop steering back toward the circle over the last quarter of the
