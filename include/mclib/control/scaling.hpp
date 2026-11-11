@@ -50,3 +50,18 @@ void scaleToMin(double& left_output, double& right_output, double min_output);
  *       at full command.
  */
 void scaleToMax(double& left_output, double& right_output, double max_output);
+
+/**
+ * @brief Shrink the base outputs so that, with @p correction added to the left
+ *        and taken from the right, neither side passes @p max_output.
+ *
+ * The correction is kept whole and the base keeps its ratio. When the
+ * correction alone passes @p max_output, the base goes to zero; cap the sum
+ * with scaleToMax() afterward.
+ *
+ * @param left_base  Left voltage before the correction, in and out.
+ * @param right_base Right voltage before the correction, in and out.
+ * @param correction Volts added to the left side and taken from the right.
+ * @param max_output The cap, volts.
+ */
+void fitBaseUnderCorrection(double& left_base, double& right_base, double correction, double max_output);

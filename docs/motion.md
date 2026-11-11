@@ -391,9 +391,9 @@ cornering):
 
 | Drive | `curveCircle()` | RAMSETE b = 2 | RAMSETE b = 50 |
 | --- | --- | --- | --- |
-| four_motor_200, forward / reverse | 1.70 / 1.07 in | 6.01 / 4.84 in | 0.42 / 0.37 in |
-| six_motor_450, forward / reverse | 1.83 / 1.68 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
-| speed_base, forward / reverse | 2.27 / 3.35 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
+| four_motor_200, forward / reverse | 1.77 / 1.62 in | 6.01 / 4.84 in | 0.42 / 0.37 in |
+| six_motor_450, forward / reverse | 2.11 / 2.02 in | 8.28 / 7.17 in | 1.98 / 1.95 in |
+| speed_base, forward / reverse | 2.46 / 2.53 in | 11.46 / 10.67 in | 1.03 / 0.86 in |
 
 RAMSETE stops correcting when the plan does, so a robot that lags or slides
 ends with the error it had: up to 12° off heading on the fast drives, and up
@@ -431,10 +431,13 @@ costs seconds.
 
 `curveCircle()` and `curveCircleReverse()` measure progress on the pose: the
 angle swept around the arc's centre, fixed at the start. They steer back
-toward the circle when the robot drifts off it, slow down to keep sideways
-acceleration under `arc_max_lateral_accel` (60 in/s^2), and finish a stopped
-arc with a turn if it ends off heading. A zero radius still runs on the
-encoders. After one call to
+toward the circle when the robot drifts off it, and stop steering back over
+the last quarter of the sweep so the arc ends on its heading. When a side
+would pass the voltage cap, they slow the arc and keep the heading
+correction whole. They slow down to keep sideways acceleration under
+`arc_max_lateral_accel` (60 in/s^2), and finish a stopped arc with a turn if
+it ends more than `turn_exit.big_error` (3°) off heading. A zero radius still
+runs on the encoders. After one call to
 `useRamseteForArcs()`, they plan the same arc with `path::planArc()` and follow
 it with `followTrajectory()` instead, settle included. The calls, targets,
 time limits and voltage caps in your autonomous stay the same.

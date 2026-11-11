@@ -298,7 +298,7 @@ std::unique_ptr<Command> ChassisController::makeTurnToHeadingCommand(QAngle, QTi
 std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, bool, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage, QAngle) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity, std::optional<control::WallDistanceCheck>) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLength, int, QAngle, double, QTime, bool, QVoltage, bool, QVoltage, QLength) { return nullptr; }
 
 }  // namespace mclib

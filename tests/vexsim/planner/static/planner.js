@@ -516,13 +516,19 @@
 
   function schedulePlan(delay = 200) {
     clearTimeout(state.planTimer);
+    $("step-list").setAttribute("aria-busy", "true");
     state.planTimer = setTimeout(requestPlan, delay);
+  }
+
+  function planSettled() {
+    $("step-list").setAttribute("aria-busy", "false");
   }
 
   async function requestPlan() {
     if (!pathSteps().length) {
       state.planError = null;
       renderAll();
+      planSettled();
       return;
     }
     if (!state.engine?.ready) return;
@@ -556,6 +562,8 @@
       if (state.planAgain) {
         state.planAgain = false;
         schedulePlan(0);
+      } else {
+        planSettled();
       }
     }
   }

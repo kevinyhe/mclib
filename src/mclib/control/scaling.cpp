@@ -5,6 +5,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include "mclib/control/scaling.hpp"
 
+#include <algorithm>
 #include <cmath>
 void scaleToMin(double &left_output, double &right_output, double min_output)
 {
@@ -56,4 +57,18 @@ void scaleToMax(double &left_output, double &right_output, double max_output)
     left_output = left_output / right_output * -max_output;
     right_output = -max_output;
   }
+}
+
+void fitBaseUnderCorrection(double &left_base, double &right_base, double correction, double max_output)
+{
+  double scale = 1.0;
+  const auto limit = [&](double base, double side_correction) {
+    if (base == 0) return;
+    const double room = base > 0 ? max_output - side_correction : -max_output - side_correction;
+    scale = std::min(scale, std::max(0.0, room / base));
+  };
+  limit(left_base, correction);
+  limit(right_base, -correction);
+  left_base *= scale;
+  right_base *= scale;
 }

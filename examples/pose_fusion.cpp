@@ -11,7 +11,8 @@
 //   PoseFusion    distance sensors and a GPS sensor, blended in all the time
 //                 while the robot drives
 //   snapshot      distance sensors, one fix while the robot stands still
-//   wallReset()   no sensor: push into a wall and take the pose from it
+//   wallReset()   push into a wall and take the pose from it, with a distance
+//                 sensor to check it is the wall
 //
 // The first two measure against the field map in
 // mclib/snapshot/collision_map.hpp. This example uses one part of that map,
@@ -359,10 +360,18 @@ void resetAgainstBackWall() {
   // turning, and never count: use the lowest voltage that moves the robot, and
   // a current under what the motors draw at it. Pass keep_current_heading in
   // place of 0_deg to leave the IMU alone.
+  //
+  // A game piece or another robot behind this one stalls the drive too. The
+  // back distance sensor is 5 in behind the centre, so on the wall it reads
+  // centre_to_back - 5 in. Anything else means something else stopped the
+  // robot, and the pose is not reset.
+  const mclib::control::WallDistanceCheck back_on_wall{
+      [] { return back_distance.distance(); }, centre_to_back - 5_in, 1_in};
   const bool touched_wall =
-      wallReset(x_now, centre_to_back, 0_deg, -3_V, 2_s, 1000_mA);
+      wallReset(x_now, centre_to_back, 0_deg, -3_V, 2_s, back_on_wall, 1000_mA);
   if (!touched_wall) {
-    // No stall inside 2 s. The pose was left as it was.
+    // No stall inside 2 s, or the back sensor did not read the wall. The pose
+    // was left as it was.
     master.setText(2, 0, "NO WALL");
   }
 }

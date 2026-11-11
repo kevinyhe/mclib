@@ -119,6 +119,11 @@ def load_library(library):
         lib.sim_filter_reading.restype = None
         lib.sim_filter_state.argtypes = [C.POINTER(C.c_double)]
         lib.sim_filter_state.restype = None
+    if hasattr(lib, "sim_set_wall_check"):
+        lib.sim_set_wall_check.argtypes = [C.c_double, C.c_double]
+        lib.sim_set_wall_check.restype = None
+        lib.sim_wall_reading.argtypes = [C.c_double]
+        lib.sim_wall_reading.restype = None
     if hasattr(lib, "sim_plan_spline"):
         lib.sim_plan_spline.argtypes = [C.c_double, C.c_double, C.POINTER(C.c_double), C.c_int,
                                         C.c_int, C.POINTER(C.c_double), C.c_int]
@@ -152,7 +157,7 @@ class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
                  start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0,
-                 distance_sensors=None, gps=False):
+                 distance_sensors=None, gps=False, wall_sensor=None):
         from vexsim import Simulator, presets
         from vexsim.chassis import add_tracking_wheels
         from vexsim.motor import BrakeMode
@@ -193,6 +198,9 @@ class PhysicsBridge:
         # map's perimeter, shifted), 2% noise, 78 in range, every 20 ms.
         self.distance_sensors = list(distance_sensors or [])
         self.gps = gps
+        # wallReset()'s distance check: a sensor (x_right_in, y_fwd_in,
+        # rel_deg) reading the true range to the box walls, with no noise.
+        self.wall_sensor = wall_sensor
         self.distance_rng = random.Random(seed + 101)
         self.last_distance_ms = -20
         # Observer only: publishing a snapshot must never advance simulation time
@@ -239,6 +247,8 @@ class PhysicsBridge:
         # 1 in per reading, PoseFusion's default.
         if gps:
             lib.sim_gps_enable(*ODOM_VAR[tracking_mode], 1.0)
+        if wall_sensor:
+            lib.sim_set_wall_check(wall_sensor["expected_in"], wall_sensor["tolerance_in"])
 
     def set_slew(self, speed_up, slow_down):
         if not all(isinstance(value, (int, float)) and math.isfinite(value) and 0 < value <= 12
@@ -369,6 +379,9 @@ class PhysicsBridge:
                     if value is not None:
                         value += self.distance_rng.gauss(0.0, 0.02 * value)
                         self.lib.sim_filter_reading(index, value)
+            if self.wall_sensor:
+                wall_range = box_range(self.truth(), self.wall_sensor["sensor"])
+                self.lib.sim_wall_reading(-1.0 if wall_range is None else wall_range)
             if self.gps:
                 gps = self.sim.gps
                 reading.gps_valid = int(gps.valid)
@@ -469,6 +482,10 @@ BOX_HALF_IN = 72.0
 SENSOR_LAYOUT = [(-6.0, 5.0, -90.0), (-6.0, -5.0, -90.0), (6.0, 0.0, 90.0), (0.0, -6.0, 180.0)]
 
 
+def front_wall_sensor(expected_in):
+    return {"sensor": (0.0, 6.0, 0.0), "expected_in": expected_in, "tolerance_in": 1.0}
+
+
 def box_range(truth, sensor, max_range=78.0):
     """True range from a sensor on the robot to the box walls, or None."""
     x, y, heading = truth
@@ -516,8 +533,13 @@ def measure_feedforward(lib, preset, tracking_mode, cache):
     return cache[key]
 
 
+# The robot's owner's Override cascade drive has one sideways tracking wheel
+# and no forward one, so it runs with drive encoders alone or with that wheel.
+CASCADE_TRACKING_MODES = ("drive", "horizontal")
+
+
 def scenarios():
-    for preset in ("four_motor_200", "six_motor_450", "speed_base"):
+    for preset in ("four_motor_200", "six_motor_450", "speed_base", "override_cascade"):
         for name, action, args, target, angle in (
             ("drive_forward", 1, {"a": 24}, (0, 24), 0),
             ("drive_reverse", 1, {"a": -24}, (0, -24), 0),
@@ -540,6 +562,8 @@ def scenarios():
         ):
             yield dict(name=f"{preset}/{name}", preset=preset, action=action,
                        args=args, target=target, angle=angle,
+                       tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
+                                       else TRACKING_MODES),
                        position_tolerance=(1.5 if action == 7 else
                                            2.5 if name.endswith("_ramsete_config") else
                                            5.5 if action in (2, 3) else 2.5))
@@ -605,6 +629,11 @@ def scenarios():
         ("locked_default_threshold", {"locked": True}, 1000, True),
         ("locked_2000mA_threshold", {"locked": True}, 2000, True),
         ("body_pinned_wheels_free", {"constrained": True}, 2000, False),
+        # Held still where a front sensor reads the 66 in it expects at the
+        # wall, and held still where it expects 2 in: something other than
+        # the wall stopped the robot, so the pose stays.
+        ("locked_sensor_agrees", {"locked": True, "wall_sensor": front_wall_sensor(66.0)}, 1000, True),
+        ("locked_sensor_disagrees", {"locked": True, "wall_sensor": front_wall_sensor(2.0)}, 1000, False),
     ):
         yield dict(name=f"wall/{name}", preset="six_motor_450", action=8,
                    args={"a": 50, "b": 60, "heading": 0, "timeout": 800,
@@ -628,7 +657,8 @@ def main():
     parser.add_argument("--ramsete-accel", type=float, default=60.0,
                         help="Planned acceleration for the ramsete_* scenarios, in/s^2 (default: 60)")
     args = parser.parse_args()
-    cases = [case for case in scenarios() if args.filter in case["name"]]
+    cases = [case for case in scenarios() if args.filter in case["name"] and
+             args.tracking_mode in case.get("tracking_modes", TRACKING_MODES)]
     if not cases:
         parser.error("no scenarios matched --filter")
     if not 0 < args.motion_timeout_ms <= 20000:

@@ -380,6 +380,22 @@ Routine::MotionStep& Routine::MotionStep::withVelocityThreshold(
   return rebuild();
 }
 
+Routine::MotionStep& Routine::MotionStep::withWallDistanceCheck(
+    control::WallDistanceCheck check) {
+  if (!check.read) {
+    m_routine->configurationError("withWallDistanceCheck() was given no sensor reading.");
+    return *this;
+  }
+  if (!(check.expected.in() >= 0) || !std::isfinite(check.expected.in()) ||
+      !(check.tolerance.in() >= 0) || !std::isfinite(check.tolerance.in())) {
+    m_routine->configurationError(
+        "withWallDistanceCheck() was given a negative or non-finite distance.");
+    return *this;
+  }
+  m_routine->m_steps[m_index].options.wall_distance_check = std::move(check);
+  return rebuild();
+}
+
 Routine::MotionStep& Routine::MotionStep::until(std::function<bool()> condition) {
   if (!condition) {
     m_routine->configurationError("until() was given an empty condition.");
@@ -916,7 +932,8 @@ Routine::MotionStep Routine::wallReset(ChassisController& chassis,
                                             options.drive_power,
                                             options.timeout,
                                             options.current_threshold,
-                                            options.velocity_threshold);
+                                            options.velocity_threshold,
+                                            options.wall_distance_check);
       },
       timeout);
 }

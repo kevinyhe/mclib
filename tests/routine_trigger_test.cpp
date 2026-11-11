@@ -451,7 +451,7 @@ std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTi
   return nullptr;
 }
 
-std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity) {
+std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity, std::optional<control::WallDistanceCheck>) {
   return nullptr;
 }
 

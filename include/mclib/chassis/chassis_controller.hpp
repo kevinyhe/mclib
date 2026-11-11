@@ -20,6 +20,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 
 namespace mclib {
 
@@ -162,7 +163,8 @@ public:
       QVoltage drive_power,
       QTime time_limit,
       QCurrent current_threshold = 1000.0 * units::milliampere,
-      QAngularVelocity velocity_threshold = 5.0 * units::rpm);
+      QAngularVelocity velocity_threshold = 5.0 * units::rpm,
+      std::optional<control::WallDistanceCheck> distance_check = std::nullopt);
   std::unique_ptr<Command> makeTurnToPointCommand(
       QLength x,
       QLength y,

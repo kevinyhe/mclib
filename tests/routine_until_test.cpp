@@ -193,6 +193,23 @@ int main() {
     CHECK_EQ(motion.initialized, 0);
   }
 
+  std::printf("-- a wall distance check that cannot work is a configuration error\n");
+  {
+    const auto reading = [] { return std::optional<QLength>{2_in}; };
+    Routine fine(chassis);
+    fine.wallReset(0_in, 0_in, 0_deg, 2_s)
+        .withWallDistanceCheck(mclib::control::WallDistanceCheck{reading, 2_in, 1_in});
+    CHECK(!fine.hasConfigurationError());
+    Routine no_reading(chassis);
+    no_reading.wallReset(0_in, 0_in, 0_deg, 2_s)
+        .withWallDistanceCheck(mclib::control::WallDistanceCheck{{}, 2_in, 1_in});
+    CHECK(no_reading.hasConfigurationError());
+    Routine negative_tolerance(chassis);
+    negative_tolerance.wallReset(0_in, 0_in, 0_deg, 2_s)
+        .withWallDistanceCheck(mclib::control::WallDistanceCheck{reading, 2_in, -1_in});
+    CHECK(negative_tolerance.hasConfigurationError());
+  }
+
   std::printf("-- without until() the motion runs to the end\n");
   {
     reset(5);
@@ -268,7 +285,7 @@ std::unique_ptr<Command> ChassisController::makeCurveCircleCommand(
 }
 std::unique_ptr<Command> ChassisController::makeCurveCircleReverseCommand(QAngle, QLength, QTime, bool, QVoltage, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeSwingCommand(QAngle, double, QTime, bool, QVoltage, QVoltage, QAngle) { return nullptr; }
-std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity) { return nullptr; }
+std::unique_ptr<Command> ChassisController::makeWallResetCommand(QLength, QLength, QAngle, QVoltage, QTime, QCurrent, QAngularVelocity, std::optional<control::WallDistanceCheck>) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeTurnToPointCommand(QLength, QLength, int, QTime, QVoltage) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLength, int, QAngle, double, QTime, bool, QVoltage, bool, QVoltage, QLength) { return nullptr; }
 

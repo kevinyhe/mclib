@@ -80,7 +80,27 @@ motors draw at that voltage, and check the return value.
 
 Anything that holds the robot still reads as the wall: a game piece, another
 robot, or a push too weak to start it moving. The pose is then set short of
-the wall. Use `wallReset()` where nothing else can be in the way.
+the wall. Without a distance sensor, use `wallReset()` where nothing else can
+be in the way.
+
+With a distance sensor facing the wall, pass a `WallDistanceCheck`. Push the
+robot square against the wall once and use what the sensor reads as
+`expected`:
+
+```cpp
+mclib::device::Distance back_distance(5);
+
+const mclib::control::WallDistanceCheck back_on_wall{
+    [] { return back_distance.distance(); }, 2_in, 1_in};
+wallReset(x_now, 7_in, 0_deg, -3_V, 2_s, back_on_wall);
+```
+
+After the stall it reads the sensor once. With no reading, or a reading more
+than `tolerance` from `expected`, it prints the reading, returns `false` and
+leaves the pose and the IMU alone. A routine step takes the same check with
+`.withWallDistanceCheck(...)`. In the simulator, a robot held still 66 in from
+the wall with a sensor expecting 2 in was not reset, and one whose sensor
+read the expected 66 in was.
 
 ## Competition disable
 

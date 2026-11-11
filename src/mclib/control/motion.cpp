@@ -827,7 +827,11 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
       } else {
         speed_scale = std::min(1.0, speed_scale + 0.02);
       }
-      steer_deg = std::clamp(4.0 * off_circle_in, -30.0, 30.0) * curve_direction * drive_direction;
+      // Fade the steer out over the last quarter of the sweep, so the arc
+      // ends on its heading instead of steering past it.
+      const double sweep_left = 1.0 - swept_deg / sweep_deg;
+      steer_deg = std::clamp(4.0 * off_circle_in, -30.0, 30.0) * curve_direction * drive_direction *
+                  std::clamp(sweep_left * 4.0, 0.0, 1.0);
     }
     // Preserve the preceding live command at a successful chaining boundary;
     // updating the PID after the crossing can reverse the drive for one tick.
@@ -853,9 +857,13 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
 
     const double requested_drive = (left_output + right_output) / 2;
     const double requested_yaw = (left_output - right_output) / 2 + correction_output;
+    const double mixed_left = left_output + correction_output;
+    const double mixed_right = right_output - correction_output;
+    // Slow the arc rather than weaken the heading correction: scaling both
+    // together left the robot 13 deg behind its heading and 5 in wide.
+    fitBaseUnderCorrection(left_output, right_output, correction_output, max_output);
     left_output += correction_output;
     right_output -= correction_output;
-    const double mixed_left = left_output, mixed_right = right_output;
     scaleToMax(left_output, right_output, max_output);
     telemetry.publish(MotionPhase::Arc, requested_drive, requested_yaw, false,
                       left_output != mixed_left || right_output != mixed_right ||
@@ -1042,15 +1050,43 @@ void correctHeading()
   }
 }
 
-bool wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
-               QVoltage drive_power, QTime time_limit,
-               QCurrent current_threshold, QAngularVelocity velocity_threshold)
+namespace {
+
+bool validWallDistanceCheck(const mclib::control::WallDistanceCheck& check) {
+  return static_cast<bool>(check.read) && check.expected.in() >= 0 && check.tolerance.in() >= 0;
+}
+
+bool wallReadingAgrees(const mclib::control::WallDistanceCheck& check) {
+  const std::optional<QLength> reading = check.read();
+  if (!reading.has_value() || !std::isfinite(reading->in())) {
+    std::printf("mclib: wallReset() stalled, but the distance sensor has no reading. "
+                "The pose was not reset.\n");
+    return false;
+  }
+  if (std::fabs(reading->in() - check.expected.in()) > check.tolerance.in()) {
+    std::printf("mclib: wallReset() stalled with the distance sensor reading %.1f in, not "
+                "%.1f +/- %.1f in: something other than the wall stopped the robot. The pose "
+                "was not reset.\n",
+                reading->in(), check.expected.in(), check.tolerance.in());
+    return false;
+  }
+  return true;
+}
+
+bool pushToWallAndReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
+                        QVoltage drive_power, QTime time_limit,
+                        QCurrent current_threshold, QAngularVelocity velocity_threshold,
+                        const mclib::control::WallDistanceCheck* distance_check)
 {
   MotionObservation telemetry(MotionPhase::Wall);
   if (mclib::control::requireDrive("wallReset") == nullptr) {
     return false;
   }
-  MotionSafety safety(time_limit, {reset_x.in(), reset_y.in(), drive_power.volts(), current_threshold.mA(), velocity_threshold.rpm()});
+  const double expected_in = distance_check != nullptr ? distance_check->expected.in() : 0.0;
+  const double tolerance_in = distance_check != nullptr ? distance_check->tolerance.in() : 0.0;
+  MotionSafety safety(time_limit, {reset_x.in(), reset_y.in(), drive_power.volts(), current_threshold.mA(),
+                                   velocity_threshold.rpm(), expected_in, tolerance_in});
+  if (distance_check != nullptr && !validWallDistanceCheck(*distance_check)) safety.reject();
   if (!safety.running()) return false;
   const double reset_x_in = reset_x.in();
   const double reset_y_in = reset_y.in();
@@ -1134,6 +1170,9 @@ bool wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
       (!std::isnan(reset_heading_deg) && !std::isfinite(reset_heading_deg))) {
     return false;
   }
+  if (distance_check != nullptr && !wallReadingAgrees(*distance_check)) {
+    return false;
+  }
 
   // Reset heading first if a valid value was provided, so the pose below is
   // built from the IMU value we are actually going to keep.
@@ -1161,6 +1200,25 @@ bool wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
   // squaring this routine just did.
   state().setTurning(false);
   return true;
+}
+
+}  // namespace
+
+bool wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
+               QVoltage drive_power, QTime time_limit,
+               QCurrent current_threshold, QAngularVelocity velocity_threshold)
+{
+  return pushToWallAndReset(reset_x, reset_y, reset_heading, drive_power, time_limit,
+                            current_threshold, velocity_threshold, nullptr);
+}
+
+bool wallReset(QLength reset_x, QLength reset_y, QAngle reset_heading,
+               QVoltage drive_power, QTime time_limit,
+               const mclib::control::WallDistanceCheck& distance_check,
+               QCurrent current_threshold, QAngularVelocity velocity_threshold)
+{
+  return pushToWallAndReset(reset_x, reset_y, reset_heading, drive_power, time_limit,
+                            current_threshold, velocity_threshold, &distance_check);
 }
 
 MotionResult turnToPoint(QLength x, QLength y, int direction, QTime time_limit, QVoltage min_voltage)
