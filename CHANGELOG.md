@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- `characterizeGrip()` and `characterizeWallPush()` with a `GripLog`
+  (`mclib/control/characterize.hpp`): spins, circles, launches and a push
+  into a wall, open loop, logged with the sideways tracking wheel and the
+  battery voltage. `examples/tire_grip.cpp` is a whole program.
+- `tests/vexsim/fit_grip.py` fits vexsim's tire grip (forward and sideways,
+  static and sliding) to those logs, and `test_fit_grip.py` checks that it
+  gives back grip vexsim was given.
+
 ## 0.4.2
 
 vexsim is public: https://github.com/kevinyhe/vexsim (MPL-2.0). Set up the
