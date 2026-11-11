@@ -35,6 +35,7 @@ struct Sample {
   // gps_valid 0 when the sensor gave nothing this tick.
   double gps_x, gps_y, gps_heading;
   int gps_valid;
+  double battery_mv;
 };
 using Advance = void (*)(std::uint32_t, Sample*);
 using Output = void (*)(int side, int mode, double volts);
@@ -112,6 +113,9 @@ void refresh(std::uint32_t ms) {
 namespace pros {
 extern "C" std::uint32_t millis() { return sample.millis; }
 extern "C" void delay(std::uint32_t ms) { refresh(ms); }
+namespace battery {
+std::int32_t get_voltage() { return static_cast<std::int32_t>(sample.battery_mv); }
+}
 namespace competition {
 std::uint8_t is_disabled() { return sample.disabled; }
 std::uint8_t is_autonomous() { return 1; }
@@ -327,6 +331,30 @@ extern "C" int sim_characterize(const char* path, int which) {
   log.close();
   std::fclose(file);
   return 0;
+}
+
+// Run the tire grip routines (characterize.hpp) into a CSV at @p path:
+// which 1 runs characterizeGrip(), which 2 characterizeWallPush(). The
+// sideways tracking wheel is the one sim_set_horizontal_tracker() set up.
+// Returns the MotionResult, or -1 when the file won't open.
+extern "C" int sim_characterize_grip(const char* path, int which, double sideways_diameter_in) {
+  static mclib::telemetry::RowBuffer<8192> buffer;
+  std::FILE* file = std::fopen(path, "w");
+  if (file == nullptr) return -1;
+  mclib::telemetry::FileSink sink(file);
+  mclib::telemetry::Logger log(sink, buffer, {.period = 10 * mclib::units::millisecond,
+                                              .max_rows = 8000});
+  const mclib::control::TrackingWheelSensor sideways{
+      [] { return sample.horizontal; },
+      {mclib::units::Wheel::fromDiameter(sideways_diameter_in * mclib::units::inch),
+       0.0 * mclib::units::inch, 1.0}};
+  mclib::control::GripLog columns(log, sideways);
+  const mclib::control::MotionResult result = which == 1
+      ? mclib::control::characterizeGrip(columns)
+      : mclib::control::characterizeWallPush(columns);
+  log.close();
+  std::fclose(file);
+  return static_cast<int>(result);
 }
 
 extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, double zeta,

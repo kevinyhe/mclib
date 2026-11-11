@@ -34,6 +34,7 @@ class Sample(C.Structure):
     _fields_ += [("vertical", C.c_double), ("horizontal", C.c_double)]
     _fields_ += [("gps_x", C.c_double), ("gps_y", C.c_double), ("gps_heading", C.c_double),
                  ("gps_valid", C.c_int)]
+    _fields_ += [("battery_mv", C.c_double)]
 
 
 ADVANCE = C.CFUNCTYPE(None, C.c_uint32, C.POINTER(Sample))
@@ -104,6 +105,9 @@ def load_library(library):
     if hasattr(lib, "sim_characterize"):
         lib.sim_characterize.argtypes = [C.c_char_p, C.c_int]
         lib.sim_characterize.restype = C.c_int
+    if hasattr(lib, "sim_characterize_grip"):
+        lib.sim_characterize_grip.argtypes = [C.c_char_p, C.c_int, C.c_double]
+        lib.sim_characterize_grip.restype = C.c_int
     if hasattr(lib, "sim_arcs_use_ramsete"):
         lib.sim_arcs_use_ramsete.argtypes = [C.c_int]
         lib.sim_arcs_use_ramsete.restype = None
@@ -354,6 +358,7 @@ class PhysicsBridge:
                 # mclib's horizontal tracking measurement is right-positive.
                 reading.horizontal = -math.degrees(self.sim.tracking["track_perp"].position)
             reading.current_ma = sum(abs(m.current) for m in self.sim.motors) * 1000 / len(self.sim.motors)
+            reading.battery_mv = self.sim.battery.voltage * 1000
             reading.velocity_rpm = sum(abs(self.sim.encoders[m.name].velocity)
                                        for m in self.sim.motors) * 30 / math.pi / len(self.sim.motors)
             if self.distance_sensors and reading.millis - self.last_distance_ms >= 20:

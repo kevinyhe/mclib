@@ -6,10 +6,12 @@
 #pragma once
 
 #include "mclib/control/motion.hpp"
+#include "mclib/control/odometry_task.hpp"
 #include "mclib/telemetry/logger.hpp"
 #include "mclib/units/units.hpp"
 
 #include <functional>
+#include <utility>
 #include <vector>
 
 /**
@@ -118,6 +120,92 @@ MotionResult characterizeSpin(TuningLog& log,
  * The commanded voltages are the motion's drive and yaw requests mixed.
  */
 MotionResult traceMotion(TuningLog& log, std::function<MotionResult()> motion);
+
+/**
+ * @brief The CSV columns characterizeGrip() and characterizeWallPush() write,
+ *        for `tests/vexsim/fit_grip.py`. Register before sampling.
+ *
+ * | Column | Meaning |
+ * | --- | --- |
+ * | `phase` | 4 spinning, 5 circling, 6 launching, 7 pushing a wall, 0 between |
+ * | `left_cmd_V`, `right_cmd_V` | voltage commanded to each side |
+ * | `left_in`, `right_in` | each side's encoder travel since the routine began |
+ * | `heading_deg` | IMU heading |
+ * | `sideways_in` | the sideways tracking wheel's travel, positive to the robot's right, as odometry reads it |
+ * | `battery_V` | battery voltage |
+ */
+class GripLog {
+ public:
+  /**
+   * @brief Registers the columns on @p logger, which must outlive this.
+   * @param sideways The sideways-rolling tracking wheel, set up as for
+   *        odometry: its reading counts up when the robot moves right.
+   */
+  GripLog(telemetry::Logger& logger, TrackingWheelSensor sideways);
+
+  telemetry::Logger& logger() { return m_logger; }
+
+  /// @brief Set every column for this tick and sample.
+  void record(int phase, double left_volts, double right_volts);
+
+  /// @brief Encoder and sideways travel are measured from here.
+  void zero();
+
+ private:
+  telemetry::Logger& m_logger;
+  TrackingWheelSensor m_sideways;
+  telemetry::Channel<double> m_phase, m_left_cmd, m_right_cmd, m_left, m_right, m_heading,
+      m_sideways_travel, m_battery;
+  double m_left_zero = 0, m_right_zero = 0, m_sideways_zero = 0;
+};
+
+/// @brief The open-loop runs characterizeGrip() makes.
+struct GripTests {
+  /// @brief Spin in place at each voltage, clockwise then back.
+  std::vector<QVoltage> spins = {4.0 * units::volt, 8.0 * units::volt, 12.0 * units::volt};
+  QTime spin_time = 1.5 * units::second;
+  /// @brief Drive circles at each (outer, inner) pair, turning right then left.
+  std::vector<std::pair<QVoltage, QVoltage>> circles = {
+      {6.0 * units::volt, 3.0 * units::volt},
+      {9.0 * units::volt, 4.5 * units::volt},
+      {12.0 * units::volt, 6.0 * units::volt},
+      {12.0 * units::volt, 3.0 * units::volt}};
+  QTime circle_time = 3.0 * units::second;
+  /// @brief Full-voltage start forward, then back.
+  QVoltage launch = 12.0 * units::volt;
+  QTime launch_time = 0.8 * units::second;
+  /// @brief At 0 V between runs, long enough for the robot to stop.
+  QTime pause = 1.0 * units::second;
+};
+
+/**
+ * @brief Run @p tests open loop and log them for `tests/vexsim/fit_grip.py`,
+ *        which finds the tire grip that makes vexsim drive the same way.
+ *
+ * Spins (phase 4) show how hard the wheels scrub when the robot turns in
+ * place. Circles (phase 5) show how far it slides sideways, which the
+ * sideways tracking wheel measures. Launches (phase 6) show wheelspin off
+ * the line. With the defaults it takes about 51 s and needs a clear 6 ft by
+ * 6 ft of tiles: the circles are up to 5 ft across, and each launch covers
+ * about 3 ft. Stops on cancel, disable or a fault, like any motion.
+ *
+ * @return `InvalidValue` without moving when a voltage is not in (0, 12] V
+ *         or a time is not positive.
+ */
+MotionResult characterizeGrip(GripLog& log, const GripTests& tests = {});
+
+/**
+ * @brief Push into a wall, raising the voltage from 0 to @p peak over
+ *        @p ramp and holding it for @p hold_time, logging phase 7.
+ *
+ * Start with the robot's front square against a field wall. The voltage at
+ * which the wheels break loose gives the tires' static grip on the tile, and
+ * how fast they spin while sliding gives their sliding grip. If they never
+ * break loose, the log only says the grip is above what the motors can push.
+ */
+MotionResult characterizeWallPush(GripLog& log, QVoltage peak = 12.0 * units::volt,
+                                  QTime ramp = 3.0 * units::second,
+                                  QTime hold_time = 1.0 * units::second);
 
 }  // namespace control
 }  // namespace mclib

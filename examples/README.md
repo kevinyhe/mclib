@@ -43,6 +43,7 @@ run on a robot. The gains, distances and voltages in them are placeholders.
 | [commands.cpp](commands.cpp) | the command framework: subsystems, every kind of command, the two ways to combine commands, triggers and event loops |
 | [devices.cpp](devices.cpp) | every device wrapper, and what to do when a device stops answering |
 | [telemetry.cpp](telemetry.cpp) | logging a mechanism to a CSV file on the SD card, streaming columns over USB, and the clock |
+| [tire_grip.cpp](tire_grip.cpp) | logging spins, circles, launches and a wall push for `tests/vexsim/fit_grip.py`, which fits the simulator's tire grip to your robot |
 | [units_and_math.cpp](units_and_math.cpp) | typed units and their literals, the field frame and the pose helpers, a PID controller used by itself, and a mutex shared between two tasks |
 
 ## Autonomous routines you can run
