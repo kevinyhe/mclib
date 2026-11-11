@@ -2,7 +2,6 @@
 """Independent sensor/orchestration checks; intentionally fail on audit findings.
 
 Run with PYTHONDONTWRITEBYTECODE=1. No simulator files are changed.
-Hardware range references are recorded in PHYSICS_VALIDATION.md.
 Range checks use a conservative in-range-or-invalid acceptance policy, not a
 claim that the manufacturer specifies a unique overloaded sensor response.
 """

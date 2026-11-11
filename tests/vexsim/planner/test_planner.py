@@ -79,7 +79,7 @@ class ProjectTests(unittest.TestCase):
         cases = [
             (dict(field="open", steps=[dict(type="lift")]), "Step 1 .*only the Override robot"),
             (dict(field="open", steps=[dict(type="match_load")]), "Step 1 .*Match Loads are part of the Override"),
-            (dict(field="push_back", steps=[drive_with_action]), "only the Override robot"),
+            (dict(field="open", steps=[drive_with_action]), "only the Override robot"),
             (dict(field="open", preload="yellow"), "A preload needs the Override field"),
             (dict(field="override", preload="green"), "Preload must be one of"),
             (dict(field="override", steps=[dict(type="lift", lift_preset="sky")]), "Lift position must be one of"),
