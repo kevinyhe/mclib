@@ -52,6 +52,25 @@ gh secret set VEXSIM_DEPLOY_KEY -R kevinyhe/mclib < /tmp/vexsim_deploy
 rm /tmp/vexsim_deploy /tmp/vexsim_deploy.pub
 ```
 
+The path planner tests, on the `drive` leg, also need the Override field
+shapes that vexsim's `tools/override_cad.py` cuts from VEX's field CAD. They
+are made from VEX's CAD, so they are in a second private repo,
+`kevinyhe/vexsim-cad`, and the job copies them into `vexsim/cad/override/`.
+It reads that repo with its own read-only deploy key, the
+`VEXSIM_CAD_DEPLOY_KEY` secret on mclib. With `VEXSIM_DEPLOY_KEY` set and
+this one missing, the `drive` leg fails and says so. To add or replace it:
+
+```sh
+ssh-keygen -t ed25519 -N "" -C "mclib CI reads vexsim-cad" -f /tmp/vexsim_cad_deploy
+gh api repos/kevinyhe/vexsim-cad/keys -f title="mclib CI (read-only)" \
+  -f key="$(cat /tmp/vexsim_cad_deploy.pub)" -F read_only=true
+gh secret set VEXSIM_CAD_DEPLOY_KEY -R kevinyhe/mclib < /tmp/vexsim_cad_deploy
+rm /tmp/vexsim_cad_deploy /tmp/vexsim_cad_deploy.pub
+```
+
+That leg installs `mujoco` and `numpy` at the versions in
+[requirements.txt](requirements.txt), the ones the planner tests pass with.
+
 ## Scenarios
 
 - Three drivetrains: four-motor 200 RPM, six-motor 450 RPM, and a faster

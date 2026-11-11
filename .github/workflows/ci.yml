@@ -47,8 +47,11 @@ jobs:
     # vexsim is a private repo. The job needs a VEXSIM_DEPLOY_KEY secret: the
     # private half of a read-only deploy key on kevinyhe/vexsim. Without it
     # (forks, or before it is set) the steps skip and the job passes.
+    # The Override field shapes are made from VEX's CAD, so they sit in a
+    # second private repo, kevinyhe/vexsim-cad, read with VEXSIM_CAD_DEPLOY_KEY.
     env:
       HAS_VEXSIM_KEY: ${{ secrets.VEXSIM_DEPLOY_KEY != '' }}
+      HAS_VEXSIM_CAD_KEY: ${{ secrets.VEXSIM_CAD_DEPLOY_KEY != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,7 +70,7 @@ jobs:
       - uses: actions/setup-python@v5
         if: env.HAS_VEXSIM_KEY == 'true'
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       # run.py exits nonzero on any failure, and some scenarios fail on main.
       # check_baseline.py fails only when a scenario in ci_baseline.json does.
@@ -85,6 +88,30 @@ jobs:
       # export (compiled) and whole runs in vexsim. Once, on the drive leg.
       # Three.js comes from vexsim's package, pinned to the version the 3D
       # view expects. The tests and the server share one compiled library.
+      - name: Install the Override world's packages
+        if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        run: python3 -m pip install -r tests/vexsim/requirements.txt
+
+      - name: Require the key to the Override field shapes
+        if: env.HAS_VEXSIM_KEY == 'true' && env.HAS_VEXSIM_CAD_KEY != 'true' && matrix.tracking == 'drive'
+        run: |
+          echo "VEXSIM_CAD_DEPLOY_KEY is not set. The planner tests need the Override field shapes from kevinyhe/vexsim-cad; tests/vexsim/README.md says how to add the key." >&2
+          exit 1
+
+      - name: Check out the Override field shapes
+        if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        uses: actions/checkout@v4
+        with:
+          repository: kevinyhe/vexsim-cad
+          ssh-key: ${{ secrets.VEXSIM_CAD_DEPLOY_KEY }}
+          path: vexsim-cad
+
+      - name: Put the shapes where vexsim reads them
+        if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        run: |
+          mkdir -p vexsim/cad/override
+          cp vexsim-cad/shapes.json vexsim-cad/field.json vexsim-cad/view.json vexsim-cad/view.bin vexsim/cad/override/
+
       - uses: actions/setup-node@v4
         if: env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
         with:
@@ -120,6 +147,16 @@ jobs:
           node tests/vexsim/planner/browser_smoke.mjs \
             --playwright "$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
             --browser "$browser" --output "$RUNNER_TEMP/planner-browser"
+
+      - name: Keep the browser screenshots and the server log
+        if: failure() && env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        uses: actions/upload-artifact@v4
+        with:
+          name: planner-browser
+          path: |
+            ${{ runner.temp }}/planner-browser
+            ${{ runner.temp }}/planner-server.log
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: always() && env.HAS_VEXSIM_KEY == 'true'

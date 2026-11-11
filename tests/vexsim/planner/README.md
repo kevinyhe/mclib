@@ -653,6 +653,7 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 - Override needs numpy, MuJoCo and the shapes made from VEX's field CAD in
   the vexsim checkout (vexsim's README, "Override field CAD"). Run the
   server and the tests with the Python that has them, such as vexsim's
-  `.venv/bin/python`.
+  `.venv/bin/python`. [requirements.txt](../requirements.txt) pins the
+  versions the tests pass with.
 - A routine can hold 40 steps and a path 30 points. The time limits must add
   up to at most 120 s.
