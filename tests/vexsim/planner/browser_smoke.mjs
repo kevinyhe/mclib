@@ -365,6 +365,15 @@ try {
   await openExample("override_autonomous");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
     /the left Toggle and a stack/.test(document.querySelector("#routine-name").value));
+  // The example's robot is measured in the background; when that lands the
+  // page re-renders the step list on the next timer tick. Dragging steps
+  // before then lost the drag on CI.
+  await page.waitForFunction(() => {
+    const text = document.querySelector("#log").textContent;
+    const measured = text.indexOf("Robot measured:");
+    return measured !== -1 && measured < text.indexOf("Opened the example");
+  }, null, { timeout: 300000 });
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
   project = await draft();
   assert.equal(project.field, "override");
   assert.equal(project.preload, "none");
@@ -408,20 +417,27 @@ try {
     const types = JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.map((s) => s.type);
     return JSON.stringify(types.slice(0, want.length)) === JSON.stringify(want);
   }, expected, { timeout: 5000 });
+  // Every edit re-renders the step list 200 ms later, after its re-plan.
+  const listSettled = () => page.waitForFunction(
+    () => document.querySelector("#step-list").getAttribute("aria-busy") !== "true", null, { timeout: 30000 });
   const typesBefore = await typesNow();
   assert.equal(await stepItem(7).locator(".step-title").innerText(), (await draft()).steps[6].note);
   assert.match(await stepItem(7).locator(".step-sub").innerText(), /^Drive straight · 43\.53 in forward$/);
+  await listSettled();
   await stepItem(3).scrollIntoViewIfNeeded();
   const thirdBox = await stepItem(3).boundingBox();
   assert.ok(thirdBox, "step 3 has no box on screen");
   await stepItem(2).dragTo(stepItem(3), { targetPosition: { x: 40, y: thirdBox.height - 4 } });
   await typesBecome([typesBefore[0], typesBefore[2], typesBefore[1]]);
   await undoOnField();
+  await typesBecome(typesBefore);
+  await listSettled();
   await stepItem(2).click();
   await page.keyboard.press("Alt+ArrowDown");
   await typesBecome([typesBefore[0], typesBefore[2], typesBefore[1]]);
   await undoOnField();
   await typesBecome(typesBefore);
+  await listSettled();
   await stepItem(2).hover();
   await stepItem(2).locator(".row-menu").click();
   await page.locator("#popover [role=menuitem]", { hasText: "Move down" }).click();
