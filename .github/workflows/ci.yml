@@ -148,6 +148,16 @@ jobs:
             --playwright "$RUNNER_TEMP/pw/node_modules/playwright/index.mjs" \
             --browser "$browser" --output "$RUNNER_TEMP/planner-browser"
 
+      - name: Keep the browser screenshots and the server log
+        if: failure() && env.HAS_VEXSIM_KEY == 'true' && matrix.tracking == 'drive'
+        uses: actions/upload-artifact@v4
+        with:
+          name: planner-browser
+          path: |
+            ${{ runner.temp }}/planner-browser
+            ${{ runner.temp }}/planner-server.log
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         if: always() && env.HAS_VEXSIM_KEY == 'true'
         with:
