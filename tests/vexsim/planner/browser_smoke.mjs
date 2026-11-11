@@ -411,7 +411,9 @@ try {
   const typesBefore = await typesNow();
   assert.equal(await stepItem(7).locator(".step-title").innerText(), (await draft()).steps[6].note);
   assert.match(await stepItem(7).locator(".step-sub").innerText(), /^Drive straight · 43\.53 in forward$/);
+  await stepItem(3).scrollIntoViewIfNeeded();
   const thirdBox = await stepItem(3).boundingBox();
+  assert.ok(thirdBox, "step 3 has no box on screen");
   await stepItem(2).dragTo(stepItem(3), { targetPosition: { x: 40, y: thirdBox.height - 4 } });
   await typesBecome([typesBefore[0], typesBefore[2], typesBefore[1]]);
   await undoOnField();
