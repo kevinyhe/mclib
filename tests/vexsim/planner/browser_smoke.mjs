@@ -415,24 +415,28 @@ try {
   const stepItem = (n) => page.locator("#step-list li").nth(n - 1);
   const undoOnField = async () => { await page.locator("#field").focus(); await page.keyboard.press("Control+z"); };
   const typesNow = async () => (await draft()).steps.map((s) => s.type);
+  const typesBecome = (expected) => page.waitForFunction((want) => {
+    const types = JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).steps.map((s) => s.type);
+    return JSON.stringify(types.slice(0, want.length)) === JSON.stringify(want);
+  }, expected, { timeout: 5000 });
   const typesBefore = await typesNow();
   assert.equal(await stepItem(7).locator(".step-title").innerText(), (await draft()).steps[6].note);
   assert.match(await stepItem(7).locator(".step-sub").innerText(), /^Drive straight · 43\.53 in forward$/);
   const thirdBox = await stepItem(3).boundingBox();
   await stepItem(2).dragTo(stepItem(3), { targetPosition: { x: 40, y: thirdBox.height - 4 } });
-  assert.deepEqual((await typesNow()).slice(0, 3), [typesBefore[0], typesBefore[2], typesBefore[1]]);
+  await typesBecome([typesBefore[0], typesBefore[2], typesBefore[1]]);
   await undoOnField();
   await stepItem(2).click();
   await page.keyboard.press("Alt+ArrowDown");
-  assert.deepEqual((await typesNow()).slice(0, 3), [typesBefore[0], typesBefore[2], typesBefore[1]]);
+  await typesBecome([typesBefore[0], typesBefore[2], typesBefore[1]]);
   await undoOnField();
-  assert.deepEqual(await typesNow(), typesBefore);
+  await typesBecome(typesBefore);
   await stepItem(2).hover();
   await stepItem(2).locator(".row-menu").click();
   await page.locator("#popover [role=menuitem]", { hasText: "Move down" }).click();
-  assert.deepEqual((await typesNow()).slice(0, 3), [typesBefore[0], typesBefore[2], typesBefore[1]]);
+  await typesBecome([typesBefore[0], typesBefore[2], typesBefore[1]]);
   await undoOnField();
-  assert.deepEqual(await typesNow(), typesBefore);
+  await typesBecome(typesBefore);
   pass("Step labels show in full; dragging step 2 below step 3 moves it, and so do Alt+↓ and the step's ⋯ menu");
 
   await stepItem(4).click();
