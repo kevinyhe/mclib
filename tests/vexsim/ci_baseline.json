@@ -99,6 +99,8 @@
     "wall/body_pinned_wheels_free",
     "wall/locked_2000mA_threshold",
     "wall/locked_default_threshold",
+    "wall/locked_sensor_agrees",
+    "wall/locked_sensor_disagrees",
     "wall/no_contact"
   ],
   "two": [
@@ -224,6 +226,8 @@
     "wall/body_pinned_wheels_free",
     "wall/locked_2000mA_threshold",
     "wall/locked_default_threshold",
+    "wall/locked_sensor_agrees",
+    "wall/locked_sensor_disagrees",
     "wall/no_contact"
   ],
   "vertical": [
@@ -326,6 +330,8 @@
     "wall/body_pinned_wheels_free",
     "wall/locked_2000mA_threshold",
     "wall/locked_default_threshold",
+    "wall/locked_sensor_agrees",
+    "wall/locked_sensor_disagrees",
     "wall/no_contact"
   ],
   "horizontal": [
@@ -448,6 +454,8 @@
     "wall/body_pinned_wheels_free",
     "wall/locked_2000mA_threshold",
     "wall/locked_default_threshold",
+    "wall/locked_sensor_agrees",
+    "wall/locked_sensor_disagrees",
     "wall/no_contact"
   ]
 }

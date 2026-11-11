@@ -420,15 +420,16 @@ std::unique_ptr<Command> ChassisController::makeWallResetCommand(
     QVoltage drive_power,
     QTime time_limit,
     QCurrent current_threshold,
-    QAngularVelocity velocity_threshold) {
+    QAngularVelocity velocity_threshold,
+    std::optional<control::WallDistanceCheck> distance_check) {
   return makeAsyncControlCommand([=]() {
-    wallReset(reset_x,
-              reset_y,
-              reset_heading,
-              drive_power,
-              time_limit,
-              current_threshold,
-              velocity_threshold);
+    if (distance_check.has_value()) {
+      wallReset(reset_x, reset_y, reset_heading, drive_power, time_limit, *distance_check,
+                current_threshold, velocity_threshold);
+    } else {
+      wallReset(reset_x, reset_y, reset_heading, drive_power, time_limit, current_threshold,
+                velocity_threshold);
+    }
   });
 }
 
