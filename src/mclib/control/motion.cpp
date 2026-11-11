@@ -827,7 +827,11 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
       } else {
         speed_scale = std::min(1.0, speed_scale + 0.02);
       }
-      steer_deg = std::clamp(4.0 * off_circle_in, -30.0, 30.0) * curve_direction * drive_direction;
+      // Fade the steer out over the last quarter of the sweep, so the arc
+      // ends on its heading instead of steering past it.
+      const double sweep_left = 1.0 - swept_deg / sweep_deg;
+      steer_deg = std::clamp(4.0 * off_circle_in, -30.0, 30.0) * curve_direction * drive_direction *
+                  std::clamp(sweep_left * 4.0, 0.0, 1.0);
     }
     // Preserve the preceding live command at a successful chaining boundary;
     // updating the PID after the crossing can reverse the drive for one tick.
@@ -853,9 +857,13 @@ MotionResult curveCircle(QAngle result_angle_target, QLength center_radius, QTim
 
     const double requested_drive = (left_output + right_output) / 2;
     const double requested_yaw = (left_output - right_output) / 2 + correction_output;
+    const double mixed_left = left_output + correction_output;
+    const double mixed_right = right_output - correction_output;
+    // Slow the arc rather than weaken the heading correction: scaling both
+    // together left the robot 13 deg behind its heading and 5 in wide.
+    fitBaseUnderCorrection(left_output, right_output, correction_output, max_output);
     left_output += correction_output;
     right_output -= correction_output;
-    const double mixed_left = left_output, mixed_right = right_output;
     scaleToMax(left_output, right_output, max_output);
     telemetry.publish(MotionPhase::Arc, requested_drive, requested_yaw, false,
                       left_output != mixed_left || right_output != mixed_right ||

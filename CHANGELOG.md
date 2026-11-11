@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Changed
+
+- `curveCircle()` and `curveCircleReverse()` keep their heading correction
+  whole when a side would pass the voltage cap, and slow the arc instead.
+  They stop steering back toward the circle over the last quarter of the
+  sweep, so they end on their heading. In the physics simulator, a 90° arc
+  of 24 in radius used to end 5-11° past its heading and spend the rest of
+  its time turning back. On the 200 rpm drive it ran out of its 4 s. With two
+  tracking wheels it now takes 3.84 s on the 200 rpm drive, 2.10 s on the
+  450 rpm drive (was 2.59 s) and 1.85 s on the fast base (was 2.23 s), and
+  ends 0.7-2.1° off heading (was 1.9-3.2°). With drive encoders only it ends
+  2.0-2.6° off, under the 3° that starts the finishing turn (was 0.1-0.4°
+  after that turn).
+
 ## 0.4.2
 
 vexsim is public: https://github.com/kevinyhe/vexsim (MPL-2.0). Set up the
