@@ -128,6 +128,69 @@ These are simulator criteria. The library does not guarantee them on a robot.
 - Holonomic drives, mechanisms and path following are covered by the host tests
   instead.
 
+## Tire grip
+
+vexsim's tire grip on the tiles is partly guessed: sideways grip of an omni
+(0.26 static, 0.22 sliding) comes from carpet, and the sliding share of
+forward grip (0.81) from nothing. `fit_grip.py` fits all four to logs from
+your own robot.
+
+On the robot, run `characterizeGrip()` and `characterizeWallPush()` through a
+`GripLog` (`mclib/control/characterize.hpp`);
+[examples/tire_grip.cpp](../../examples/tire_grip.cpp) is a whole program.
+
+| Runs | Phase | What it shows | Farthest from the start, in vexsim |
+| --- | --- | --- | --- |
+| Spins at 4, 8, 12 V for 1.5 s, both ways | 4 | how hard the wheels scrub turning in place | 0 in |
+| Circles at 6/3, 9/4.5, 12/6 and 12/3 V for 2 s, both ways | 5 | how far the robot slides sideways, on the sideways tracking wheel | 48, 54, 59 and 35 in |
+| 12 V launches for 0.8 s, forward and back | 6 | wheelspin off the line | 50 in |
+| A push into a wall, 0 to 12 V over 3 s | 7 | the voltage where the wheels break loose, and how fast they spin sliding | the front square against a wall |
+
+Every run starts from rest where the robot started. After each one the
+robot coasts at 0 V for 1 s, drives back with `moveToPoint()` and
+`turnToAngle()` on odometry, and waits 1 s; those rows are phase 0. So
+odometry must be running. The first three kinds take about 90 s and the
+wall push 4 s.
+
+Space, measured in vexsim on `override_cascade` with vexsim's grip: the
+robot's centre went up to 45 in forward, 53 in back, 55 in left and 56 in
+right of where it started. Add half the robot on each side. With more grip
+the circles are wider: at 1.0 forward and 0.45 sideways, the 9/4.5 V and
+12/6 V circles went 72 and 71 in out, and the whole routine 62 in forward, 53 in
+back, 65 in left and 63 in right. With little grip the drive encoders count
+slip as travel and the returns drift: at 0.6 forward and 0.18 sideways, the
+last run started 31 in from the first. Shorten `GripTests::circle_time` or
+drop a circle if the space is tight. Then:
+
+```sh
+python3 tests/vexsim/fit_grip.py grip000.csv wall000.csv --vexsim ../vexsim
+```
+
+It replays every run in vexsim from rest with the logged voltages and battery
+voltage, through vexsim's encoder, IMU and rotation sensor models, and picks
+the static and sliding grip, forward and sideways, that make the wheel
+speeds, turn rate and sideways slide match best. It prints them beside
+vexsim's numbers and the `foam.py` entries they replace, the mismatch for
+each kind of run, and how much the match gets worse 10% either side of each
+number. Under 2% is marked not pinned: the logs do not show that number.
+The fit uses vexsim's plain drive model (`Simulator`); the MuJoCo world uses
+the same tire model. On 20 cores it takes 2 to 5 minutes.
+
+Grip is the only thing the fit changes, so anything else vexsim has wrong
+about the robot ends up in the grip numbers. Logs from a robot 10% heavier
+than the preset, with vexsim's own grip, fit to forward grip 1.04 instead of
+0.84, with a mismatch of 0.96 and spins still 10 deg/s off. Logs that match
+the robot except for grip fit to a mismatch near 0.01. A large mismatch left
+after the fit means the preset's weight, motors or gearing need fixing
+before the grip numbers mean anything.
+
+`test_fit_grip.py` checks the fit: mclib's routines run in vexsim with grip
+unlike vexsim's own numbers, and the fit must give it back.
+
+```sh
+cd tests/vexsim && VEXSIM_PATH=../../../vexsim python3 -m unittest test_fit_grip
+```
+
 ## Path planner
 
 ```sh

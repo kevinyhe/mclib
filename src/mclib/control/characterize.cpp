@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <utility>
 
 namespace mclib {
 namespace control {
@@ -39,7 +40,8 @@ MotionResult stopReason(std::uint32_t start, double limit_ms) {
 
 // Hold (left, right) for @p ms, recording each 10 ms tick. Returns Reached
 // when the hold ran its time, otherwise why it stopped.
-MotionResult hold(TuningLog& log, int phase, double left, double right, double ms) {
+template <class Log>
+MotionResult hold(Log& log, int phase, double left, double right, double ms) {
   DriveHardware* drive = boundDrive();
   const std::uint32_t start = pros::millis();
   while (true) {
@@ -73,6 +75,115 @@ MotionResult runSteps(TuningLog& log, int phase, const std::vector<QVoltage>& vo
     }
     if (result != MotionResult::Reached) break;
   }
+  boundDrive()->setDriveVoltage(0, 0);
+  stopChassis(device::BrakeMode::Hold);
+  return result;
+}
+
+bool validVolts(QVoltage v) {
+  return std::isfinite(v.volts()) && v.volts() > 0 && v.volts() <= 12;
+}
+
+bool validTime(QTime t) {
+  return std::isfinite(t.ms()) && t.ms() > 0;
+}
+
+bool validTests(const GripTests& tests) {
+  for (const QVoltage v : tests.spins)
+    if (!validVolts(v)) return false;
+  for (const auto& [outer, inner] : tests.circles)
+    if (!validVolts(outer) || !validVolts(inner)) return false;
+  return validVolts(tests.launch) && validTime(tests.spin_time) && validTime(tests.circle_time) &&
+         validTime(tests.launch_time) && validTime(tests.pause) && validTime(tests.return_time);
+}
+
+bool samePose(const Pose2D& a, const Pose2D& b) {
+  return a.x == b.x && a.y == b.y && a.theta == b.theta;
+}
+
+MotionResult driveBackTo(GripLog& log, const Pose2D& start, QTime time_limit) {
+  const Pose2D here = robotState().pose();
+  const double start_ahead =
+      std::sin(here.theta) * (start.x - here.x) + std::cos(here.theta) * (start.y - here.y);
+  const int direction = start_ahead >= 0 ? 1 : -1;
+  AsyncMotion returning = AsyncMotion::start([start, direction, time_limit] {
+    const MotionResult moved =
+        ::moveToPoint(start.x * units::inch, start.y * units::inch, direction, time_limit);
+    if (moved != MotionResult::Reached) return moved;
+    return ::turnToAngle(QAngle::fromBase(start.theta), time_limit);
+  });
+  while (returning.isRunning()) {
+    const MotionTelemetry t = robotState().motionTelemetry();
+    const double drive = std::isfinite(t.drive_volts) ? t.drive_volts : 0.0;
+    const double yaw = std::isfinite(t.yaw_volts) ? t.yaw_volts : 0.0;
+    log.record(0, drive + yaw, drive - yaw);
+    pros::delay(10);
+  }
+  return returning.wait();
+}
+
+// One open-loop run from @p start, then back to it and still for the next.
+// The robot coasts to a stop before driving back: braking from speed skids
+// the wheels, and the drive encoders then lose track of where it is.
+MotionResult runFromStart(GripLog& log, const Pose2D& start, const GripTests& tests, int phase,
+                          double left, double right, QTime time) {
+  const MotionResult ran = hold(log, phase, left, right, time.ms());
+  if (ran != MotionResult::Reached) return ran;
+  const MotionResult coasted = hold(log, 0, 0, 0, tests.pause.ms());
+  if (coasted != MotionResult::Reached) return coasted;
+  if (samePose(robotState().pose(), start)) return MotionResult::InvalidValue;
+  const MotionResult returned = driveBackTo(log, start, tests.return_time);
+  if (returned != MotionResult::Reached) return returned;
+  return hold(log, 0, 0, 0, tests.pause.ms());
+}
+
+MotionResult runGripTests(GripLog& log, const GripTests& tests) {
+  constexpr int kSpin = 4, kCircle = 5, kLaunch = 6;
+  const Pose2D start = robotState().pose();
+  for (const QVoltage v : tests.spins) {
+    for (const double direction : {1.0, -1.0}) {
+      const double left = direction * v.volts();
+      const MotionResult result =
+          runFromStart(log, start, tests, kSpin, left, -left, tests.spin_time);
+      if (result != MotionResult::Reached) return result;
+    }
+  }
+  for (const auto& [outer, inner] : tests.circles) {
+    for (const bool turning_right : {true, false}) {
+      const double left = turning_right ? outer.volts() : inner.volts();
+      const double right = turning_right ? inner.volts() : outer.volts();
+      const MotionResult result =
+          runFromStart(log, start, tests, kCircle, left, right, tests.circle_time);
+      if (result != MotionResult::Reached) return result;
+    }
+  }
+  for (const double direction : {1.0, -1.0}) {
+    const double volts = direction * tests.launch.volts();
+    const MotionResult result =
+        runFromStart(log, start, tests, kLaunch, volts, volts, tests.launch_time);
+    if (result != MotionResult::Reached) return result;
+  }
+  return MotionResult::Reached;
+}
+
+MotionResult rampIntoWall(GripLog& log, double peak, double ramp_ms, double hold_ms) {
+  constexpr int kWallPush = 7;
+  DriveHardware* drive = boundDrive();
+  const std::uint32_t start = pros::millis();
+  const double total_ms = ramp_ms + hold_ms;
+  while (true) {
+    const MotionResult reason = stopReason(start, total_ms);
+    if (reason == MotionResult::TimedOut) return MotionResult::Reached;
+    if (reason != MotionResult::Reached) return reason;
+    const double elapsed_ms = static_cast<double>(static_cast<std::uint32_t>(pros::millis() - start));
+    const double volts = peak * std::fmin(1.0, elapsed_ms / ramp_ms);
+    drive->setDriveVoltage(volts, volts);
+    log.record(kWallPush, volts, volts);
+    pros::delay(10);
+  }
+}
+
+MotionResult finishOpenLoop(MotionResult result) {
   boundDrive()->setDriveVoltage(0, 0);
   stopChassis(device::BrakeMode::Hold);
   return result;
@@ -137,6 +248,59 @@ MotionResult traceMotion(TuningLog& log, std::function<MotionResult()> motion) {
   }
   log.record(0, 0, 0);
   return running.wait();
+}
+
+GripLog::GripLog(telemetry::Logger& logger, TrackingWheelSensor sideways)
+    : m_logger(logger),
+      m_sideways(std::move(sideways)),
+      m_phase(logger.addNumber("phase")),
+      m_left_cmd(logger.addNumber("left_cmd", "V")),
+      m_right_cmd(logger.addNumber("right_cmd", "V")),
+      m_left(logger.addNumber("left", "in")),
+      m_right(logger.addNumber("right", "in")),
+      m_heading(logger.addNumber("heading", "deg")),
+      m_sideways_travel(logger.addNumber("sideways", "in")),
+      m_battery(logger.addNumber("battery", "V")) {
+  zero();
+}
+
+void GripLog::zero() {
+  m_left_zero = getLeftRotationDegree();
+  m_right_zero = getRightRotationDegree();
+  m_sideways_zero = m_sideways.position_deg();
+}
+
+void GripLog::record(int phase, double left_volts, double right_volts) {
+  m_logger.set(m_phase, static_cast<double>(phase));
+  m_logger.set(m_left_cmd, left_volts);
+  m_logger.set(m_right_cmd, right_volts);
+  m_logger.set(m_left, encoderInches(getLeftRotationDegree() - m_left_zero));
+  m_logger.set(m_right, encoderInches(getRightRotationDegree() - m_right_zero));
+  m_logger.set(m_heading, getInertialHeading());
+  m_logger.set(m_sideways_travel,
+               m_sideways.wheel.encoderToDistance((m_sideways.position_deg() - m_sideways_zero) *
+                                                  units::degree)
+                   .in());
+  m_logger.set(m_battery, pros::battery::get_voltage() / 1000.0);
+  m_logger.sample();
+}
+
+MotionResult characterizeGrip(GripLog& log, const GripTests& tests) {
+  if (requireDrive("characterizeGrip") == nullptr) return MotionResult::NoDrive;
+  if (!validTests(tests)) return MotionResult::InvalidValue;
+  clearCancel(CancelToken::Motion);
+  log.zero();
+  return finishOpenLoop(runGripTests(log, tests));
+}
+
+MotionResult characterizeWallPush(GripLog& log, QVoltage peak, QTime ramp, QTime hold_time) {
+  if (requireDrive("characterizeWallPush") == nullptr) return MotionResult::NoDrive;
+  if (!validVolts(peak) || !validTime(ramp) || !validTime(hold_time)) return MotionResult::InvalidValue;
+  clearCancel(CancelToken::Motion);
+  log.zero();
+  MotionResult result = rampIntoWall(log, peak.volts(), ramp.ms(), hold_time.ms());
+  if (result == MotionResult::Reached) result = hold(log, 0, 0, 0, 500);
+  return finishOpenLoop(result);
 }
 
 }  // namespace control
