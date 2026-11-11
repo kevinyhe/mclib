@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- `wallReset()` takes a `control::WallDistanceCheck`: a distance sensor that
+  has to read the wall where it should after the stall. Without it, anything
+  that holds the robot still reads as the wall. With no reading, or a reading
+  more than `tolerance` from `expected`, the call returns false and the pose
+  and IMU stay as they were. Routine steps take it with
+  `.withWallDistanceCheck(...)`.
+
 ### Changed
 
 - The template's `firmware/mclib.a` has no debug info: 2.7 MB, down from

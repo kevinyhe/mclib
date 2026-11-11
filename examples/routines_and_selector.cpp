@@ -63,6 +63,9 @@ const mclib::control::RamseteConfig follower_config{
 // Faces forward, to measure the gap to whatever is ahead.
 mclib::device::Distance front_distance(9);
 
+// Faces backward, to check that wallReset() stopped on the wall.
+mclib::device::Distance back_distance(10);
+
 // No reading means the sensor is unplugged, and a robot that cannot see ahead
 // stops.
 bool somethingIsCloseAhead() {
@@ -169,6 +172,10 @@ void buildEveryMotionStep() {
           .withDrivePower(-3_V)
           .withCurrentThreshold(1000_mA)
           .withVelocityThreshold(5_rpm)
+          // A game piece or a robot behind this one stalls the drive too. On
+          // the wall the back sensor reads 2 in; with anything else the pose
+          // stays as it was.
+          .withWallDistanceCheck({[] { return back_distance.distance(); }, 2_in, 1_in})
       .driveTo(28_in, 2_s)
           .withMaxVoltage(10_V)
           .withMinVoltage(2_V)

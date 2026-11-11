@@ -7,7 +7,9 @@
 
 #include "mclib/units/units.hpp"
 
+#include <functional>
 #include <limits>
+#include <optional>
 
 namespace mclib {
 namespace path {
@@ -134,6 +136,25 @@ void useRamseteForArcs(const RamseteConfig& config, const path::TrajectoryConstr
 
 /// @brief Go back to the encoder arcs.
 void useEncoderArcs();
+
+/**
+ * @brief A distance sensor that has to agree the robot is on the wall before
+ *        `wallReset()` moves the pose.
+ *
+ * A stall alone cannot tell the wall from a game piece, another robot, or a
+ * push too weak to move the robot. Point a sensor at the wall, push the robot
+ * square against it once, and use what it reads as `expected`.
+ */
+struct WallDistanceCheck {
+  /// @brief The sensor's reading, or nullopt when it has none. For a
+  ///        `device::Distance` called `back_sensor`:
+  ///        `[&] { return back_sensor.distance(); }`.
+  std::function<std::optional<QLength>()> read;
+  /// @brief What the sensor reads with the robot on the wall.
+  QLength expected;
+  /// @brief How far the reading may be from `expected`.
+  QLength tolerance;
+};
 
 }  // namespace mclib::control
 
@@ -331,6 +352,25 @@ bool wallReset(QLength reset_x,
                QAngle reset_heading,
                QVoltage drive_power,
                QTime time_limit,
+               QCurrent current_threshold = 1000.0 * mclib::units::milliampere,
+               QAngularVelocity velocity_threshold = 5.0 * mclib::units::rpm);
+
+/**
+ * @brief `wallReset()` that moves the pose only when @p distance_check agrees
+ *        the robot is on the wall.
+ *
+ * Reads the sensor once, after the stall. With no reading, or a reading more
+ * than `tolerance` from `expected`, something other than the wall stopped the
+ * robot: it prints the reading, returns false, and leaves the pose and the
+ * IMU as they were. Returns false without driving when `read` is empty,
+ * `expected` is negative, or `tolerance` is negative.
+ */
+bool wallReset(QLength reset_x,
+               QLength reset_y,
+               QAngle reset_heading,
+               QVoltage drive_power,
+               QTime time_limit,
+               const mclib::control::WallDistanceCheck& distance_check,
                QCurrent current_threshold = 1000.0 * mclib::units::milliampere,
                QAngularVelocity velocity_threshold = 5.0 * mclib::units::rpm);
 

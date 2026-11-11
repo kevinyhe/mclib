@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace mclib {
@@ -115,6 +116,9 @@ public:
     MotionStep& withCurrentThreshold(QCurrent current_threshold);
     /// @brief Motor speed below which `wallReset()` calls it a stall.
     MotionStep& withVelocityThreshold(QAngularVelocity velocity_threshold);
+    /// @brief Make `wallReset()` reset the pose only when @p check agrees the
+    ///        robot is on the wall. See `control::WallDistanceCheck`.
+    MotionStep& withWallDistanceCheck(control::WallDistanceCheck check);
 
     /**
      * @brief End this step as soon as @p condition returns true.
@@ -585,6 +589,7 @@ private:
     QVoltage drive_power = -3.0 * units::volt;
     QCurrent current_threshold = 1000.0 * units::milliampere;
     QAngularVelocity velocity_threshold = 5.0 * units::rpm;
+    std::optional<control::WallDistanceCheck> wall_distance_check;
     /**
      * @brief The timeout the command is built with. Zero means none.
      *

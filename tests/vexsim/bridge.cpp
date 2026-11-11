@@ -48,6 +48,8 @@ double boomerang_lead = 0.5;
 double chain_min_volts = -1;
 int last_motion_result = 0;
 mclib::control::RamseteConfig ramsete_config;
+std::optional<mclib::control::WallDistanceCheck> wall_check;
+double wall_reading_in = -1;
 
 // PoseFusion in the loop, the same class the odometry task runs on a robot.
 // The simulated robot starts at the field centre, which is the odometry
@@ -136,6 +138,8 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   // The arc switch is library-global; each simulated robot starts without it.
   mclib::control::useEncoderArcs();
   fusion_rig = FusionRig{};
+  wall_check.reset();
+  wall_reading_in = -1;
   drive.geometry = {Wheel::fromDiameter(diameter_in * inch), track_in * inch, ratio};
   drive.heading_offset = drive.left_offset = drive.right_offset = 0;
   drive.encoder_heading = encoder_heading;
@@ -259,6 +263,19 @@ extern "C" void sim_gps_enable(double odom_along_var_per_in, double odom_side_va
   gps.origin_x_in = gps.origin_y_in = kFieldOffsetIn;
   fusion_rig.fusion->setGps(gps);
 }
+
+// Make wallReset() (action 8) check a distance sensor against the wall.
+// sim_wall_reading() feeds it; a negative reading means none.
+extern "C" void sim_set_wall_check(double expected_in, double tolerance_in) {
+  wall_check = mclib::control::WallDistanceCheck{
+      []() -> std::optional<mclib::units::QLength> {
+        if (wall_reading_in < 0) return std::nullopt;
+        return wall_reading_in * mclib::units::inch;
+      },
+      expected_in * mclib::units::inch, tolerance_in * mclib::units::inch};
+}
+
+extern "C" void sim_wall_reading(double reading_in) { wall_reading_in = reading_in; }
 
 // A distance reading for sensor @p index, used on the next tick. Called from
 // the Python advance() callback.
@@ -392,8 +409,13 @@ extern "C" int sim_run(int action, double a, double b, double heading,
       drive.setDriveVoltage(0, 0);
       return 0;
     }
-    case 8: return wallReset(a * inch, b * inch, heading * degree, volts * volt,
-                             limit, current_threshold_ma * milliampere, 5 * rpm);
+    case 8:
+      if (wall_check.has_value()) {
+        return wallReset(a * inch, b * inch, heading * degree, volts * volt, limit, *wall_check,
+                         current_threshold_ma * milliampere, 5 * rpm);
+      }
+      return wallReset(a * inch, b * inch, heading * degree, volts * volt,
+                       limit, current_threshold_ma * milliampere, 5 * rpm);
     default: return -1;
   }
   return 0;

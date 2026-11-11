@@ -12,6 +12,7 @@
 #include "test_assert.hpp"
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -146,6 +147,46 @@ int main() {
   hw.current = std::numeric_limits<std::int32_t>::max();
   CHECK(!wallReset(70_in, 80_in, 0_deg, 3_V, 1_s));
   CHECK_EQ(robotState().pose().x, 50);
+
+  // With a distance check, a stall resets the pose only when the sensor
+  // reads the wall where it should be.
+  hw.current = 2000;
+  hw.velocity = 0;
+  std::optional<QLength> back_reading = 30_in;
+  const WallDistanceCheck back_sensor{[&] { return back_reading; }, 2_in, 1_in};
+  hw.heading = 0;
+  resetOdometry({1, 2, 0});
+  CHECK(!wallReset(70_in, 80_in, 90_deg, 3_V, 1_s, back_sensor));
+  CHECK_EQ(robotState().pose().x, 1);
+  CHECK_EQ(hw.heading, 0);
+  back_reading = std::nullopt;
+  CHECK(!wallReset(70_in, 80_in, 90_deg, 3_V, 1_s, back_sensor));
+  CHECK_EQ(robotState().pose().x, 1);
+  back_reading = QLength::fromBase(NAN);
+  CHECK(!wallReset(70_in, 80_in, 90_deg, 3_V, 1_s, back_sensor));
+  CHECK_EQ(robotState().pose().x, 1);
+  CHECK_EQ(hw.heading, 0);
+  back_reading = 2.8_in;
+  CHECK(wallReset(70_in, 80_in, 90_deg, 3_V, 1_s, back_sensor));
+  CHECK_EQ(robotState().pose().x, 70);
+  CHECK_NEAR(hw.heading, 90, 1e-10);
+  CHECK(!robotState().isTurning());
+
+  // A check that cannot work stops the call before it drives.
+  resetOdometry({1, 2, 0});
+  for (const WallDistanceCheck& broken :
+       {WallDistanceCheck{{}, 2_in, 1_in},
+        WallDistanceCheck{[&] { return back_reading; }, -2_in, 1_in},
+        WallDistanceCheck{[&] { return back_reading; }, 2_in, -1_in},
+        WallDistanceCheck{[&] { return back_reading; }, 2_in, QLength::fromBase(NAN)}}) {
+    now_ms = 0;
+    CHECK(!wallReset(70_in, 80_in, 90_deg, 3_V, 1_s, broken));
+    CHECK_EQ(now_ms, 0);
+    CHECK_EQ(hw.left, 0);
+    CHECK_EQ(robotState().pose().x, 1);
+  }
+  hw.velocity = 100;
+  hw.current = 0;
 
   // A genuine crossing still carries momentum into the next chained motion.
   hw.heading = 0; hw.encoder = 0;
