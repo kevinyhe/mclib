@@ -343,6 +343,46 @@ void testScaleToMaxZero() {
   CHECK_NEAR(right, -4.0, kEps);
 }
 
+void testFitBaseKeepsTheCorrectionWhole() {
+  // The arc case: outer 32.8 V, inner 20.1 V, 3.7 V of correction.
+  double left = 32.8;
+  double right = 20.1;
+  fitBaseUnderCorrection(left, right, 3.7, 12.0);
+  CHECK_NEAR(left + 3.7, 12.0, 1e-9);
+  CHECK_NEAR(left - right, 8.3 * (1 - 20.1 / 32.8), 1e-9);
+  checkRatioPreserved(32.8, 20.1, left, right);
+
+  // Backward, correction taken from the right side.
+  left = -20.0;
+  right = -30.0;
+  fitBaseUnderCorrection(left, right, 2.0, 12.0);
+  CHECK_NEAR(right - 2.0, -12.0, 1e-9);
+  CHECK(left + 2.0 >= -12.0);
+  checkRatioPreserved(-20.0, -30.0, left, right);
+}
+
+void testFitBaseLeavesRoomAlone() {
+  double left = 6.0;
+  double right = 4.0;
+  fitBaseUnderCorrection(left, right, 1.0, 12.0);
+  CHECK_EQ(left, 6.0);
+  CHECK_EQ(right, 4.0);
+}
+
+void testFitBaseZeroesTheBaseUnderAFullCorrection() {
+  double left = 8.0;
+  double right = 8.0;
+  fitBaseUnderCorrection(left, right, 13.0, 12.0);
+  CHECK_EQ(left, 0.0);
+  CHECK_EQ(right, 0.0);
+
+  left = 0.0;
+  right = 0.0;
+  fitBaseUnderCorrection(left, right, 5.0, 12.0);
+  CHECK_EQ(left, 0.0);
+  CHECK_EQ(right, 0.0);
+}
+
 }  // namespace
 
 int main() {
@@ -360,5 +400,8 @@ int main() {
   testScaleToMaxZero();
   testScaleToMaxSignMatrix();
   testScaleToMinSignMatrix();
+  testFitBaseKeepsTheCorrectionWhole();
+  testFitBaseLeavesRoomAlone();
+  testFitBaseZeroesTheBaseUnderAFullCorrection();
   return mclib::test::summary("scaling");
 }
