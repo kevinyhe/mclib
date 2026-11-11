@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Changed
+
+- The template's `firmware/mclib.a` has no debug info: 2.7 MB, down from
+  57.5 MB, and the zip is 10 MB, down from 65 MB. The program on the brain
+  is the same. Crash backtraces inside mclib show function names but not
+  file and line.
+- A release's page shows its changelog section. The release fails if
+  `CHANGELOG.md` has no section for the tagged version.
+
 ## 0.4.2
 
 vexsim is public: https://github.com/kevinyhe/vexsim (MPL-2.0). Set up the
