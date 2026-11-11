@@ -41,6 +41,8 @@ TURN_SCALE_DPS = 10.0
 HALF_WINDOW = 3
 AT_REST_IPS = 1.0
 AT_REST_DPS = 5.0
+# Slower sideways slide than this is too small to tell the tracking wheel's sign from.
+SIGN_CHECK_SLIDE_IPS = 1.0
 NOT_PINNED_RISE = 0.02
 
 
@@ -164,6 +166,13 @@ def check_signs(runs: List[Run]) -> None:
         if run.signals["turn"][middle] <= 0:
             raise SystemExit(f"{run.source}: the heading goes down when the robot spins clockwise. "
                              "mclib's heading is clockwise-positive; check the IMU setup.")
+    right_turns = [run for run in runs if run.phase == 5 and run.left_cmd[0] > run.right_cmd[0]]
+    for run in right_turns:
+        second_half = run.signals["sideways"][len(run.signals["sideways"]) // 2:]
+        if sum(second_half) / len(second_half) > SIGN_CHECK_SLIDE_IPS:
+            raise SystemExit(f"{run.source}: the sideways tracking wheel counts up as the robot slides out "
+                             "to its left on a right turn. It must count up when the robot moves right; "
+                             "reverse its port.")
 
 
 # --------------------------------------------------------------- replay ---

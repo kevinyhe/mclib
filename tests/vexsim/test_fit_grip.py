@@ -88,6 +88,15 @@ class ReadingLogsTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "heading goes down"):
                 fit_grip.check_signs(runs)
 
+    def test_a_sideways_wheel_that_counts_the_wrong_way_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            right_turn = "".join(f"{10 * i},5,12,3,{0.5 * i},{0.1 * i},{2.0 * i},{0.3 * i},14.2\n"
+                                 for i in range(40))
+            path = self.write(directory, HEADER + right_turn)
+            runs = fit_grip.split_runs(path, fit_grip.read_log(path))
+            with self.assertRaisesRegex(SystemExit, "reverse its port"):
+                fit_grip.check_signs(runs)
+
     def test_a_run_that_starts_moving_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             moving = "".join(f"{10 * i},0,0,0,{0.3 * i},{0.3 * i},0,0,14.2\n" for i in range(10))
