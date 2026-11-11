@@ -7,6 +7,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- The template's `firmware/mclib.a` has no debug info: 2.7 MB, down from
+  57.5 MB, and the zip is 10 MB, down from 65 MB. The program on the brain
+  is the same. Crash backtraces inside mclib show function names but not
+  file and line.
+- A release's page shows its changelog section. The release fails if
+  `CHANGELOG.md` has no section for the tagged version.
 - `curveCircle()` and `curveCircleReverse()` keep their heading correction
   whole when a side would pass the voltage cap, and slow the arc instead.
   They stop steering back toward the circle over the last quarter of the
