@@ -1,7 +1,8 @@
 # Simulator
 
-`tests/vexsim/` runs the C++ motion routines and odometry against the vexsim
-physics engine, checked out next to this repository at `../vexsim`.
+`tests/vexsim/` runs the C++ motion routines and odometry against the
+[vexsim](https://github.com/kevinyhe/vexsim) physics engine, checked out next
+to this repository at `../vexsim`.
 
 ## Path planner
 

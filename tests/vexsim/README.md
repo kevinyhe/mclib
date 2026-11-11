@@ -1,7 +1,12 @@
 # Physics tests
 
 Compiles mclib's motion routines, PID and odometry into a shared library and
-runs them against the vexsim physics engine, checked out at `../vexsim`.
+runs them against the [vexsim](https://github.com/kevinyhe/vexsim) physics
+engine, checked out at `../vexsim`:
+
+```sh
+git clone https://github.com/kevinyhe/vexsim ../vexsim
+```
 
 ## Running
 
@@ -39,26 +44,14 @@ python3 tests/vexsim/run.py --tracking-mode two --output /tmp/sim-two
 python3 tests/vexsim/check_baseline.py two /tmp/sim-two/results.json --update
 ```
 
-vexsim is private. The job checks it out with a read-only deploy key: the
-public half is on `kevinyhe/vexsim` (Settings → Deploy keys, "mclib CI
-(read-only)"), the private half is the `VEXSIM_DEPLOY_KEY` secret on mclib.
-Without the secret the job skips. To replace the key:
-
-```sh
-ssh-keygen -t ed25519 -N "" -C "mclib CI read-only" -f /tmp/vexsim_deploy
-gh api repos/kevinyhe/vexsim/keys -f title="mclib CI (read-only)" \
-  -f key="$(cat /tmp/vexsim_deploy.pub)" -F read_only=true
-gh secret set VEXSIM_DEPLOY_KEY -R kevinyhe/mclib < /tmp/vexsim_deploy
-rm /tmp/vexsim_deploy /tmp/vexsim_deploy.pub
-```
-
 The path planner tests, on the `drive` leg, also need the Override field
 shapes that vexsim's `tools/override_cad.py` cuts from VEX's field CAD. They
-are made from VEX's CAD, so they are in a second private repo,
-`kevinyhe/vexsim-cad`, and the job copies them into `vexsim/cad/override/`.
-It reads that repo with its own read-only deploy key, the
-`VEXSIM_CAD_DEPLOY_KEY` secret on mclib. With `VEXSIM_DEPLOY_KEY` set and
-this one missing, the `drive` leg fails and says so. To add or replace it:
+are made from VEX's CAD, so they are in a private repo, `kevinyhe/vexsim-cad`,
+and the job copies them into `vexsim/cad/override/`. It reads that repo with
+a read-only deploy key, the `VEXSIM_CAD_DEPLOY_KEY` secret on mclib. Without
+the secret the `drive` leg fails and says so, except on pull requests from
+forks, which get no secrets: there the planner steps skip. To add or replace
+the key:
 
 ```sh
 ssh-keygen -t ed25519 -N "" -C "mclib CI reads vexsim-cad" -f /tmp/vexsim_cad_deploy

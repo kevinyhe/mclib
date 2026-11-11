@@ -10,18 +10,22 @@ and write it into your robot project as C++.
 
 Open http://127.0.0.1:8765. The server listens on 127.0.0.1 only.
 
-You need `g++`, npm, and a vexsim checkout at `../vexsim` set up once:
+You need `g++`, npm, and [vexsim](https://github.com/kevinyhe/vexsim) next to
+mclib, set up once:
 
 ```sh
+git clone https://github.com/kevinyhe/vexsim ../vexsim
 cd ../vexsim
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 npm install --no-save three@0.160.0
 ```
 
-and the Override field shapes in `../vexsim/cad/override/` (vexsim's
-README, "Setup"). The server checks all of this at start and prints what is
-missing and the command that fixes it.
+and the Override field shapes in `../vexsim/cad/override/`. They are cut from
+VEX's field CAD, so they are not published: download the Override field CAD
+from VEX and run vexsim's `tools/override_cad.py` on it (vexsim's README,
+"Setup"; about 20 minutes). The server checks all of this at start and prints
+what is missing and the command that fixes it.
 
 The first launch compiles mclib in the background. That takes 1 to 2 minutes.
 Measuring the simulated robot then takes a few seconds. The status pill at

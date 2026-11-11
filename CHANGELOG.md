@@ -5,7 +5,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+## 0.4.2
+
+vexsim is public: https://github.com/kevinyhe/vexsim (MPL-2.0). Set up the
+path planner once:
+
+```sh
+git clone https://github.com/kevinyhe/vexsim ../vexsim
+cd ../vexsim
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+npm install --no-save three@0.160.0
+```
+
+The Override field shapes are cut from VEX's field CAD, so they are not
+published. Download the Override field CAD from VEX and run vexsim's
+`tools/override_cad.py` on it (vexsim's README, "Setup"; about 20 minutes).
+
 ### Changed
+
+- CI checks out the public vexsim without a key. Only the Override field
+  shapes still need `VEXSIM_CAD_DEPLOY_KEY`. Pull requests from forks skip
+  the planner tests.
 
 - Path planner: start it with vexsim's venv Python,
   `../vexsim/.venv/bin/python tests/vexsim/planner/server.py --vexsim ../vexsim`.
