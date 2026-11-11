@@ -57,7 +57,7 @@
       <div class="field-head">
         <div class="segmented" role="tablist" aria-label="Field view">
           <button id="view-top" role="tab" aria-selected="true" title="Top-down field: edit paths and watch the run">Top view</button>
-          <button id="view-3d" role="tab" aria-selected="false" title="vexsim's 3D view of the simulated robot">3D view</button>
+          <button id="view-3d" role="tab" aria-selected="false" title="The Override field in 3D, with the simulated robot. Only on the Override field.">3D view</button>
         </div>
         <div id="layer-toggles" class="layers" aria-label="Show on the field">
           <label title="The planned path, coloured by planned speed"><input type="checkbox" data-layer="plan" checked><i class="swatch speed"></i>Plan</label>
@@ -69,7 +69,7 @@
       </div>
       <div id="field-wrap" class="field-wrap">
         <canvas id="field" tabindex="0" aria-label="Field. Click to add a point to the selected path. Drag points and handles to change the path. Drag empty space to pan; scroll to zoom."></canvas>
-        <iframe id="viewer3d" title="vexsim 3D view of the simulated robot" data-src="/native/viewer.html" hidden></iframe>
+        <iframe id="viewer3d" title="The Override field in 3D, with the simulated robot" hidden></iframe>
         <div id="viewer3d-status" class="overlay-status" hidden></div>
         <div id="field-hint" class="field-hint"></div>
         <div id="cursor-readout" class="cursor-readout mono"></div>

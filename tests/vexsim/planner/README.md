@@ -5,11 +5,23 @@ run it in the vexsim physics simulator with mclib's real C++ motion code,
 and write it into your robot project as C++.
 
 ```sh
-python3 tests/vexsim/planner/server.py --vexsim ../vexsim
+../vexsim/.venv/bin/python tests/vexsim/planner/server.py --vexsim ../vexsim
 ```
 
-Open http://127.0.0.1:8765. You need Python 3, `g++` and a vexsim checkout.
-Nothing is installed or downloaded. The server listens on 127.0.0.1 only.
+Open http://127.0.0.1:8765. The server listens on 127.0.0.1 only.
+
+You need `g++`, npm, and a vexsim checkout at `../vexsim` set up once:
+
+```sh
+cd ../vexsim
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+npm install --no-save three@0.160.0
+```
+
+and the Override field shapes in `../vexsim/cad/override/` (vexsim's
+README, "Setup"). The server checks all of this at start and prints what is
+missing and the command that fixes it.
 
 The first launch compiles mclib in the background. That takes 1 to 2 minutes.
 Measuring the simulated robot then takes a few seconds. The status pill at
@@ -48,7 +60,7 @@ stops the run on screen.
 | Top bar | name, New, Open, Save, Examples (a menu with each example's description), Undo, Redo, Mirror (left ↔ right or front ↔ back), Export C++, status, ? for help, Run. Short messages such as "Saved" or "Mirrored" show at the bottom of the field for a few seconds. |
 | Routine (left) | the start pose and the steps in order, with each step's label in full, its plan or result, and its lift and claw actions. **Add a step** opens a list of step types with a search box: type part of a name, then Enter adds the first match after the selected step. Drag a step to move it. Its ⋯ button duplicates, moves or deletes it. |
 | Activity (left) | each stage of the current job with its time, then a log of what happened |
-| Field (centre) | the routine on a 144 in field. Drag to edit. Top view or vexsim's 3D view. |
+| Field (centre) | the routine on a 144 in field. Drag to edit. Top view, or on the Override field a 3D view. |
 | Playback | play, playback speed, which run to show, which run to compare with. Under them, a timeline with one block per step, from when the step started to when it ended (red underline: it broke a rule), diamonds where lift and claw actions ran, and a dashed red line at 15 s, when autonomous ends. Click or drag on it to move playback; clicking a block also selects that step. Before a run it shows the selected path's plan. When the routine has changed since the run shown, **Open its routine** puts the routine that run used back in the editor; Ctrl+Z goes back to yours. |
 | Graph | hidden until you pick a tab: Speed (planned and simulated), Voltage, Heading, Odometry error, or Lift and claw (claw height, the height the lift was sent to and the jaw gap, on the Override robot). Its time axis lines up with the timeline above it. Click it to jump there. Hide closes it again. |
 | Step tab (right) | the selected step's settings, its plan, and what it did in the last run. Each setting has its name on the left and its value on the right, with the unit inside the box. **Automatic** (or **Default**) next to a value means the planner works it out; click it to set your own. Lift and claw actions show one line each; click one to edit it. |
@@ -168,7 +180,6 @@ the join speeds for chained paths.
 | Field | What is there |
 | --- | --- |
 | Override (2026-27) | walls, Goals, Toggles, Loaders, Pins and Cups. New routines start here. |
-| Push Back (2025-26) | walls, Long Goals, the Center Goal and Loaders. No game objects. |
 | Open floor, no walls | nothing. Files saved before fields existed open with this. |
 
 On a field the robot stops against what it hits, and the drive motors feel
@@ -393,8 +404,8 @@ The meshes are the ones vexsim's `tools/override_cad.py` makes from the
 CAD into `cad/override/` of the vexsim checkout (vexsim's README, "Override
 field CAD"); the server sends them as `/cad/view.json` and `/cad/view.bin`.
 vexsim collides with the same shapes. A Toggle bar turns on its axle and
-rises up its brackets' slots as vexsim's does. On the other fields the 3D
-view is vexsim's, as before.
+rises up its brackets' slots as vexsim's does. The open floor has no 3D
+view.
 
 ## Override scoring
 
@@ -571,7 +582,7 @@ project on another computer.
 | Esc | deselect the point |
 | ? | help and this list |
 | 1 to 4 in the 3D view | change the camera |
-| 5 in the Override 3D view | follow the robot |
+| 5 in the 3D view | follow the robot |
 
 ## Examples
 
@@ -614,7 +625,7 @@ field.
 | `cascade_helpers.hpp`, `cascade_bridge.cpp`, `mechanisms.py` | the Override lift and claw in C++, shared with the export; Match Loads, the score and the robot rules |
 | `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
 | `export_cpp.py` | the C++ export |
-| `native_viewer.py` | serves vexsim's 3D view for recorded runs |
+| `three_files.py` | serves Three.js from the vexsim checkout to the 3D view |
 | `static/field3d.html`, `static/field3d.js` | the Override field in 3D |
 | `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `planner.css` |
 
@@ -626,7 +637,7 @@ Each run is kept in its own folder under `--output`: the routine, progress,
 
 ```sh
 cd tests/vexsim/planner
-VEXSIM_PATH=../../../../vexsim python3 -m unittest -v test_planner test_geometry test_server test_native_viewer
+VEXSIM_PATH=../../../../vexsim python3 -m unittest -v test_planner test_geometry test_server test_three_files
 ```
 
 `test_planner` compiles mclib once. Set `MCLIB_PLANNER_CACHE` to a folder to
@@ -640,20 +651,12 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 
 ## Limits
 
-- Push Back has no game objects. On Override nothing starts in the Loaders;
-  a **Match load** step puts a stack there.
+- Nothing starts in the Loaders; a **Match load** step puts a stack there.
 - The lift's encoders are exact: the planner reads the simulated shaft with
   no 10 ms delay.
 - The claw's 200 mL tank starts at 100 psi and loses air on each stroke
-  (100 strokes take it to 25 psi). It never leaks.
-- Pins and Cups do not touch the Toggles.
+  (77 strokes take it to 25 psi). It never leaks.
+- Loose Pins and Cups do not touch the Toggles. A held one does.
 - Every simulated drive has omni wheels on all corners.
-- The 3D view needs Three.js 0.160.0 in the vexsim checkout's
-  `node_modules` (`npm install --prefix ../vexsim --no-save three@0.160.0`).
-- Override needs numpy, MuJoCo and the shapes made from VEX's field CAD in
-  the vexsim checkout (vexsim's README, "Override field CAD"). Run the
-  server and the tests with the Python that has them, such as vexsim's
-  `.venv/bin/python`. [requirements.txt](../requirements.txt) pins the
-  versions the tests pass with.
 - A routine can hold 40 steps and a path 30 points. The time limits must add
   up to at most 120 s.

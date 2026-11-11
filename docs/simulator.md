@@ -6,9 +6,12 @@ physics engine, checked out next to this repository at `../vexsim`.
 ## Path planner
 
 ```sh
-python3 tests/vexsim/planner/server.py --vexsim ../vexsim
+../vexsim/.venv/bin/python tests/vexsim/planner/server.py --vexsim ../vexsim
 ```
 
+The vexsim checkout needs a venv with its `requirements.txt`, Three.js and
+the Override field shapes; the
+[planner guide](../tests/vexsim/planner/README.md) has the setup commands.
 Open http://127.0.0.1:8765. Click the field to place points, see the speeds
 mclib plans along the path, press **Run simulation** to drive the routine in
 vexsim with mclib's C++, then play it back and write it into your robot
@@ -23,4 +26,4 @@ python3 tests/vexsim/run.py
 ```
 
 See [tests/vexsim/README.md](../tests/vexsim/README.md) for options and
-[BUILDER_VALIDATION.md](../tests/vexsim/BUILDER_VALIDATION.md) for results.
+pass criteria.

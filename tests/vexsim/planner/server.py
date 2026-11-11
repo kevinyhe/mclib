@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """The mclib path planner: plan autonomous paths on a field and test them in
-vexsim with mclib's real C++. Standard library only; listens on localhost.
+vexsim with mclib's real C++. Listens on localhost. Run it with a Python that
+has mujoco and numpy (tests/vexsim/requirements.txt), such as vexsim's venv:
 
-    python3 tests/vexsim/planner/server.py --vexsim ../vexsim
+    ../vexsim/.venv/bin/python tests/vexsim/planner/server.py
 """
 import argparse
 from collections import OrderedDict
 import copy
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -30,8 +32,8 @@ from engine import ROOT, readiness, write_json  # noqa: E402
 from export_cpp import YOU, export  # noqa: E402
 from fields import drawings  # noqa: E402
 from geometry import designed_poses  # noqa: E402
-from native_viewer import NativeViewerError, asset as native_asset  # noqa: E402
 from project import LIMITS, PRESETS, TRACKING, ProjectError, config, step_name, strict_json, validate_project  # noqa: E402
+from three_files import ThreeMissing, asset as three_asset  # noqa: E402
 
 FINISHED = {"finished", "broke_rule", "cancelled", "error"}
 #: A run keeps about 1.5 cores busy and holds about 400 MB.  On 24 threads, 8 at once finish one every
@@ -526,17 +528,16 @@ class Handler(BaseHTTPRequestHandler):
             start = query.get("frames_from", ["0"])[0]
             job = planner.get(path.rsplit("/", 1)[1], int(start) if start.isdigit() else 0)
             self.send(200 if job else 404, job or dict(error="No such run."))
-        elif path.startswith("/native/"):
+        elif path.startswith("/three/"):
             try:
-                found = native_asset(path, planner.vexsim)
-            except NativeViewerError as error:
+                found = three_asset(path, planner.vexsim)
+            except ThreeMissing as error:
                 self.send(503, dict(error=str(error)))
                 return
             if found is None:
                 self.send(404, dict(error="No such 3D view file."))
             else:
-                body, content_type, policy = found
-                self.send(200, body, content_type, policy)
+                self.send(200, *found)
         elif path in CAD_FILES:
             name, content_type = CAD_FILES[path]
             file = planner.vexsim / "cad" / "override" / name
@@ -544,7 +545,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, file.read_bytes(), content_type)
             else:
                 self.send(503, dict(error=f"{file} is missing. Make it with vexsim's tools/override_cad.py "
-                                          "(vexsim README, \"Override field CAD\")."))
+                                          "(vexsim README, \"Setup\")."))
         elif path in self.server.static:
             file = self.server.static[path]
             self.send(200, file.read_bytes(), CONTENT_TYPES[file.suffix], FRAMED_POLICY if path in FRAMED_PAGES else None)
@@ -616,6 +617,28 @@ class LengthError(Exception):
     pass
 
 
+def vexsim_problems(vexsim):
+    """Why the planner cannot run on @p vexsim with this Python, one line each."""
+    if not (vexsim / "vexsim/sim.py").is_file():
+        return [f"--vexsim {vexsim} is not a vexsim checkout (no vexsim/sim.py)."]
+    problems = []
+    if not (vexsim / "vexsim/override.py").is_file():
+        problems.append(f"{vexsim} has no Override field (vexsim/override.py). Pull its main branch.")
+    missing = [name for name in ("mujoco", "numpy") if importlib.util.find_spec(name) is None]
+    if missing:
+        problems.append(f"This Python ({sys.executable}) cannot import {' or '.join(missing)}. Install the "
+                        f"simulator's packages: {sys.executable} -m pip install -r {ROOT / 'tests/vexsim/requirements.txt'}")
+    shapes = vexsim / "cad" / "override"
+    if not all((shapes / name).is_file() for name in ("shapes.json", "field.json")):
+        problems.append(f"{shapes} is missing the Override field shapes. Make them with vexsim's "
+                        "tools/override_cad.py (vexsim README, \"Setup\").")
+    try:
+        three_asset("/three/three.module.js", vexsim)
+    except ThreeMissing as error:
+        problems.append(str(error))
+    return problems
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765)")
@@ -631,9 +654,11 @@ def main():
         parser.error("--port must be between 1 and 65535")
     if args.parallel_runs < 1:
         parser.error("--parallel-runs must be at least 1")
-    if not (args.vexsim / "vexsim/sim.py").is_file():
-        parser.error(f"--vexsim {args.vexsim} is not a vexsim checkout (no vexsim/sim.py)")
+    problems = vexsim_problems(args.vexsim)
+    if problems:
+        parser.error("\n".join(problems))
     planner = Planner(args.output, args.vexsim, parallel_runs=args.parallel_runs)
+    planner.field_drawings  # built before serving, so a vexsim that cannot draw the fields stops here
     try:
         server = LocalServer(args.port, planner)
     except OSError:

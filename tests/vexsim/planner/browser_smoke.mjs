@@ -95,6 +95,8 @@ try {
   assert.doesNotMatch(await page.locator("#pane-robot").textContent(), /failed step/);
   await page.locator("#tab-step").click();
   pass("A new routine starts on the Override field; these first checks switch it to the open floor");
+  assert(await page.locator("#view-3d").isDisabled(), "The 3D view is off on the open floor");
+  pass("The 3D view is off on the open floor; it shows the Override field only");
 
   await clickField(24, -12);
   await clickField(0, 24);
@@ -360,19 +362,6 @@ try {
   await page.locator("#help-dialog .dialog-foot button.primary").click();
   pass("? and the ? button open the help with the full shortcut list");
 
-  await page.locator("#run-picker").selectOption({ index: 1 });
-  await page.locator("#view-3d").click();
-  await page.waitForFunction(() => {
-    const status = document.querySelector("#viewer3d-status");
-    return document.querySelector("#viewer3d").dataset.applied || (!status.hidden && /did not start|stopped/.test(status.textContent));
-  }, null, { timeout: 30000 });
-  const applied = await page.locator("#viewer3d").getAttribute("data-applied");
-  if (applied) pass("The 3D view loaded and answered the page");
-  else console.log(`NOTE 3D view not available here: ${await page.locator("#viewer3d-status").innerText()}`);
-  await page.waitForTimeout(1500);
-  await shot("09-3d");
-
-  await page.locator("#view-top").click();
   await openExample("override_autonomous");
   await page.waitForFunction(() => /Opened the example/.test(document.querySelector("#log").textContent) &&
     /the left Toggle and a stack/.test(document.querySelector("#routine-name").value));

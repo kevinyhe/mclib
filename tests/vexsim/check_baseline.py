@@ -1,7 +1,7 @@
 """Fail if a scenario that passed in the baseline fails now.
 
-The physics matrix has known failures (arcs and some boomerangs, see
-BUILDER_VALIDATION.md), so `run.py` exits nonzero on main. CI instead compares
+The physics matrix has known failures (arcs and some boomerangs), so
+`run.py` exits nonzero on main. CI instead compares
 each run against `ci_baseline.json`, the scenarios that passed when it was
 last updated. A scenario that starts passing is reported but does not fail
 the job; add it to the baseline with `--update`.

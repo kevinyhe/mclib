@@ -11,7 +11,6 @@ import sys
 
 GAME_FIELDS = {
     "override": "Override (2026-27)",
-    "push_back": "Push Back (2025-26)",
     "open": "Open floor, no walls",
 }
 NEW_ROUTINE_FIELD = "override"
@@ -51,9 +50,6 @@ def make_world(field, sim, preload="none"):
     vexsim's StartOverlapError if the robot starts inside anything."""
     if field == "open":
         return None
-    if field == "push_back":
-        from vexsim import arena
-        return arena.push_back(sim)
     if field == "override":
         from vexsim.cascade import CascadeRobot
         from vexsim.override import OverrideWorld
@@ -180,18 +176,9 @@ def override_solids():
                     raised_by_in=inches(of.LOADER_TOP_RAISED - of.LOADER_TOP_LOWERED)))
 
 
-def push_back_drawing():
-    from vexsim import field as pb
-    from vexsim.units import INCH
-    solids = [dict(center=to_planner(x, y), radius_in=round(r / INCH, 3)) for x, y, r, _, _ in
-              pb.Field().solids(troughs=True)]
-    parks = [dict(alliance=z.alliance, outline=_rect(z.x_min, z.x_max, z.y_min, z.y_max)) for z in pb.park_zones()]
-    return dict(name=GAME_FIELDS["push_back"], half_in=round(pb.HALF_Y / INCH, 3), solids=solids, park_zones=parks)
-
-
 def drawings(vexsim):
     use_vexsim(vexsim)
-    return dict(override=override_drawing(), push_back=push_back_drawing(), open=None)
+    return dict(override=override_drawing(), open=None)
 
 
 def describe_contact(contact, started):

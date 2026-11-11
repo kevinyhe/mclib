@@ -2,7 +2,7 @@
 // drawing, the Goals, Loaders, Toggles, Pins and Cups from VEX's field CAD
 // (the meshes vexsim's tools/override_cad.py makes). Planner inches: +X right, +Y away from the red Alliance Station, +Z up.
 // Three.js here is Y up, so a planner point (x, y, z) is (x, z, -y).
-import * as THREE from "/native/three/build/three.module.js";
+import * as THREE from "/three/three.module.js";
 
 const COLORS = {
   red: 0xc8323a, blue: 0x2a62c9, yellow: 0xf0c02a, gray: 0x8d929a, clear: 0xd8ecff,

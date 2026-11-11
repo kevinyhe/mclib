@@ -125,7 +125,7 @@ jobs:
         run: |
           npm install --prefix vexsim --no-save --no-audit --no-fund three@0.160.0
           cd tests/vexsim/planner
-          python3 -m unittest -v test_planner test_geometry test_server test_native_viewer
+          python3 -m unittest -v test_planner test_geometry test_server test_three_files
           cd "$GITHUB_WORKSPACE"
           python3 -m unittest -v tools.test_tune_drive.SimulatorTests
 

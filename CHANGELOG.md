@@ -5,6 +5,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Changed
+
+- Path planner: start it with vexsim's venv Python,
+  `../vexsim/.venv/bin/python tests/vexsim/planner/server.py --vexsim ../vexsim`.
+  It now needs vexsim 2.0, MuJoCo and numpy (`tests/vexsim/requirements.txt`),
+  the Override field shapes and Three.js 0.160.0 in the vexsim checkout.
+  The server checks all of these at start and exits with what is missing
+  and the command that fixes it.
+- Path planner: the 3D view is on the Override field only. It loads Three.js
+  from the vexsim checkout at `/three/three.module.js`.
+
+### Removed
+
+- Path planner: the Push Back field. Plan on Override or the open floor.
+- The Push Back game harness in `tests/vexsim/`: `metro_*`, `game_viewer.py`
+  and the physics game audits.
+- The validation reports in `tests/vexsim/` (`REPORT.md`, `*_VALIDATION.md`,
+  `METRO_FRICTION.md`, `MOVEMENT_SCORING_AUDIT.md`). `ci_baseline.json`
+  lists which scenarios pass.
+
 ## 0.4.1
 
 Upgrading from 0.4.0:

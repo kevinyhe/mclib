@@ -770,6 +770,8 @@
   }
 
   function renderAll() {
+    if (state.mode === "3d" && state.project.field !== "override") setMode("top");
+    $("view-3d").disabled = state.project.field !== "override";
     $("routine-name").value = state.project.name;
     $("undo").disabled = !state.history.length;
     $("redo").disabled = !state.future.length;
@@ -1140,8 +1142,7 @@
   function renderHint() {
     const step = selectedStep();
     let hint = "";
-    if (state.mode === "3d" && state.project.field === "override") hint = "Drag to turn, scroll to zoom. Keys 1 to 4: cameras. 5: follow the robot.";
-    else if (state.mode === "3d") hint = state.shown ? "vexsim's 3D view of the simulated robot. Click it, then press 1 to 4 to change the camera." : "";
+    if (state.mode === "3d") hint = "Drag to turn, scroll to zoom. Keys 1 to 4: cameras. 5: follow the robot.";
     else if (state.drag?.kind === "pan") hint = "";
     else if (state.hover?.hint) hint = state.hover.hint;
     else if (state.probe) hint = "";
@@ -1919,19 +1920,6 @@
     panel.replaceChildren(...lines);
   }
 
-  function drawPushBackField(ctx, drawing) {
-    ctx.save();
-    for (const zone of drawing.park_zones) fillPolygon(ctx, zone.outline, zone.alliance === "red" ? "rgba(217,72,59,.18)" : "rgba(47,107,216,.18)", ALLIANCE_FILL[zone.alliance], 1.5);
-    for (const solid of drawing.solids) {
-      const p = toScreen({ x: solid.center[0], y: solid.center[1] });
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, solid.radius_in * state.view.scale, 0, 2 * Math.PI);
-      ctx.fillStyle = "#68707c";
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
   function drawFieldBackground(ctx) {
     const drawing = fieldDrawing();
     const half = drawing?.half_in ?? FIELD_HALF_IN;
@@ -1960,7 +1948,6 @@
     }
     ctx.stroke();
     if (drawing && state.project.field === "override") drawOverrideField(ctx, drawing, frameNow());
-    if (drawing && state.project.field === "push_back") drawPushBackField(ctx, drawing);
     ctx.strokeStyle = drawing ? "#2b3038" : "#5b6370";
     ctx.lineWidth = Math.max(2, (drawing ? 2 : 1.5) * state.view.scale);
     ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
@@ -2621,13 +2608,9 @@
     sync3d();
   }
 
-  function viewerSource() {
-    return state.project.field === "override" ? "/field3d.html" : $("viewer3d").dataset.src;
-  }
-
   function loadViewer() {
     const frame = $("viewer3d");
-    const source = viewerSource();
+    const source = "/field3d.html";
     if (frame.getAttribute("src") === source) return;
     state.viewer = { ready: false, error: "" };
     frame.src = source;
@@ -2647,25 +2630,16 @@
     }
     loadViewer();
     const frame = frameNow();
-    const override = state.project.field === "override";
     let message = "";
     if (state.viewer.error) message = state.viewer.error;
-    else if (!state.viewer.ready) message = override ? "Loading the 3D field…" : "Loading vexsim's 3D view…";
-    else if (!state.shown) message = override ? "Run a simulation to see the robot on the field." :
-      "Run a simulation to see the robot in 3D. The 3D view shows recorded physics only.";
+    else if (!state.viewer.ready) message = "Loading the 3D field…";
+    else if (!state.shown) message = "Run a simulation to see the robot on the field.";
     status.textContent = message;
     status.hidden = !message;
     if (state.viewer.ready) {
       $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-frame", frame: state.shown ? frame : null,
-        pieces: override ? piecesNow() : undefined, playing: state.playing, live: shownIsRunning() }, location.origin);
+        pieces: piecesNow(), playing: state.playing, live: shownIsRunning() }, location.origin);
     }
-  }
-
-  function fit3d() {
-    const frames = trace();
-    if (!state.viewer.ready || !frames.length || state.project.field === "override") return;
-    const xs = frames.map((f) => f.true_x), ys = frames.map((f) => f.true_y);
-    $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-fit", bounds: { min_x: Math.min(...xs), max_x: Math.max(...xs), min_y: Math.min(...ys), max_y: Math.max(...ys) } }, location.origin);
   }
 
   function snap(point, shift) {
@@ -3210,7 +3184,7 @@
     $("run").addEventListener("click", runSimulation);
     $("cancel-run").addEventListener("click", cancelRun);
     $("start-card").addEventListener("click", () => { state.tab = "robot"; renderAll(); });
-    $("fit").addEventListener("click", () => (state.mode === "3d" ? fit3d() : fitView()));
+    $("fit").addEventListener("click", fitView);
     $("view-top").addEventListener("click", () => setMode("top"));
     $("view-3d").addEventListener("click", () => setMode("3d"));
     $("play").addEventListener("click", () => play());
@@ -3286,7 +3260,6 @@
         state.viewer.ready = true;
         state.viewer.error = "";
         sync3d();
-        fit3d();
       } else if (type === "mclib-vexsim-applied") {
         $("viewer3d").dataset.applied = JSON.stringify({ t: event.data.t ?? null, robot: event.data.robot ?? null,
           toggles: event.data.toggles ?? null, available: event.data.available });

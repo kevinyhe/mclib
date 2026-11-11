@@ -111,7 +111,7 @@ Position is measured 300 ms after the move returns. Odometry error is measured
 at the moment it returns.
 
 These are simulator criteria. The library does not guarantee them on a robot.
-Results are in [BUILDER_VALIDATION.md](BUILDER_VALIDATION.md).
+`ci_baseline.json` lists the scenarios that pass in each tracking mode.
 
 ## Simulation model
 
@@ -133,9 +133,10 @@ Results are in [BUILDER_VALIDATION.md](BUILDER_VALIDATION.md).
 ## Path planner
 
 ```sh
-python3 tests/vexsim/planner/server.py --vexsim ../vexsim
+../vexsim/.venv/bin/python tests/vexsim/planner/server.py --vexsim ../vexsim
 ```
 
+Setup for the vexsim checkout is in the [planner guide](planner/README.md).
 Open http://127.0.0.1:8765. Plan paths on the field, run whole routines here
 with mclib's C++, play them back and export `autonomous()`. See the
 [planner guide](planner/README.md).
@@ -152,26 +153,9 @@ Creates `visual-summary.png`, `motion-replay.gif` and `replay-preview.png` for a
 full run. Blue is the simulated position, amber is odometry, and the dashed line
 is the ideal arc.
 
-## Metro routine
-
-[METRO_GAME_VALIDATION.md](METRO_GAME_VALIDATION.md) covers running the Metro
-`leftSideSevenMiddle` autonomous with the full Push Back field on port 8766.
-Change its target points in [metro_waypoints.py](metro_waypoints.py).
-
 ## Simulator tests
 
 ```sh
 cd ../vexsim
 DISPLAY= WAYLAND_DISPLAY= PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
-
-## Reports
-
-| Report | Contents |
-| --- | --- |
-| [BUILDER_VALIDATION.md](BUILDER_VALIDATION.md) | current results and open failures |
-| [FIX_VALIDATION.md](FIX_VALIDATION.md) | simulator and controller fixes |
-| [PHYSICS_VALIDATION.md](PHYSICS_VALIDATION.md) | simulator physics audit |
-| [SEQUENCE_VALIDATION.md](SEQUENCE_VALIDATION.md) | multi-step sequences |
-| [DEBUGGER_VALIDATION.md](DEBUGGER_VALIDATION.md) | builder playback and telemetry |
-| [REPORT.md](REPORT.md) | first test run |
