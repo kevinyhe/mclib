@@ -24,6 +24,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   ends 0.7-2.1° off heading (was 1.9-3.2°). With drive encoders only it ends
   2.0-2.6° off, under the 3° that starts the finishing turn (was 0.1-0.4°
   after that turn).
+- The physics scenarios also run vexsim's `override_cascade` drive, in the
+  `drive` and `horizontal` modes: four 450 rpm motors on 2.75 in omnis and
+  one sideways tracking wheel.
 
 ## 0.4.2
 

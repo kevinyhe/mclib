@@ -66,8 +66,13 @@ The job installs `mujoco` and `numpy` at the versions in
 
 ## Scenarios
 
-- Three drivetrains: four-motor 200 RPM, six-motor 450 RPM, and a faster
-  four-inch-wheel `speed_base`.
+- Four drivetrains: four-motor 200 RPM, six-motor 450 RPM, a faster
+  four-inch-wheel `speed_base`, and `override_cascade`, the drive of an
+  Override cascade robot (four 450 RPM motors on 2.75 in omnis, 14 lb, one
+  sideways tracking wheel at the centre). It has no forward
+  tracking wheel, so it runs only in the `drive` and `horizontal` modes. With
+  its sideways wheel all 16 moves pass; with drive encoders alone the arcs and
+  the boomerang end 4.9-6.9 in off.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   arcs and swings, at default gains.
 - The same two arcs through `followTrajectory()` (RAMSETE):
