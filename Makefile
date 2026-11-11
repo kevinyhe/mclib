@@ -222,6 +222,12 @@ examples: $(EXAMPLE_CHECKS)
 	@if [ -z "$(strip $(EXAMPLE_SRCS))" ]; then echo "No examples found in $(EXAMPLEDIR)"; exit 1; fi
 	@echo "All $(words $(EXAMPLE_SRCS)) example(s) compile."
 
+# Debug info is 95% of the archive and never reaches the brain. Stripping it
+# keeps the template's firmware/mclib.a under GitHub's 50 MB warning. This
+# rule runs before common.mk's template rule, which packages the archive.
+template:: $(BINDIR)/$(LIBNAME).a
+	$(STRIP) --strip-debug $<
+
 ################################################################################
 ################################################################################
 ########## Nothing below this line should be edited by typical users ###########
