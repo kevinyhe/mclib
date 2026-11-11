@@ -123,6 +123,47 @@ These are simulator criteria. The library does not guarantee them on a robot.
 - Holonomic drives, mechanisms and path following are covered by the host tests
   instead.
 
+## Tire grip
+
+vexsim's tire grip on the tiles is partly guessed: sideways grip of an omni
+(0.26 static, 0.22 sliding) comes from carpet, and the sliding share of
+forward grip (0.81) from nothing. `fit_grip.py` fits all four to logs from
+your own robot.
+
+On the robot, run `characterizeGrip()` and `characterizeWallPush()` through a
+`GripLog` (`mclib/control/characterize.hpp`);
+[examples/tire_grip.cpp](../../examples/tire_grip.cpp) is a whole program.
+
+| Runs | Phase | What it shows | Needs |
+| --- | --- | --- | --- |
+| Spins at 4, 8, 12 V, both ways | 4 | how hard the wheels scrub turning in place | |
+| Circles from 6/3 V to 12/3 V, both ways | 5 | how far the robot slides sideways, on the sideways tracking wheel | a clear 6 ft by 6 ft |
+| 12 V launches, forward and back | 6 | wheelspin off the line | about 3 ft each way |
+| A push into a wall, 0 to 12 V over 3 s | 7 | the voltage where the wheels break loose, and how fast they spin sliding | the front square against a wall |
+
+The first three take about 51 s and the wall push 4 s. Then:
+
+```sh
+python3 tests/vexsim/fit_grip.py grip000.csv wall000.csv --vexsim ../vexsim
+```
+
+It replays every run in vexsim from rest with the logged voltages and battery
+voltage, through vexsim's encoder, IMU and rotation sensor models, and picks
+the static and sliding grip, forward and sideways, that make the wheel
+speeds, turn rate and sideways slide match best. It prints them beside
+vexsim's numbers and the `foam.py` entries they replace, the mismatch for
+each kind of run, and how much the match gets worse 10% either side of each
+number. Under 2% is marked not pinned: the logs do not show that number.
+The fit uses vexsim's plain drive model (`Simulator`); the MuJoCo world uses
+the same tire model. On 20 cores it takes about 2 minutes.
+
+`test_fit_grip.py` checks the fit: mclib's routines run in vexsim with grip
+unlike vexsim's own numbers, and the fit must give it back.
+
+```sh
+cd tests/vexsim && VEXSIM_PATH=../../../vexsim python3 -m unittest test_fit_grip
+```
+
 ## Path planner
 
 ```sh
