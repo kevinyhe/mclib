@@ -155,7 +155,15 @@ vexsim's numbers and the `foam.py` entries they replace, the mismatch for
 each kind of run, and how much the match gets worse 10% either side of each
 number. Under 2% is marked not pinned: the logs do not show that number.
 The fit uses vexsim's plain drive model (`Simulator`); the MuJoCo world uses
-the same tire model. On 20 cores it takes about 2 minutes.
+the same tire model. On 20 cores it takes 2 to 5 minutes.
+
+Grip is the only thing the fit changes, so anything else vexsim has wrong
+about the robot ends up in the grip numbers. Logs from a robot 10% heavier
+than the preset, with vexsim's own grip, fit to forward grip 1.04 instead of
+0.84, with a mismatch of 0.96 and spins still 10 deg/s off. Logs that match
+the robot except for grip fit to a mismatch near 0.01. A large mismatch left
+after the fit means the preset's weight, motors or gearing need fixing
+before the grip numbers mean anything.
 
 `test_fit_grip.py` checks the fit: mclib's routines run in vexsim with grip
 unlike vexsim's own numbers, and the fit must give it back.

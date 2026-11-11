@@ -7,7 +7,7 @@ rotation sensor models in between. fit_grip.py then fits those logs.
 
     cd tests/vexsim && VEXSIM_PATH=../../../vexsim python3 -m unittest test_fit_grip
 
-About 3 minutes on 20 cores; the fit replays each run about 110 times.
+About 5 minutes on 20 cores; the fit replays each run about 175 times.
 """
 import multiprocessing
 import os
