@@ -45,21 +45,9 @@ python3 tests/vexsim/check_baseline.py two /tmp/sim-two/results.json --update
 ```
 
 The `Path planner` job runs the planner tests and the browser smoke test as
-two parallel legs. Both need the Override field shapes that vexsim's
-`tools/override_cad.py` cuts from VEX's field CAD. They are made from VEX's
-CAD, so they are in a private repo, `kevinyhe/vexsim-cad`, and the job copies
-them into `vexsim/cad/override/`. It reads that repo with a read-only deploy
-key, the `VEXSIM_CAD_DEPLOY_KEY` secret on mclib. Without the secret the job
-fails and says so, except on pull requests from forks, which get no secrets:
-there the planner steps skip. To add or replace the key:
-
-```sh
-ssh-keygen -t ed25519 -N "" -C "mclib CI reads vexsim-cad" -f /tmp/vexsim_cad_deploy
-gh api repos/kevinyhe/vexsim-cad/keys -f title="mclib CI (read-only)" \
-  -f key="$(cat /tmp/vexsim_cad_deploy.pub)" -F read_only=true
-gh secret set VEXSIM_CAD_DEPLOY_KEY -R kevinyhe/mclib < /tmp/vexsim_cad_deploy
-rm /tmp/vexsim_cad_deploy /tmp/vexsim_cad_deploy.pub
-```
+two parallel legs. Both need the Override field shapes, which the job copies
+from the public [vexsim-cad](https://github.com/kevinyhe/vexsim-cad) into
+`vexsim/cad/override/`.
 
 The job installs `mujoco` and `numpy` at the versions in
 [requirements.txt](requirements.txt), the ones the planner tests pass with.
