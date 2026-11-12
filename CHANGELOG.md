@@ -3,7 +3,10 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.3
+
+Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes
+with the Override field shapes.
 
 ### Added
 
