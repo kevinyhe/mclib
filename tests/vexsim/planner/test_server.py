@@ -189,8 +189,7 @@ class HttpTests(unittest.TestCase):
             self.planner.vexsim = Path(folder)
             status, payload = self.json("GET", "/cad/view.json")
             self.assertEqual(status, 503)
-            self.assertIn(f"git clone https://github.com/kevinyhe/vexsim-cad {Path(folder).parent / 'vexsim-cad'}",
-                          payload["error"])
+            self.assertIn(f"git -C {folder} pull", payload["error"])
             made = Path(folder) / "cad" / "override"
             made.mkdir(parents=True)
             (made / "view.json").write_text('{"meshes": {}}')

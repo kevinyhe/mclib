@@ -45,9 +45,7 @@ python3 tests/vexsim/check_baseline.py two /tmp/sim-two/results.json --update
 ```
 
 The `Path planner` job runs the planner tests and the browser smoke test as
-two parallel legs. Both need the Override field shapes, which the job copies
-from the public [vexsim-cad](https://github.com/kevinyhe/vexsim-cad) into
-`vexsim/cad/override/`.
+two parallel legs. Both use the Override field shapes that come with vexsim.
 
 The job installs `mujoco` and `numpy` at the versions in
 [requirements.txt](requirements.txt), the ones the planner tests pass with.

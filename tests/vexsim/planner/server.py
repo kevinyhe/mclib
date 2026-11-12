@@ -43,7 +43,7 @@ STATIC = HERE / "static"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
                  ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml"}
 EXAMPLES = HERE / "examples"
-#: The Override field's meshes for the 3D view, copied from kevinyhe/vexsim-cad
+#: The Override field's meshes for the 3D view, which come with vexsim
 CAD_FILES = {"/cad/view.json": ("view.json", "application/json; charset=utf-8"),
              "/cad/view.bin": ("view.bin", "application/octet-stream")}
 PAGE_POLICY = ("default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; "
@@ -544,8 +544,8 @@ class Handler(BaseHTTPRequestHandler):
             if file.is_file():
                 self.send(200, file.read_bytes(), content_type)
             else:
-                self.send(503, dict(error=f"{file} is missing. Copy the Override field shapes from "
-                                          f"kevinyhe/vexsim-cad: {copy_shapes_command(planner.vexsim)}"))
+                self.send(503, dict(error=f"{file} is missing. The Override field shapes come with vexsim; "
+                                          f"update it: git -C {planner.vexsim} pull"))
         elif path in self.server.static:
             file = self.server.static[path]
             self.send(200, file.read_bytes(), CONTENT_TYPES[file.suffix], FRAMED_POLICY if path in FRAMED_PAGES else None)
@@ -617,13 +617,6 @@ class LengthError(Exception):
     pass
 
 
-def copy_shapes_command(vexsim):
-    shapes_repo = vexsim.parent / "vexsim-cad"
-    shapes = vexsim / "cad" / "override"
-    return (f"git clone https://github.com/kevinyhe/vexsim-cad {shapes_repo} && mkdir -p {shapes} && "
-            f"cp {shapes_repo}/*.json {shapes_repo}/view.bin {shapes}/")
-
-
 def vexsim_problems(vexsim):
     """Why the planner cannot run on @p vexsim with this Python, one line each."""
     if not (vexsim / "vexsim/sim.py").is_file():
@@ -637,8 +630,8 @@ def vexsim_problems(vexsim):
                         f"simulator's packages: {sys.executable} -m pip install -r {ROOT / 'tests/vexsim/requirements.txt'}")
     shapes = vexsim / "cad" / "override"
     if not all((shapes / name).is_file() for name in ("shapes.json", "field.json")):
-        problems.append(f"{shapes} is missing the Override field shapes. Copy them from kevinyhe/vexsim-cad: "
-                        f"{copy_shapes_command(vexsim)}")
+        problems.append(f"{shapes} is missing the Override field shapes, which come with vexsim. "
+                        f"Update it: git -C {vexsim} pull")
     try:
         three_asset("/three/three.module.js", vexsim)
     except ThreeMissing as error:

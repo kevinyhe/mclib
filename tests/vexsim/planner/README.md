@@ -15,21 +15,16 @@ mclib, set up once:
 
 ```sh
 git clone https://github.com/kevinyhe/vexsim ../vexsim
-git clone https://github.com/kevinyhe/vexsim-cad ../vexsim-cad
 cd ../vexsim
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 npm install --no-save three@0.160.0
-mkdir -p cad/override
-cp ../vexsim-cad/*.json ../vexsim-cad/view.bin cad/override/
 ```
 
-The last two lines copy the Override field shapes from
-[vexsim-cad](https://github.com/kevinyhe/vexsim-cad). They are cut from
+vexsim comes with the Override field shapes, cut from
 [VEX's field CAD](https://content.vexrobotics.com/docs/2026-2027/override/files/v5rc-override-fieldcad.zip).
-To cut them yourself, run vexsim's `tools/override_cad.py` on that download
-(vexsim's README, "Setup"; about 20 minutes). The server checks all of this at
-start and prints what is missing and the command that fixes it.
+The server checks all of this at start and prints what is missing and the
+command that fixes it.
 
 The first launch compiles mclib in the background. That takes 1 to 2 minutes.
 Measuring the simulated robot then takes a few seconds. The status pill at
@@ -408,9 +403,9 @@ all of it, and a Loader the Drive Team lifted for a Match Load is drawn
 raised. Drag to turn the view and scroll to zoom. Click the view, then press 1 to 4 for a camera or
 5 to follow the robot. The score panel stays on top.
 
-The meshes are the ones in `cad/override/` of the vexsim checkout, copied
-from vexsim-cad or made by vexsim's `tools/override_cad.py`; the server sends
-them as `/cad/view.json` and `/cad/view.bin`.
+The meshes are the ones in `cad/override/` of the vexsim checkout, cut from
+the CAD by vexsim's `tools/override_cad.py`; the server sends them as
+`/cad/view.json` and `/cad/view.bin`.
 vexsim collides with the same shapes. A Toggle bar turns on its axle and
 rises up its brackets' slots as vexsim's does. The open floor has no 3D
 view.
