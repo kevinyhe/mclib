@@ -96,17 +96,6 @@ jobs:
           repository: kevinyhe/vexsim
           path: vexsim
 
-      - name: Check out the Override field shapes
-        uses: actions/checkout@v4
-        with:
-          repository: kevinyhe/vexsim-cad
-          path: vexsim-cad
-
-      - name: Put the shapes where vexsim reads them
-        run: |
-          mkdir -p vexsim/cad/override
-          cp vexsim-cad/shapes.json vexsim-cad/field.json vexsim-cad/view.json vexsim-cad/view.bin vexsim/cad/override/
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
