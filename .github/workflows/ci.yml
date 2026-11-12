@@ -80,15 +80,9 @@ jobs:
   # The path planner's own tests (routine checks, the server, the 3D replay
   # adapter, the page's geometry against the engine's, the C++ export and
   # whole runs in vexsim) and the real page in headless Chrome, side by side.
-  # The Override field shapes are made from VEX's CAD, so they sit in a
-  # private repo, kevinyhe/vexsim-cad, read with VEXSIM_CAD_DEPLOY_KEY.
-  # Pull requests from forks get no secrets, so their planner steps skip.
   planner:
     name: Path planner
     runs-on: ubuntu-latest
-    env:
-      HAS_VEXSIM_CAD_KEY: ${{ secrets.VEXSIM_CAD_DEPLOY_KEY != '' }}
-      FROM_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     strategy:
       fail-fast: false
       matrix:
@@ -96,58 +90,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require the key to the Override field shapes
-        if: env.HAS_VEXSIM_CAD_KEY != 'true' && env.FROM_FORK != 'true'
-        run: |
-          echo "VEXSIM_CAD_DEPLOY_KEY is not set. The planner tests need the Override field shapes from kevinyhe/vexsim-cad; tests/vexsim/README.md says how to add the key." >&2
-          exit 1
-
-      - name: Skip the planner on a fork
-        if: env.HAS_VEXSIM_CAD_KEY != 'true' && env.FROM_FORK == 'true'
-        run: echo "A pull request from a fork cannot read the Override field shapes. The planner tests run once it is merged."
-
       - name: Check out vexsim
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         uses: actions/checkout@v4
         with:
           repository: kevinyhe/vexsim
           path: vexsim
 
       - name: Check out the Override field shapes
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         uses: actions/checkout@v4
         with:
           repository: kevinyhe/vexsim-cad
-          ssh-key: ${{ secrets.VEXSIM_CAD_DEPLOY_KEY }}
           path: vexsim-cad
 
       - name: Put the shapes where vexsim reads them
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         run: |
           mkdir -p vexsim/cad/override
           cp vexsim-cad/shapes.json vexsim-cad/field.json vexsim-cad/view.json vexsim-cad/view.bin vexsim/cad/override/
 
       - uses: actions/setup-python@v5
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         with:
           python-version: '3.14'
 
       - name: Install the Override world's packages
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         run: python3 -m pip install -r tests/vexsim/requirements.txt
 
       # Three.js from vexsim's package, pinned to the version the 3D view
       # expects.
       - uses: actions/setup-node@v4
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         with:
           node-version: '20'
       - name: Install Three.js
-        if: env.HAS_VEXSIM_CAD_KEY == 'true'
         run: npm install --prefix vexsim --no-save --no-audit --no-fund three@0.160.0
 
       - name: Path planner tests
-        if: env.HAS_VEXSIM_CAD_KEY == 'true' && matrix.suite == 'tests'
+        if: matrix.suite == 'tests'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
           VEXSIM_PATH: ${{ github.workspace }}/vexsim
@@ -160,7 +136,7 @@ jobs:
 
       # Place points, plan, run, play back, compare, export, mirror, 3D view.
       - name: Path planner browser smoke test
-        if: env.HAS_VEXSIM_CAD_KEY == 'true' && matrix.suite == 'browser'
+        if: matrix.suite == 'browser'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
@@ -177,7 +153,7 @@ jobs:
             --browser "$browser" --output "$RUNNER_TEMP/planner-browser"
 
       - name: Keep the browser screenshots and the server log
-        if: failure() && env.HAS_VEXSIM_CAD_KEY == 'true' && matrix.suite == 'browser'
+        if: failure() && matrix.suite == 'browser'
         uses: actions/upload-artifact@v4
         with:
           name: planner-browser

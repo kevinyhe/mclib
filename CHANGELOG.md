@@ -47,6 +47,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - The physics scenarios also run vexsim's `override_cascade` drive, in the
   `drive` and `horizontal` modes: four 450 rpm motors on 2.75 in omnis and
   one sideways tracking wheel.
+- The Override field shapes are public, in
+  [vexsim-cad](https://github.com/kevinyhe/vexsim-cad). Path planner setup
+  copies them from there instead of cutting them from VEX's CAD (about 20
+  minutes), and the planner prints the copy command when they are missing.
+  CI reads them without a key, so pull requests from forks run the planner
+  tests too.
 
 ## 0.4.2
 
