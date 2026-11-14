@@ -303,6 +303,46 @@ int main() {
     CHECK_EQ(filter.tooOld(), 1);
   }
 
+  std::printf("-- a reading taken history_ms ago lands though no step was then\n");
+  {
+    // Steps every 10 ms, the last one 3 ms late. A reading taken 100 ms
+    // before it falls between the steps at 200 and 210 ms.
+    PoseFilterConfig config;
+    config.history_ms = 100;
+    PoseFilter filter(config);
+    filter.reset(Pose2D{72, 72, 0}, 3.0, 1.0);
+    Pose2D odom{72, 72, 0};
+    for (int tick = 1; tick <= 30; ++tick) {
+      const Pose2D previous = odom;
+      odom.y += 0.5;
+      filter.predict(previous, odom, tick == 30 ? 303 : 10 * tick);
+    }
+    CHECK(filter.updateGps(Pose2D{75, 87, NAN}, 0.5, -1.0, 203));
+    CHECK_EQ(filter.tooOld(), 0);
+    CHECK(!filter.updateGps(Pose2D{75, 87, NAN}, 0.5, -1.0, 202));
+    CHECK_EQ(filter.tooOld(), 1);
+  }
+
+  std::printf("-- PoseFusion uses a distance sensor as late as the filter remembers\n");
+  {
+    mclib::control::PoseFusionConfig config;
+    config.filter.history_ms = 100;
+    config.field_offset_x_in = 72.0;
+    config.field_offset_y_in = 72.0;
+    mclib::control::DistanceSensorInput late_sensor{.geometry = {0.0f, 0.0f, 0.0f, 0u, 200.0f},
+                                                    .read_in = [] { return 72.0; },
+                                                    .period_ms = 300,
+                                                    .latency_ms = 100};
+    mclib::control::PoseFusion fusion(config, {late_sensor});
+    CHECK(!fusion.hasConfigurationError());
+    fusion.reset(Pose2D{0, 0, 0});
+    for (int tick = 1; tick <= 30; ++tick) {
+      fusion.step(Pose2D{0, 0, 0}, tick == 30 ? 303 : 10 * tick);
+    }
+    CHECK_EQ(fusion.accepted(), 1);
+    CHECK_EQ(fusion.tooOld(), 0);
+  }
+
   std::printf("-- PoseFusion refuses a latency longer than the filter remembers\n");
   {
     mclib::control::PoseFusionConfig config;

@@ -81,8 +81,10 @@ void PoseFilter::predict(const Pose2D& previous_odom, const Pose2D& current_odom
   const Step step = odometryStep<Step>(previous_odom, current_odom);
   applyStep(step);
   m_history.push_back(Tick{now_ms, step, {}, m_pose, m_cov});
+  // Keep the newest step that is history_ms old or older: a reading taken
+  // history_ms ago lands on it.
   while (m_history.size() > 1 &&
-         static_cast<std::uint32_t>(now_ms - m_history.front().time_ms) > m_config.history_ms) {
+         static_cast<std::uint32_t>(now_ms - m_history[1].time_ms) >= m_config.history_ms) {
     m_history.pop_front();
   }
 }
@@ -154,6 +156,10 @@ bool PoseFilter::updateNow(const Reading& reading) {
 bool PoseFilter::updateAt(const Reading& reading, std::uint32_t taken_ms) {
   if (m_history.empty() || notAfter(m_history.back().time_ms, taken_ms)) {
     return updateNow(reading);
+  }
+  if (static_cast<std::uint32_t>(m_history.back().time_ms - taken_ms) > m_config.history_ms) {
+    ++m_too_old;
+    return false;
   }
   std::size_t at = m_history.size();
   for (std::size_t i = m_history.size(); i-- > 0;) {
