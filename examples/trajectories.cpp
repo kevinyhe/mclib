@@ -5,15 +5,17 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
 // Example: paths and the ways to follow them. Splines, arcs, speed limits
-// and speed zones; followTrajectory() with RAMSETE; pure pursuit; motion
-// profiles; feedforward, and the routines that measure it. Pick a routine on
-// the brain screen or the controller, then start autonomous. Every routine
-// starts from (0, 0) facing 0 deg. Give the robot 6 ft of clear floor on
-// every side. Routines that work out numbers print them to the PROS terminal.
-// Change every port and every number to match your robot.
+// and speed zones; followTrajectory() with RAMSETE; moveToPose(); profiled
+// moves; pure pursuit; motion profiles; feedforward, and the routines that
+// measure it. Pick a routine on the brain screen or the controller, then
+// start autonomous. Every routine starts from (0, 0) facing 0 deg. Give the
+// robot 6 ft of clear floor on every side. Routines that work out numbers
+// print them to the PROS terminal. Change every port and every number to
+// match your robot.
 #include "main.h"
 
 #include "mclib/control/characterize.hpp"
+#include "mclib/control/profiled_moves.hpp"
 #include "mclib/path/arc.hpp"
 
 #include <algorithm>
@@ -75,6 +77,15 @@ mclib::auton::AutonSelector selector;
 // of wheel speed (kV), volts per in/s^2 of acceleration (kA).
 const mclib::control::FeedforwardGains drive_feedforward{
     .kS = 0.7_V,
+    .kV = 0.13_V / mclib::units::inps,
+    .kA = 0.02_V / inps2,
+};
+
+// The same fit from spins in place, with the wheel speed taken as the turn
+// rate in rad/s times half of effective_track_width. Turning scrubs the wheels
+// sideways, so kS comes out higher than driving straight.
+const mclib::control::FeedforwardGains turn_feedforward{
+    .kS = 1.3_V,
     .kV = 0.13_V / mclib::units::inps,
     .kA = 0.02_V / inps2,
 };
@@ -302,6 +313,35 @@ void driveToPoseOnAPlan() {
   // Backward. The heading is still the way the front of the robot ends up.
   reached("back", moveToPose(0_in, 0_in, -1, 0_deg, 0.4, follower_config,
                              cruiseLimits(), 5_s));
+}
+
+// After useProfiledMoves(), driveTo(), turnToAngle(), swing() and
+// moveToPoint() plan their speed: speed up, cruise, slow down to stop on the
+// target, then settle with their own PID. Without it they slow down for the
+// whole last part of every move. Moves with exit false run as before. Call it
+// once, in initialize(), to have it for every routine.
+void driveOnPlannedSpeeds() {
+  mclib::control::ProfiledMoveConfig moves;
+  moves.follower.gains = drive_feedforward;
+  // Volts per inch the wheels are behind the plan, and per in/s.
+  moves.follower.kp = 2_V / 1_in;
+  moves.follower.kd = 0.1_V / 1_in;
+  moves.turn_gains = turn_feedforward;
+  moves.limits.max_velocity = 48_inps;
+  moves.limits.max_acceleration = 96 * inps2;
+  moves.track_width = effective_track_width;
+  // False, with the reason printed to the terminal, if a number is unusable.
+  if (!mclib::control::useProfiledMoves(moves)) {
+    master.setText(2, 0, "MOVES REFUSED");
+    return;
+  }
+  reached("drive", driveTo(24_in, 2_s));
+  reached("turn", turnToAngle(90_deg, 2_s));
+  reached("swing", swing(180_deg, 1, 2_s));
+  reached("point", moveToPoint(0_in, 0_in, 1, 3_s));
+
+  // Back to the PID moves.
+  mclib::control::usePidMoves();
 }
 
 // The steps inside followTrajectory(), for a loop or a command of your own.
@@ -712,12 +752,13 @@ void initialize() {
   selector.add("planned arc", followAnArc);
   selector.add("curveCircle", followArcsWithCurveCircle);
   selector.add("moveToPose", driveToPoseOnAPlan);
+  selector.add("planned moves", driveOnPlannedSpeeds);
   selector.add("own loop", followWithYourOwnLoop);
   selector.add("pure pursuit", followCornersWithPurePursuit);
   selector.add("pursuit+prof", purePursuitAtProfileSpeed);
   selector.add("profile facts", printProfileFacts);
   selector.add("profile", driveProfilesThereAndBack);
-  // Three columns: 16 buttons are too small to press in the default two.
+  // Three columns: 17 buttons are too small to press in the default two.
   selector.setLayout({.columns = 3});
   selector.bindController(master);
   selector.loadSelection();
