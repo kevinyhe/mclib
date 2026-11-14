@@ -60,7 +60,7 @@ The job installs `mujoco` and `numpy` at the versions in
   tracking wheel, so it runs only in the `drive` and `horizontal` modes. With
   its sideways wheel all 16 moves pass; with drive encoders alone the arcs and
   the boomerang end 4.9-6.9 in off, and with the accelerometer added
-  (`imu/override_cascade/*`) 0.3-2.9 in.
+  (`imu/override_cascade/*`) 0.4-2.7 in.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   arcs and swings, at default gains.
 - The same two arcs through `followTrajectory()` (RAMSETE):

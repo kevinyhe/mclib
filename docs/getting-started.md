@@ -179,24 +179,24 @@ drives (three with a vertical tracker):
 | Sensors | Straight moves and turns in place | Curves: arcs, boomerangs, swings, S-curves, point moves | Moves passing |
 | --- | --- | --- | --- |
 | Drive encoders only | 0.24 / 0.78 in | 4.24 / 9.79 in | 42 of 64 |
-| Drive encoders and accelerometer | 0.33 / 0.79 in | 1.52 / 5.50 in | 59 of 64 |
+| Drive encoders and accelerometer | 0.11 / 0.22 in | 0.98 / 2.35 in | 62 of 64 |
 | Vertical tracker | 0.10 / 0.19 in | 4.53 / 10.72 in | 31 of 48 |
-| Vertical tracker and accelerometer | 0.14 / 0.29 in | 1.14 / 6.52 in | 47 of 48 |
+| Vertical tracker and accelerometer | 0.13 / 0.24 in | 1.13 / 3.88 in | 46 of 48 |
 
 What it costs:
 
-- A move that turns hard and then drives (`moveToPoint()` to a point off
-  to the side) can end up worse with drive encoders alone. The drive wheels
-  slip in the turn, the odometry takes the turn for forward travel, and the
-  accelerometer's turn pull is worked out from that. Two drives failed their
-  point move this way: 2.08 to 5.50 in and 1.45 to 4.21 in off. A vertical
-  tracker removes it.
-- S-curves gain little. The two turns' slides cancel without the
-  accelerometer; with it the errors of the accelerometer add up instead.
-- A turn in place drifts up to 0.4 in.
+- S-curves can end worse. The two turns' slides cancel without the
+  accelerometer; with it the accelerometer's own errors add up instead. The
+  slowest drive's S-curve ends 1.75 in off instead of 0.34 in with drive
+  encoders, and 2.08 in instead of 0.57 in with a vertical tracker. Both
+  still pass.
+- A turn in place drifts up to 0.14 in.
+- The slide, and the correction to the drive wheels' travel, arrive one
+  tick (10 ms) late. The wheels' own travel does not.
 
-The Override cascade drive (drive encoders only) ends its RAMSETE arcs 0.9 to
-1.1 in off instead of 6.7 in, and its boomerang 2.6 in instead of 4.7 in.
+The Override cascade drive (drive encoders only) ends its RAMSETE arcs 0.7 to
+0.9 in off instead of 6.7 in, its point move 0.7 in instead of 1.5 in, and
+its boomerang 2.2 in instead of 4.7 in.
 
 None of this has run on a robot. To check it on yours, drive a full circle
 back to where you started, with and without the accelerometer, and see which
