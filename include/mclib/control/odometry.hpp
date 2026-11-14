@@ -128,9 +128,11 @@ struct OdometryConfig {
   QLength horizontal_offset_forward = 0.0 * units::inch;
 
   /**
-   * @brief Estimate the sideways slide from the IMU's accelerometer.
+   * @brief Estimate the sideways slide from the IMU's accelerometer, and
+   *        with no vertical tracking wheel, the drive wheels' slip.
    *
-   * Needs `OdometrySample::time_ms` and `OdometrySample::accel_right_ips2`.
+   * Needs `OdometrySample::time_ms` and `OdometrySample::accel_right_ips2`,
+   * and with no vertical tracking wheel `OdometrySample::accel_forward_ips2`.
    * Not with a horizontal tracking wheel, which measures the slide itself:
    * `odometryConfigIsValid()` rejects the pair.
    */
@@ -171,6 +173,9 @@ struct OdometrySample {
   /// @brief Accelerometer reading toward the robot's right, in/s^2. NAN
   ///        marks a fault.
   double accel_right_ips2 = NAN;
+  /// @brief Accelerometer reading toward the robot's front, in/s^2. NAN
+  ///        marks a fault. Not read with a vertical tracking wheel.
+  double accel_forward_ips2 = NAN;
 };
 
 /**

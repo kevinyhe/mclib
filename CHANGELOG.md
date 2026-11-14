@@ -9,7 +9,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 - Odometry can estimate the sideways slide from the IMU's accelerometer, for
   robots with no sideways tracking wheel. Give `OdometrySetup::accelerometer`
-  a reader, `sidewaysAccelReader(imu, axis)`, and where the IMU is. Off
+  readers, `accelerationReader(imu, axis)`, and where the IMU is. With
+  drive encoders alone it also reads the IMU's forward axis, so drive wheels
+  spinning faster than the robot moves are not counted as travel. Off
   unless set. In the physics simulator, with a real IMU's errors added,
   odometry error at the end of a curve falls from 4.24 to 1.52 in on
   average with drive encoders alone, and from 4.53 to 1.14 in with a

@@ -43,6 +43,8 @@ struct Sample {
   // What the IMU's accelerometer reads toward the robot's right, in/s^2;
   // NaN when the scenario gives odometry no accelerometer.
   double accel_right_ips2;
+  // The same toward the robot's front.
+  double accel_forward_ips2;
 };
 using Advance = void (*)(std::uint32_t, Sample*);
 using Output = void (*)(int side, int mode, double volts);
@@ -115,7 +117,7 @@ void refresh(std::uint32_t ms) {
   last_integrated_pose = mclib::control::odometryTick(
       {drive.headingDeg() * std::acos(-1.0) / 180,
        drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal,
-       static_cast<double>(sample.millis), sample.accel_right_ips2});
+       static_cast<double>(sample.millis), sample.accel_right_ips2, sample.accel_forward_ips2});
   if (fusion_rig.on_odometry) fusion_rig.on_odometry->step(sample.millis);
   if (sim_after_refresh_hook) sim_after_refresh_hook(sample.millis);
 }

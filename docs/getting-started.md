@@ -132,15 +132,19 @@ for one tracker: low in the direction it measures, about 0.09 in the other.
 Without a horizontal tracker the odometry assumes the robot never moves
 sideways. In a fast curve an omni drive slides outward, and the odometry
 misses all of it. `OdometrySetup::accelerometer` estimates that slide from
-the IMU's accelerometer:
+the IMU's accelerometer. With drive encoders alone it also reads the IMU's
+forward axis, so drive wheels that spin faster than the robot moves, as they
+do pulling out of a hard turn, are not counted as travel:
 
 ```cpp
 void initialize() {
   imu->reset(true);
   auto setup = mclib::control::odometrySetupFrom(chassis);
   mclib::control::AccelerometerSensor accelerometer{
-      .right_ips2 = mclib::control::sidewaysAccelReader(
-          *imu, mclib::device::ImuAxis::MinusY)};
+      .right_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::MinusY),
+      .forward_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::PlusX)};
   accelerometer.slide.imu_forward_in = 3.0;   // IMU ahead of the tracking centre
   accelerometer.slide.imu_right_in = -2.0;    // and to its right: 2 in left
   setup.accelerometer = accelerometer;
@@ -148,9 +152,11 @@ void initialize() {
 }
 ```
 
-- The axis is the IMU's own axis that points to the robot's right. Show
-  `imu->accelerationG(PlusX)`, `PlusY` and `PlusZ` on the screen, push the
-  robot to its right by hand, and see which one jumps and which way.
+- The axes are the IMU's own axes that point to the robot's right and to its
+  front. Show `imu->accelerationG(PlusX)`, `PlusY` and `PlusZ` on the
+  screen, push the robot by hand to its right, then forward, and see which
+  one jumps and which way. With a vertical tracker, leave out
+  `forward_ips2`: the tracker measures forward travel itself.
 - Measure where the IMU sits from the tracking centre. Spinning at 6 rad/s,
   an IMU 3 in off the centre reads 0.28 g that is the turn, not a slide.
   `slide.imu_position_sigma_in` says how well you measured it: 0.25 in by

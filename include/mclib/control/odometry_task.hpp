@@ -71,30 +71,34 @@ inline constexpr double kGravityIps2 = 386.08858;
  * @brief The IMU's accelerometer, for odometry with no horizontal tracking
  *        wheel.
  *
- * `right_ips2` returns what the accelerometer reads toward the robot's right,
- * in/s^2, or NaN when the IMU is not reporting. `sidewaysAccelReader()`
- * builds one from a `device::Inertial`. `slide` says where the IMU is: measure
- * `imu_forward_in` and `imu_right_in` from the tracking centre.
+ * `right_ips2` and `forward_ips2` return what the accelerometer reads toward
+ * the robot's right and front, in/s^2, or NaN when the IMU is not reporting.
+ * `accelerationReader()` builds them from a `device::Inertial`. With a
+ * vertical tracking wheel `forward_ips2` is not read and may be left empty.
+ * `slide` says where the IMU is: measure `imu_forward_in` and `imu_right_in`
+ * from the tracking centre.
  */
 struct AccelerometerSensor {
   std::function<double()> right_ips2;
+  std::function<double()> forward_ips2{};
   SlideEstimatorConfig slide{};
 };
 
 /**
- * @brief A reader for `AccelerometerSensor::right_ips2` from any IMU with an
+ * @brief A reader for `AccelerometerSensor` from any IMU with an
  *        `accelerationG(device::ImuAxis)` - `device::Inertial`.
  *
- * @param toward_right The sensor axis that points to the robot's right. To
- *        find it, push the robot to its right by hand and see which of
- *        `accelerationG(PlusX)`, `PlusY` or `PlusZ` jumps, and which way.
+ * @param axis The sensor axis that points the way to read: to the robot's
+ *        right for `right_ips2`, to its front for `forward_ips2`. To find
+ *        them, push the robot by hand and see which of `accelerationG(PlusX)`,
+ *        `PlusY` or `PlusZ` jumps, and which way.
  *
  * The IMU is captured by reference and must outlive the odometry task.
  */
 template <class Imu>
-std::function<double()> sidewaysAccelReader(const Imu& imu, device::ImuAxis toward_right) {
-  return [&imu, toward_right]() -> double {
-    const std::optional<double> g = imu.accelerationG(toward_right);
+std::function<double()> accelerationReader(const Imu& imu, device::ImuAxis axis) {
+  return [&imu, axis]() -> double {
+    const std::optional<double> g = imu.accelerationG(axis);
     return g.has_value() ? *g * kGravityIps2 : NAN;
   };
 }
@@ -219,8 +223,9 @@ inline OdometryConfig odometryConfigFrom(const OdometrySetup& setup) {
  * @brief True when @p setup can drive the odometry: a heading reader plus
  *        either both drive encoders or a vertical tracking wheel, and a
  *        configuration `odometryConfigIsValid()` accepts. An accelerometer
- *        needs its reader and no horizontal tracking wheel. A `fusion` must
- *        not have a configuration error.
+ *        needs `right_ips2`, `forward_ips2` too with no vertical tracking
+ *        wheel, and no horizontal tracking wheel. A `fusion` must not have a
+ *        configuration error.
  */
 bool odometrySetupIsUsable(const OdometrySetup& setup);
 

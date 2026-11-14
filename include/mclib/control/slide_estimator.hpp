@@ -39,6 +39,23 @@
  *   away using where the IMU is. What an error of `imu_position_sigma_in` in
  *   that position could read doesn't count as a shove.
  *
+ * The pull a turn needs is turn rate times forward speed. Drive wheels count
+ * too much forward speed when they slip, as they do when a robot comes out of
+ * a hard turn at full power, and that would read as a slide. So with forward
+ * travel from the drive wheels, a second filter of the same kind works out
+ * the forward speed from the accelerometer's forward axis, held to the
+ * wheels' speed while they grip. A wheel speed further from the filter's
+ * than the noise explains is slip, and counts for less the further off it
+ * is. The difference between that forward speed and the wheels' is added to
+ * the forward travel.
+ *
+ * The heading gives the turn rate averaged over a tick, half a tick behind
+ * the accelerometer, and how fast the rate changes a whole tick behind. An
+ * IMU 3 in off the centre feels 3 in times that change: 180 in/s^2 as a
+ * spin stops. So each tick works on the previous tick's accelerometer
+ * reading, which lines up with the heading. The slide and the correction to
+ * the forward travel arrive one tick late; the wheels' own travel does not.
+ *
  * Host-only: no PROS headers.
  */
 
@@ -46,7 +63,8 @@ namespace mclib {
 namespace control {
 
 /**
- * @brief Where the accelerometer is and how noisy it is.
+ * @brief Where the accelerometer is, how noisy it is, and how far to trust
+ *        the drive wheels.
  */
 struct SlideEstimatorConfig {
   /// @brief IMU position ahead of the tracking centre, inches.
@@ -74,47 +92,115 @@ struct SlideEstimatorConfig {
   ///        accelerometer feels that neither the turn nor the error in the
   ///        IMU position could explain.
   double slide_sigma_s = 1.0;
+  /// @brief How far the drive wheels' forward speed may be from the robot's
+  ///        while they grip, in/s.
+  double wheel_sigma_ips = 0.5;
+  /// @brief How much further per in/s that the wheels' speed is off the
+  ///        filter's, beyond what the noise explains. 2: wheels 5 in/s off
+  ///        count as 10 in/s uncertain, and barely move the speed.
+  double wheel_slip_sigma_ratio = 2.0;
 };
 
 /// @brief True when every number in @p config is finite, every sigma and
-///        walk is positive, and `imu_position_sigma_in` is not negative.
+///        walk is positive, and `imu_position_sigma_in` and
+///        `wheel_slip_sigma_ratio` are not negative.
 bool slideEstimatorConfigIsValid(const SlideEstimatorConfig& config);
 
+/// @brief Where odometry's forward travel comes from.
+enum class ForwardTravel {
+  /// @brief The drive wheels, which slip. The accelerometer's forward axis
+  ///        corrects them.
+  FromDriveWheels,
+  /// @brief A forward tracking wheel, which doesn't slip. The forward axis
+  ///        is not read.
+  FromTrackingWheel,
+};
+
 /**
- * @brief Estimates the sideways speed of the tracking centre. Not
- *        thread-safe; `Odometry` owns one.
+ * @brief Estimates the forward and sideways speed of the tracking centre.
+ *        Not thread-safe; `Odometry` owns one.
  */
 class SlideEstimator {
  public:
-  explicit SlideEstimator(SlideEstimatorConfig config = {});
+  explicit SlideEstimator(SlideEstimatorConfig config = {},
+                          ForwardTravel forward_travel = ForwardTravel::FromDriveWheels);
 
-  /// @brief Forget the speed and the zero.
+  /// @brief Forget the speeds and the zeros.
   void reset();
+
+  /// @brief How far the tracking centre went in one tick, inches.
+  struct Travel {
+    double forward_in;
+    double right_in;
+  };
 
   /**
    * @brief One tick.
    * @param dt_s Seconds since the last tick. Zero or less changes nothing.
-   * @param forward_in How far the tracking centre went forward this tick.
+   * @param forward_in How far the drive wheels or tracking wheel say the
+   *        tracking centre went forward this tick.
    * @param turn_rad How far the robot turned this tick, clockwise positive.
    * @param accel_right_ips2 The accelerometer's reading toward the robot's
    *        right, in/s^2.
-   * @return How far the tracking centre slid toward the robot's right this
-   *         tick, inches.
+   * @param accel_forward_ips2 Its reading toward the robot's front, in/s^2.
+   *        Not read with `ForwardTravel::FromTrackingWheel`.
+   * @return The forward travel, @p forward_in plus the last tick's
+   *         correction when it came from the drive wheels, and the last
+   *         tick's sideways slide, right positive.
    */
-  double update(double dt_s, double forward_in, double turn_rad, double accel_right_ips2);
+  Travel update(double dt_s, double forward_in, double turn_rad, double accel_right_ips2,
+                double accel_forward_ips2);
 
   /// @brief Sideways speed of the tracking centre, in/s, right positive.
-  double sidewaysSpeedIps() const { return m_speed; }
+  double sidewaysSpeedIps() const { return m_right.speed; }
+  /// @brief Forward speed of the tracking centre, in/s.
+  double forwardSpeedIps() const { return m_forward.speed; }
   /// @brief What the accelerometer reads toward the right when nothing
   ///        accelerates the robot, in/s^2.
-  double accelZeroIps2() const { return m_zero; }
+  double accelZeroIps2() const { return m_right.zero; }
+  /// @brief The same toward the front.
+  double forwardAccelZeroIps2() const { return m_forward.zero; }
 
  private:
+  /// @brief The speed along one axis and the accelerometer's zero on it,
+  ///        with their covariance.
+  struct Axis {
+    double speed = 0.0;
+    double zero = 0.0;
+    Mat2 cov = Mat2::Zero();
+
+    void reset(double zero_sigma);
+    void averageStillReading(double reading, int count, double accel_sigma);
+    void predict(double accel, double dt_s, double speed_var, double zero_var);
+    void measureSpeed(double measured, double sigma);
+  };
+
+  /// @brief One tick's readings.
+  struct Tick {
+    double dt_s;
+    double wheel_speed;
+    double rate;
+    double accel_right;
+    double accel_forward;
+  };
+
+  /// @brief Until the robot first moves, the zeros are the average readings.
+  ///        A reading far off that average is the robot starting to move
+  ///        before its wheels and heading show it. True while still.
+  bool standingStill(double forward_in, double turn_rad, double accel_right_ips2,
+                     double accel_forward_ips2);
+
+  /// @brief Runs the filters over @p last, with @p next for the turn rate at
+  ///        its end. Returns what to add to the wheels' forward travel over
+  ///        @p last, and the sideways travel over it.
+  Travel filter(const Tick& last, const Tick& next);
+
   SlideEstimatorConfig m_config;
-  double m_speed = 0.0;
-  double m_zero = 0.0;
-  Mat2 m_cov = Mat2::Zero();
-  double m_last_rate = 0.0;
+  ForwardTravel m_forward_travel;
+  Axis m_right;
+  Axis m_forward;
+  Tick m_last{};
+  bool m_has_last = false;
   int m_still_readings = 0;
   bool m_moved = false;
 };

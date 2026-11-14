@@ -127,11 +127,13 @@ bool startWithBothWheels() {
 
 // No horizontal wheel, so the IMU's accelerometer estimates the sideways
 // slide instead. It works with drive encoders alone or with a vertical wheel.
+// With drive encoders alone it also reads the IMU's forward axis, so drive
+// wheels spinning faster than the robot moves are not counted as travel.
 //
-// toward_right is the IMU axis that points to the robot's right. To find it,
-// show imu->accelerationG(PlusX), PlusY and PlusZ on the screen, push the robot
-// to its right by hand, and see which one jumps and which way. A jump down on
-// PlusY makes it MinusY.
+// Give the IMU axis that points to the robot's right, and the one that points
+// to its front. To find them, show imu->accelerationG(PlusX), PlusY and PlusZ
+// on the screen, push the robot by hand to its right, then forward, and see
+// which one jumps and which way. A jump down on PlusY makes it MinusY.
 //
 // imu_forward_in and imu_right_in are where the IMU sits, measured from the
 // tracking centre. Spinning at 6 rad/s, an IMU 3 in off the centre reads
@@ -147,8 +149,21 @@ bool startWithAccelerometer() {
   odometry.vertical = mclib::control::TrackingWheelSensor{
       mclib::control::encoderReader(vertical_tracker), vertical_wheel};
   mclib::control::AccelerometerSensor accelerometer{
-      .right_ips2 = mclib::control::sidewaysAccelReader(
-          *imu, mclib::device::ImuAxis::MinusY)};
+      .right_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::MinusY)};
+  accelerometer.slide.imu_forward_in = 3.0;
+  accelerometer.slide.imu_right_in = -2.0;
+  odometry.accelerometer = accelerometer;
+  return mclib::control::startOdometry(odometry);
+}
+
+bool startWithAccelerometerAndDriveEncoders() {
+  auto odometry = mclib::control::odometrySetupFrom(chassis);
+  mclib::control::AccelerometerSensor accelerometer{
+      .right_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::MinusY),
+      .forward_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::PlusX)};
   accelerometer.slide.imu_forward_in = 3.0;
   accelerometer.slide.imu_right_in = -2.0;
   odometry.accelerometer = accelerometer;

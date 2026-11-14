@@ -49,12 +49,20 @@ bool sameSlideConfig(const SlideEstimatorConfig& a, const SlideEstimatorConfig& 
          a.imu_position_sigma_in == b.imu_position_sigma_in &&
          a.accel_sigma_ips2 == b.accel_sigma_ips2 && a.zero_sigma_ips2 == b.zero_sigma_ips2 &&
          a.zero_walk_ips2_per_sqrt_in == b.zero_walk_ips2_per_sqrt_in &&
-         a.grip_sigma_ips == b.grip_sigma_ips && a.slide_sigma_s == b.slide_sigma_s;
+         a.grip_sigma_ips == b.grip_sigma_ips && a.slide_sigma_s == b.slide_sigma_s &&
+         a.wheel_sigma_ips == b.wheel_sigma_ips && a.wheel_slip_sigma_ratio == b.wheel_slip_sigma_ratio;
+}
+
+ForwardTravel forwardTravelOf(const OdometryConfig& config) {
+  return config.use_vertical_tracker ? ForwardTravel::FromTrackingWheel
+                                     : ForwardTravel::FromDriveWheels;
 }
 }  // namespace
 
 Odometry::Odometry(OdometryConfig config)
-    : m_config(config), m_slide(config.slide), m_config_error(!odometryConfigIsValid(config)) {}
+    : m_config(config),
+      m_slide(config.slide, forwardTravelOf(config)),
+      m_config_error(!odometryConfigIsValid(config)) {}
 
 bool Odometry::setConfig(const OdometryConfig& config) {
   if (!odometryConfigIsValid(config)) return false;
@@ -72,8 +80,9 @@ bool Odometry::setConfig(const OdometryConfig& config) {
     m_has_baseline = false;
   }
   if (config.use_accelerometer != m_config.use_accelerometer ||
+      config.use_vertical_tracker != m_config.use_vertical_tracker ||
       !sameSlideConfig(config.slide, m_config.slide)) {
-    m_slide = SlideEstimator(config.slide);
+    m_slide = SlideEstimator(config.slide, forwardTravelOf(config));
   }
   m_config = config;
   m_config_error = false;
@@ -118,6 +127,9 @@ Pose2D Odometry::update(const OdometrySample& sample) {
   }
   if (m_config.use_accelerometer) {
     finite = finite && std::isfinite(sample.time_ms) && std::isfinite(sample.accel_right_ips2);
+    if (!m_config.use_vertical_tracker) {
+      finite = finite && std::isfinite(sample.accel_forward_ips2);
+    }
   }
   if (!finite || m_config_error) {
     ++m_fault_count;
@@ -156,7 +168,7 @@ Pose2D Odometry::update(const OdometrySample& sample) {
   }
 
   // Undo the rotation the wheels saw because of where they are mounted.
-  const double dy_body = forward_in + dtheta * forward_offset_right_in;
+  double dy_body = forward_in + dtheta * forward_offset_right_in;
 
   // Sideways travel of the tracking centre, in inches. With neither a
   // horizontal tracker nor the accelerometer the robot is assumed not to
@@ -169,7 +181,10 @@ Pose2D Odometry::update(const OdometrySample& sample) {
     dx_body = sideways_in - dtheta * m_config.horizontal_offset_forward.in();
   } else if (m_config.use_accelerometer) {
     const double dt_s = (sample.time_ms - m_previous.time_ms) / 1000.0;
-    dx_body = m_slide.update(dt_s, dy_body, dtheta, sample.accel_right_ips2);
+    const SlideEstimator::Travel travel = m_slide.update(
+        dt_s, dy_body, dtheta, sample.accel_right_ips2, sample.accel_forward_ips2);
+    dy_body = travel.forward_in;
+    dx_body = travel.right_in;
   }
 
   // Integrate the arc, then rotate into the field. Compass frame: x uses sin,

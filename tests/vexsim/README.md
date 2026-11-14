@@ -23,7 +23,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/vexsim/run.py
 | `--filter NAME/` | run matching scenarios, e.g. `safety/`, `wall/`, `six_motor_450/` |
 | `--motion-timeout-ms MS` | per-move time limit |
 | `--tracking-mode MODE` | `drive` (default): drive encoders only. `two`: forward and sideways tracking wheels. `vertical` / `horizontal`: one tracking wheel, drive encoders for the rest |
-| `--accelerometer KIND` | estimate the sideways slide from the IMU's accelerometer, in the `drive` and `vertical` modes. `ideal`: vexsim's reading as it is. `realistic`: with the errors a real IMU adds (see below) |
+| `--accelerometer KIND` | estimate the sideways slide from the IMU's accelerometer, in the `drive` and `vertical` modes, and in `drive` also check the wheels' forward travel against it. `ideal`: vexsim's reading as it is. `realistic`: with the errors a real IMU adds (see below) |
 
 Output includes a build log, `results.json`, and a physics CSV and controller
 trace CSV per scenario. The command exits nonzero if any check fails.
@@ -117,9 +117,11 @@ These are simulator criteria. The library does not guarantee them on a robot.
   centre. `realistic` then adds a zero error (20 mg standard deviation; the
   chip's datasheet allows 40 mg once soldered), 1% sensitivity and 1%
   cross-axis error (datasheet), a floor that tilts up to 0.2° over 48 in, a
-  chassis that rolls 1% of the sideways push into the reading, shaking up to
-  25 mg at top speed, and an IMU position told to the odometry 0.25 in off.
-  The floor, roll and shake numbers are guesses, not measurements.
+  chassis that pitches and rolls 1% of the push into the reading, shaking up
+  to 25 mg at top speed, and an IMU position told to the odometry 0.25 in
+  off. Both axes, right and forward, get their own zero, sensitivity and
+  cross-axis errors.
+  The floor, pitch, roll and shake numbers are guesses, not measurements.
 - vexsim uses +X forward, +Y left, counter-clockwise positive. The adapter
   converts to mclib's frame.
 - Motor voltage is clamped to 12 V and rounded to whole millivolts, as in the

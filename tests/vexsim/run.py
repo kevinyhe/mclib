@@ -35,7 +35,7 @@ class Sample(C.Structure):
     _fields_ += [("gps_x", C.c_double), ("gps_y", C.c_double), ("gps_heading", C.c_double),
                  ("gps_valid", C.c_int)]
     _fields_ += [("battery_mv", C.c_double)]
-    _fields_ += [("accel_right_ips2", C.c_double)]
+    _fields_ += [("accel_right_ips2", C.c_double), ("accel_forward_ips2", C.c_double)]
 
 
 ADVANCE = C.CFUNCTYPE(None, C.c_uint32, C.POINTER(Sample))
@@ -176,17 +176,17 @@ IMU_REALISM = dict(
     cross_axis_sd=0.01,      # 1% of the forward reading leaks in (datasheet)
     floor_tilt_deg=0.2,      # how far the floor tilts, peak, across a 48 in wave (guess)
     floor_wavelength_in=48.0,
-    roll_per_accel=0.01,     # the chassis rolls on the foam: 1% of the sideways push reads as tilt (guess)
+    roll_per_accel=0.01,     # the chassis rolls and pitches on the foam: 1% of the push reads as tilt (guess)
     shake_g=0.025,           # the drive shaking the IMU at top speed (guess)
     mount_error_in=0.25,     # how far off the measured IMU position is (guess)
 )
 
 
 class SimulatedAccelerometer:
-    """What the accelerometer reads toward the robot's right, in/s^2.
+    """What the accelerometer reads toward the robot's right and front, in/s^2.
 
     "ideal" is vexsim's reading moved to where the IMU is mounted.
-    "realistic" adds IMU_REALISM's errors, drawn from @p seed.
+    "realistic" adds IMU_REALISM's errors, drawn from @p seed, each axis its own.
     """
 
     def __init__(self, kind, seed, top_ips):
@@ -205,6 +205,9 @@ class SimulatedAccelerometer:
         angle = rng.uniform(0, 2 * math.pi)
         self.told_mount = (IMU_MOUNT_IN[0] + error * math.cos(angle),
                            IMU_MOUNT_IN[1] + error * math.sin(angle))
+        self.forward_zero_g = rng.gauss(0.0, r["zero_sd_g"]) if self.realistic else 0.0
+        self.forward_scale = rng.gauss(0.0, r["scale_sd"]) if self.realistic else 0.0
+        self.forward_cross_axis = rng.gauss(0.0, r["cross_axis_sd"]) if self.realistic else 0.0
 
     def floor_tilt(self, x, y):
         """The floor's slope at (x, y), radians, as a field-frame vector."""
@@ -217,23 +220,30 @@ class SimulatedAccelerometer:
         return slope
 
     def read(self, sim, inch, truth):
+        """(toward the right, toward the front), in/s^2."""
         st = sim.state
         rate = -st.r
         spin_up = -st.alpha
         forward, right = IMU_MOUNT_IN
-        accel_right = (-sim.imu.accel_y / inch + spin_up * forward - rate * rate * right)
+        accel_right = -sim.imu.accel_y / inch + spin_up * forward - rate * rate * right
+        accel_forward = sim.imu.accel_x / inch - spin_up * right - rate * rate * forward
         if not self.realistic:
-            return accel_right
-        accel_forward = sim.imu.accel_x / inch
+            return accel_right, accel_forward
         g = 386.08858
         x, y, heading = truth
         theta = math.radians(heading)
         slope = self.floor_tilt(x, y)
         tilt_right = slope[0] * math.cos(theta) - slope[1] * math.sin(theta)
+        tilt_forward = slope[0] * math.sin(theta) + slope[1] * math.cos(theta)
         shake = IMU_REALISM["shake_g"] * g * min(1.0, abs(st.u / inch) / self.top_ips)
-        return (accel_right * (1 + self.scale + IMU_REALISM["roll_per_accel"])
-                + self.cross_axis * accel_forward + self.zero_g * g + g * tilt_right
-                + self.rng.gauss(0.0, shake))
+        tilt_per_accel = IMU_REALISM["roll_per_accel"]
+        right_reading = (accel_right * (1 + self.scale + tilt_per_accel)
+                         + self.cross_axis * accel_forward + self.zero_g * g + g * tilt_right
+                         + self.rng.gauss(0.0, shake))
+        forward_reading = (accel_forward * (1 + self.forward_scale + tilt_per_accel)
+                           + self.forward_cross_axis * accel_right + self.forward_zero_g * g
+                           + g * tilt_forward + self.rng.gauss(0.0, shake))
+        return right_reading, forward_reading
 
 
 class PhysicsBridge:
@@ -473,8 +483,9 @@ class PhysicsBridge:
                 reading.horizontal = -math.degrees(self.sim.tracking["track_perp"].position)
             reading.current_ma = sum(abs(m.current) for m in self.sim.motors) * 1000 / len(self.sim.motors)
             reading.battery_mv = self.sim.battery.voltage * 1000
-            reading.accel_right_ips2 = (self.accelerometer.read(self.sim, self.inch, self.truth())
-                                        if self.accelerometer else math.nan)
+            reading.accel_right_ips2, reading.accel_forward_ips2 = (
+                self.accelerometer.read(self.sim, self.inch, self.truth()) if self.accelerometer
+                else (math.nan, math.nan))
             reading.velocity_rpm = sum(abs(self.sim.encoders[m.name].velocity)
                                        for m in self.sim.motors) * 30 / math.pi / len(self.sim.motors)
             if self.distance_sensors and reading.millis - self.last_distance_ms >= 20:
