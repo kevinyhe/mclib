@@ -38,9 +38,25 @@ double chordFactor(double dtheta) {
 
 }  // namespace
 
-Odometry::Odometry(OdometryConfig config) : m_config(config) {}
+bool odometryConfigIsValid(const OdometryConfig& config) {
+  if (!config.use_accelerometer) return true;
+  return !config.use_horizontal_tracker && slideEstimatorConfigIsValid(config.slide);
+}
 
-void Odometry::setConfig(const OdometryConfig& config) {
+namespace {
+bool sameSlideConfig(const SlideEstimatorConfig& a, const SlideEstimatorConfig& b) {
+  return a.imu_forward_in == b.imu_forward_in && a.imu_right_in == b.imu_right_in &&
+         a.accel_sigma_ips2 == b.accel_sigma_ips2 && a.zero_sigma_ips2 == b.zero_sigma_ips2 &&
+         a.zero_walk_ips2_per_sqrt_in == b.zero_walk_ips2_per_sqrt_in &&
+         a.grip_sigma_ips == b.grip_sigma_ips && a.slide_sigma_s == b.slide_sigma_s;
+}
+}  // namespace
+
+Odometry::Odometry(OdometryConfig config)
+    : m_config(config), m_slide(config.slide), m_config_error(!odometryConfigIsValid(config)) {}
+
+bool Odometry::setConfig(const OdometryConfig& config) {
+  if (!odometryConfigIsValid(config)) return false;
   // Samples from another layout/scale are not a usable delta baseline. In
   // particular, disabled tracker fields may legitimately contain NaN.
   if (config.drive_inches_per_revolution != m_config.drive_inches_per_revolution ||
@@ -49,10 +65,18 @@ void Odometry::setConfig(const OdometryConfig& config) {
       config.vertical_offset_right != m_config.vertical_offset_right ||
       config.use_horizontal_tracker != m_config.use_horizontal_tracker ||
       config.horizontal_circumference != m_config.horizontal_circumference ||
-      config.horizontal_offset_forward != m_config.horizontal_offset_forward) {
+      config.horizontal_offset_forward != m_config.horizontal_offset_forward ||
+      config.use_accelerometer != m_config.use_accelerometer ||
+      !sameSlideConfig(config.slide, m_config.slide)) {
     m_has_baseline = false;
   }
+  if (config.use_accelerometer != m_config.use_accelerometer ||
+      !sameSlideConfig(config.slide, m_config.slide)) {
+    m_slide = SlideEstimator(config.slide);
+  }
   m_config = config;
+  m_config_error = false;
+  return true;
 }
 
 OdometryConfig Odometry::getConfig() const {
@@ -91,7 +115,10 @@ Pose2D Odometry::update(const OdometrySample& sample) {
   if (m_config.use_horizontal_tracker) {
     finite = finite && std::isfinite(sample.horizontal_deg);
   }
-  if (!finite) {
+  if (m_config.use_accelerometer) {
+    finite = finite && std::isfinite(sample.time_ms) && std::isfinite(sample.accel_right_ips2);
+  }
+  if (!finite || m_config_error) {
     ++m_fault_count;
     return m_pose;
   }
@@ -127,20 +154,22 @@ Pose2D Odometry::update(const OdometrySample& sample) {
     forward_offset_right_in = 0.0;
   }
 
-  // Sideways travel of the tracking centre, in inches. Without a horizontal
-  // tracker the robot is assumed not to strafe.
-  double sideways_in = 0.0;
-  double sideways_offset_forward_in = 0.0;
-  if (m_config.use_horizontal_tracker) {
-    sideways_in =
-        degreesToInches(sample.horizontal_deg - m_previous.horizontal_deg,
-                        m_config.horizontal_circumference.in());
-    sideways_offset_forward_in = m_config.horizontal_offset_forward.in();
-  }
-
   // Undo the rotation the wheels saw because of where they are mounted.
   const double dy_body = forward_in + dtheta * forward_offset_right_in;
-  const double dx_body = sideways_in - dtheta * sideways_offset_forward_in;
+
+  // Sideways travel of the tracking centre, in inches. With neither a
+  // horizontal tracker nor the accelerometer the robot is assumed not to
+  // move sideways.
+  double dx_body = 0.0;
+  if (m_config.use_horizontal_tracker) {
+    const double sideways_in =
+        degreesToInches(sample.horizontal_deg - m_previous.horizontal_deg,
+                        m_config.horizontal_circumference.in());
+    dx_body = sideways_in - dtheta * m_config.horizontal_offset_forward.in();
+  } else if (m_config.use_accelerometer) {
+    const double dt_s = (sample.time_ms - m_previous.time_ms) / 1000.0;
+    dx_body = m_slide.update(dt_s, dy_body, dtheta, sample.accel_right_ips2);
+  }
 
   // Integrate the arc, then rotate into the field. Compass frame: x uses sin,
   // y uses cos.
@@ -167,6 +196,14 @@ bool Odometry::hasBaseline() const {
 
 std::uint32_t Odometry::faultCount() const {
   return m_fault_count;
+}
+
+bool Odometry::hasConfigurationError() const {
+  return m_config_error;
+}
+
+double Odometry::sidewaysSpeedIps() const {
+  return m_config.use_accelerometer ? m_slide.sidewaysSpeedIps() : 0.0;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,9 +286,9 @@ bool correctOdometryPosition(double x_in, double y_in, std::uint32_t jumps) {
   return true;
 }
 
-void setOdometryConfig(const OdometryConfig& config) {
+bool setOdometryConfig(const OdometryConfig& config) {
   sync::LockGuard lock(odometryMutex());
-  odometryInstance().setConfig(config);
+  return odometryInstance().setConfig(config);
 }
 
 OdometryConfig getOdometryConfig() {

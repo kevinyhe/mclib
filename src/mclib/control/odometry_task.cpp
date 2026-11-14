@@ -8,6 +8,7 @@
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/odometry_fusion.hpp"
 #include "mclib/control/robot_state.hpp"
+#include "mclib/time.hpp"
 #include "mclib/utils.hpp"
 #include "pros/rtos.hpp"
 
@@ -47,7 +48,13 @@ bool odometrySetupIsUsable(const OdometrySetup& setup) {
   if (setup.horizontal.has_value() && !setup.horizontal->position_deg) {
     return false;
   }
-  return has_drive_encoders || has_vertical;
+  if (setup.accelerometer.has_value() && !setup.accelerometer->right_ips2) {
+    return false;
+  }
+  if (setup.fusion != nullptr && setup.fusion->hasConfigurationError()) {
+    return false;
+  }
+  return (has_drive_encoders || has_vertical) && odometryConfigIsValid(odometryConfigFrom(setup));
 }
 
 OdometrySample sampleOdometrySensors(const OdometrySetup& setup) {
@@ -63,6 +70,10 @@ OdometrySample sampleOdometrySensors(const OdometrySetup& setup) {
       setup.horizontal.has_value() && setup.horizontal->position_deg
           ? setup.horizontal->position_deg()
           : 0.0;
+  sample.time_ms = static_cast<double>(time::millis());
+  if (setup.accelerometer.has_value() && setup.accelerometer->right_ips2) {
+    sample.accel_right_ips2 = setup.accelerometer->right_ips2();
+  }
   return sample;
 }
 

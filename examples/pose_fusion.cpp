@@ -190,14 +190,25 @@ mclib::control::PoseFusion fusion(fusion_config, filterInputs());
 // trusts a GPS reading to position_sigma_in, or to the sensor's own error
 // estimate when that is larger. PoseFusion uses the GPS position and never
 // its heading.
+//
+// latency_ms is how old a GPS pose already is when the program reads it. The
+// filter applies the reading where the robot was then, not where it is now:
+// at 60 in/s, 50 ms is 3 in. 0 applies it where the robot is now. Measure it
+// before setting it; mclib has no measured number for the V5 GPS. It can be
+// at most the filter's history_ms, 250 ms by default, or setGps() refuses it.
 void giveFilterTheGps() {
-  fusion.setGps({
+  const bool accepted = fusion.setGps({
       .read = [] { return gps.pose(); },
       .error_in = [] { return (gps.getErrorM() * 1_m).in(); },
       .position_sigma_in = 1.0,
+      .period_ms = 20,
+      .latency_ms = 0,
       .origin_x_in = map_centre_in,
       .origin_y_in = map_centre_in,
   });
+  if (!accepted) {
+    master.setText(2, 0, "GPS LATENCY TOO LONG");
+  }
 }
 
 void showFilter(const mclib::Pose2D& filtered,

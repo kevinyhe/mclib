@@ -5,9 +5,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #pragma once
 
+#include "mclib/control/slide_estimator.hpp"
 #include "mclib/math.hpp"
 #include "mclib/units/units.hpp"
 
+#include <cmath>
 #include <cstdint>
 
 /**
@@ -30,6 +32,9 @@
  *   wheel. Immune to drive slip along the forward axis.
  * - **2 tracking wheels.** Adds a horizontal (sideways-rolling) wheel, which
  *   is what catches lateral push and the sideways component of an arc.
+ *
+ * With no horizontal wheel, the IMU's accelerometer can stand in for it:
+ * `use_accelerometer` adds a `SlideEstimator`'s sideways travel each tick.
  *
  * ## The math
  *
@@ -121,7 +126,26 @@ struct OdometryConfig {
    *        **ahead** of the tracking centre.
    */
   QLength horizontal_offset_forward = 0.0 * units::inch;
+
+  /**
+   * @brief Estimate the sideways slide from the IMU's accelerometer.
+   *
+   * Needs `OdometrySample::time_ms` and `OdometrySample::accel_right_ips2`.
+   * Not with a horizontal tracking wheel, which measures the slide itself:
+   * `odometryConfigIsValid()` rejects the pair.
+   */
+  bool use_accelerometer = false;
+
+  /// @brief Where the IMU is and how noisy it is, for `use_accelerometer`.
+  SlideEstimatorConfig slide{};
 };
+
+/**
+ * @brief False for a configuration `Odometry` refuses: the accelerometer
+ *        together with a horizontal tracking wheel, or a `slide` that
+ *        `slideEstimatorConfigIsValid()` rejects while the accelerometer is on.
+ */
+bool odometryConfigIsValid(const OdometryConfig& config);
 
 /**
  * @brief One raw reading of every sensor the odometry can use.
@@ -141,6 +165,12 @@ struct OdometrySample {
   double vertical_deg = 0.0;
   /// @brief Horizontal tracking wheel position, degrees.
   double horizontal_deg = 0.0;
+  /// @brief When the sample was read, milliseconds. Used with the
+  ///        accelerometer.
+  double time_ms = NAN;
+  /// @brief Accelerometer reading toward the robot's right, in/s^2. NAN
+  ///        marks a fault.
+  double accel_right_ips2 = NAN;
 };
 
 /**
@@ -151,12 +181,17 @@ struct OdometrySample {
  */
 class Odometry {
  public:
+  /// @brief A @p config that `odometryConfigIsValid()` rejects is a
+  ///        configuration error: every sample counts as a fault and the pose
+  ///        stays put until `setConfig()` takes a valid one.
   explicit Odometry(OdometryConfig config = {});
 
   /// @brief Replace the configuration without moving the pose. A changed
   ///        layout/geometry re-seeds on the next valid sample; an identical
   ///        configuration preserves the baseline and pending travel.
-  void setConfig(const OdometryConfig& config);
+  /// @return False, changing nothing, when `odometryConfigIsValid()` rejects
+  ///         @p config.
+  bool setConfig(const OdometryConfig& config);
   /// @brief The configuration in use.
   OdometryConfig getConfig() const;
 
@@ -210,8 +245,18 @@ class Odometry {
   /// @brief How many samples have been rejected as non-finite since construction.
   std::uint32_t faultCount() const;
 
+  /// @brief True when the constructor was given a configuration that
+  ///        `odometryConfigIsValid()` rejects.
+  bool hasConfigurationError() const;
+
+  /// @brief The sideways speed `use_accelerometer` works out, in/s, right
+  ///        positive. Zero without the accelerometer.
+  double sidewaysSpeedIps() const;
+
  private:
   OdometryConfig m_config;
+  SlideEstimator m_slide;
+  bool m_config_error = false;
   Pose2D m_pose{};
   OdometrySample m_previous{};
   bool m_has_baseline = false;
@@ -281,7 +326,9 @@ bool correctOdometryPosition(double x_in, double y_in);
 bool correctOdometryPosition(double x_in, double y_in, std::uint32_t jumps);
 
 /// @brief Configure the library's odometry instance.
-void setOdometryConfig(const OdometryConfig& config);
+/// @return False, changing nothing, when `odometryConfigIsValid()` rejects
+///         @p config.
+bool setOdometryConfig(const OdometryConfig& config);
 
 /// @brief The library odometry instance's configuration.
 OdometryConfig getOdometryConfig();

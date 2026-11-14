@@ -40,6 +40,9 @@ struct Sample {
   double gps_x, gps_y, gps_heading;
   int gps_valid;
   double battery_mv;
+  // What the IMU's accelerometer reads toward the robot's right, in/s^2;
+  // NaN when the scenario gives odometry no accelerometer.
+  double accel_right_ips2;
 };
 using Advance = void (*)(std::uint32_t, Sample*);
 using Output = void (*)(int side, int mode, double volts);
@@ -64,6 +67,7 @@ struct FusionRig {
   std::unique_ptr<mclib::control::PoseFusion> fusion;
   std::optional<mclib::control::OdometryFusion> on_odometry;
   std::vector<double> readings;  // latest, -1 = none since last tick
+  std::optional<mclib::control::GpsInput> gps;
 } fusion_rig;
 mclib::path::TrajectoryConstraints ramsete_limits;
 
@@ -110,7 +114,8 @@ void refresh(std::uint32_t ms) {
   if (sample.cancel) mclib::control::requestCancel();
   last_integrated_pose = mclib::control::odometryTick(
       {drive.headingDeg() * std::acos(-1.0) / 180,
-       drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal});
+       drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal,
+       static_cast<double>(sample.millis), sample.accel_right_ips2});
   if (fusion_rig.on_odometry) fusion_rig.on_odometry->step(sample.millis);
   if (sim_after_refresh_hook) sim_after_refresh_hook(sample.millis);
 }
@@ -325,7 +330,15 @@ extern "C" void sim_gps_enable(double odom_along_var_per_in, double odom_side_va
   // The simulated robot starts at the field centre and so does odometry, so
   // the map frame is odometry + 72; the GPS origin is the field centre.
   gps.origin_x_in = gps.origin_y_in = kFieldOffsetIn;
+  fusion_rig.gps = gps;
   fusion_rig.fusion->setGps(gps);
+}
+
+// Tell the filter each GPS reading was taken @p latency_ms before it is
+// read, after sim_gps_enable(). Returns 0 when the filter refuses it.
+extern "C" int sim_set_gps_latency(double latency_ms) {
+  fusion_rig.gps->latency_ms = static_cast<std::uint32_t>(latency_ms);
+  return fusion_rig.fusion->setGps(*fusion_rig.gps) ? 1 : 0;
 }
 
 // Make wallReset() (action 8) check a distance sensor against the wall.
@@ -578,6 +591,19 @@ extern "C" void sim_set_horizontal_tracker(double circumference, double forward_
   config.horizontal_offset_forward = forward_offset * inch;
   mclib::control::setOdometryConfig(config);
   refresh(0);
+}
+
+// Add the accelerometer's sideways slide to odometry, the IMU this far ahead
+// of and right of the tracking centre. Returns 0 when odometry refuses it,
+// as it does with a horizontal tracking wheel.
+extern "C" int sim_use_accelerometer(double imu_forward_in, double imu_right_in) {
+  auto config = mclib::control::getOdometryConfig();
+  config.use_accelerometer = true;
+  config.slide.imu_forward_in = imu_forward_in;
+  config.slide.imu_right_in = imu_right_in;
+  if (!mclib::control::setOdometryConfig(config)) return 0;
+  refresh(0);
+  return 1;
 }
 
 // Which tracking wheels odometry reads, after sim_set_trackers().

@@ -45,6 +45,7 @@ namespace test {
 namespace host_devices {
 std::map<int, Motor> motors;
 std::map<int, double> imu_rotation_deg;
+std::map<int, ImuAccel> imu_accel_g;
 std::map<int, int> analog;
 std::map<int, bool> button_down;
 std::vector<std::string> controller_text;
@@ -58,6 +59,7 @@ std::vector<int> cleared_lines;
 void reset() {
   motors.clear();
   imu_rotation_deg.clear();
+  imu_accel_g.clear();
   analog.clear();
   button_down.clear();
   controller_text.clear();
@@ -256,6 +258,10 @@ std::int32_t Imu::reset(bool blocking) const {
   return 1;
 }
 double Imu::get_rotation() const { return hd::imu_rotation_deg[_port]; }
+pros::imu_accel_s_t Imu::get_accel() const {
+  const auto& accel = hd::imu_accel_g[_port];
+  return {accel.x, accel.y, accel.z};
+}
 double Imu::get_heading() const {
   const double wrapped = std::fmod(hd::imu_rotation_deg[_port], 360.0);
   return wrapped < 0.0 ? wrapped + 360.0 : wrapped;
@@ -481,7 +487,6 @@ std::int32_t Imu::set_yaw(const double) const { return {}; }
 std::int32_t Imu::set_pitch(const double) const { return {}; }
 std::int32_t Imu::set_roll(const double) const { return {}; }
 std::int32_t Imu::set_euler(const pros::euler_s_t) const { return {}; }
-pros::imu_accel_s_t Imu::get_accel() const { return {}; }
 pros::ImuStatus Imu::get_status() const { return {}; }
 bool Imu::is_calibrating() const { return {}; }
 imu_orientation_e_t Imu::get_physical_orientation() const { return {}; }

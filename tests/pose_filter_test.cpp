@@ -214,6 +214,118 @@ int main() {
     CHECK_EQ(filter.rejected(), 1);
   }
 
+  std::printf("-- a late GPS reading is applied at the time it was taken\n");
+  {
+    // Driving +Y at 60 in/s on a 10 ms loop, odometry reading 10% short. The
+    // GPS reads the true position, but each reading arrives 50 ms late.
+    auto final_error = [](bool timed) {
+      PoseFilter filter;
+      filter.reset(Pose2D{72, 20, 0}, 0.5, 0.5);
+      Pose2D odom{72, 20, 0};
+      double true_y = 20;
+      std::vector<double> past_truth;
+      for (int tick = 1; tick <= 150; ++tick) {
+        const Pose2D previous = odom;
+        odom.y += 0.6 * 0.9;
+        true_y += 0.6;
+        past_truth.push_back(true_y);
+        const std::uint32_t now_ms = 10 * tick;
+        filter.predict(previous, odom, now_ms);
+        if (tick % 2 == 0 && tick > 5) {
+          const Pose2D taken{72, past_truth[past_truth.size() - 6], NAN};
+          if (timed) {
+            filter.updateGps(taken, 0.5, -1.0, now_ms - 50);
+          } else {
+            filter.updateGps(taken, 0.5);
+          }
+        }
+      }
+      return std::fabs(filter.pose().y - true_y);
+    };
+    const double timed = final_error(true), untimed = final_error(false);
+    std::printf("   applied when taken: %.2f in off; applied when it arrived: %.2f in off\n",
+                timed, untimed);
+    CHECK(timed < 0.6);
+    CHECK(untimed > 2.0);
+  }
+
+  std::printf("-- a late reading lands where an on-time one would\n");
+  {
+    // Same steps and readings; one filter gets the GPS fix on time, the
+    // other 60 ms later, between distance readings it has already used.
+    const snapshot::SensorGeometry left{-6.0f, 0.0f, -90.0f, 0u, 200.0f};
+    auto run = [&](bool late) {
+      PoseFilter filter;
+      filter.reset(Pose2D{40, 30, 0}, 2.0, 1.0);
+      Pose2D odom{40, 30, 0};
+      for (int tick = 1; tick <= 20; ++tick) {
+        const Pose2D previous = odom;
+        odom.y += 0.4;
+        odom.theta += 0.2 * kDeg;
+        filter.predict(previous, odom, 10 * tick);
+        if (tick == 8 && !late) filter.updateGps(Pose2D{41, 33.5, NAN}, 0.7, -1.0, 80);
+        if (tick % 3 == 0) filter.updateDistance(left, 33.5 + 0.02 * tick, 10 * tick);
+        if (tick == 14 && late) filter.updateGps(Pose2D{41, 33.5, NAN}, 0.7, -1.0, 80);
+      }
+      return filter;
+    };
+    const PoseFilter on_time = run(false), late = run(true);
+    CHECK_NEAR(late.pose().x, on_time.pose().x, 1e-9);
+    CHECK_NEAR(late.pose().y, on_time.pose().y, 1e-9);
+    CHECK_NEAR(late.pose().theta, on_time.pose().theta, 1e-12);
+    CHECK_NEAR((late.covariance() - on_time.covariance()).norm(), 0.0, 1e-9);
+    CHECK_EQ(late.accepted(), on_time.accepted());
+  }
+
+  std::printf("-- a reading older than the remembered steps is refused\n");
+  {
+    PoseFilterConfig config;
+    config.history_ms = 100;
+    PoseFilter filter(config);
+    filter.reset(Pose2D{72, 72, 0}, 3.0, 1.0);
+    Pose2D odom{72, 72, 0};
+    for (int tick = 1; tick <= 30; ++tick) {
+      const Pose2D previous = odom;
+      odom.y += 0.5;
+      filter.predict(previous, odom, 10 * tick);
+    }
+    const Pose2D before = filter.pose();
+    CHECK(!filter.updateGps(Pose2D{75, 87, NAN}, 0.5, -1.0, 150));
+    CHECK_EQ(filter.tooOld(), 1);
+    CHECK_EQ(filter.pose().x, before.x);
+    CHECK(filter.updateGps(Pose2D{75, 87, NAN}, 0.5, -1.0, 250));
+    CHECK(filter.pose().x > before.x);
+    // The untimed predict() forgets the steps: nothing late can land after it.
+    const Pose2D previous = odom;
+    odom.y += 0.5;
+    filter.predict(previous, odom);
+    CHECK(filter.updateGps(Pose2D{75, 87.5, NAN}, 0.5, -1.0, 290));
+    CHECK_EQ(filter.tooOld(), 1);
+  }
+
+  std::printf("-- PoseFusion refuses a latency longer than the filter remembers\n");
+  {
+    mclib::control::PoseFusionConfig config;
+    config.filter.history_ms = 100;
+    mclib::control::PoseFusion fine(config, {});
+    CHECK(!fine.hasConfigurationError());
+    mclib::control::GpsInput gps;
+    gps.read = [] { return std::optional<Pose2D>(); };
+    gps.latency_ms = 100;
+    CHECK(fine.setGps(gps));
+    gps.latency_ms = 101;
+    CHECK(!fine.setGps(gps));
+
+    mclib::control::DistanceSensorInput late_sensor{.geometry = {0.0f, 0.0f, 0.0f},
+                                                    .read_in = [] { return 10.0; },
+                                                    .latency_ms = 101};
+    mclib::control::PoseFusion misconfigured(config, {late_sensor});
+    CHECK(misconfigured.hasConfigurationError());
+    misconfigured.reset(Pose2D{72, 72, 0});
+    CHECK(!misconfigured.step(Pose2D{72, 80, 0}, 10).has_value());
+    CHECK_EQ(misconfigured.accepted() + misconfigured.rejected(), 0);
+  }
+
   std::printf("-- distance reading edge cases\n");
   {
     PoseFilter filter;
