@@ -14,15 +14,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   `arm_units_per_degree`. It stays on after arrival, including with
   `hold_output = false`, and is off under a manual voltage, on a sensor fault
   and after `onDisabled()`. It defaults to 0, so existing code is unchanged.
+- `PositionMechanismConfig::hold_ki`: an integral for the hold after
+  arrival. The PID zeroes its own integral inside `small_error`, so the hold
+  was P only and could sit anywhere in that band. From the tick after
+  arrival `hold_ki * error` is summed every tick and added to the output,
+  capped at `integral_max_volts`. `moveTo()`, a manual voltage, a sensor
+  fault and `onDisabled()` clear it. It defaults to 0.
 
 ### Changed
 
 - The path planner's cascade lift holds itself up with `gravity_volts`
   instead of adding 0.9 V outside the loop, so the exported C++ uses it too.
   A robot project needs an mclib with `gravity_volts` to build that export.
-- The path planner reads the lift through a simulated V5 motor encoder: a
-  position held for the smart port's 10 ms and quantised to the cartridge's
-  ticks, as the drive's encoders are. It used to read the exact shaft angle.
+- The path planner reads the lift and the roller through simulated V5 motor
+  encoders: a position held for the smart port's 10 ms and quantised to the
+  cartridge's ticks, as the drive's encoders are. They used to read the
+  exact shaft angle.
+- The planner's lift takes 0.185 in of string stretch off its height
+  reading, measured in the simulator, instead of 0.25 in, and holds with
+  `hold_ki` 0.3 capped at 1 V. 0.5 s after a move the claw is within 0.05 in
+  of every preset but Top, holding nothing or a stack. It was 0.11 to
+  0.22 in high.
 
 ## 0.4.3
 

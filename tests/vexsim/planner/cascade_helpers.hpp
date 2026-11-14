@@ -36,7 +36,7 @@ constexpr double kLowestClawIn = 6.62;
 constexpr double kDrumDiameterIn = 1.0;
 constexpr double kMotorTurnsPerDrumTurn = 1.5;
 constexpr int kLiftStages = 5;
-constexpr double kStringStretchIn = 0.25;
+constexpr double kStringStretchIn = 0.185;
 
 inline double clawHeightIn(double lift_motor_degrees) {
   const double string_in = lift_motor_degrees / 360.0 * M_PI * kDrumDiameterIn / kMotorTurnsPerDrumTurn;
@@ -81,6 +81,8 @@ inline mclib::mechanism::PositionMechanismConfig liftConfig() {
   config.small_error = 0.15;
   config.big_error = 0.5;
   config.derivative_tolerance = 0.05;
+  config.hold_ki = 0.3;
+  config.integral_max_volts = 1.0;
   // What the lift motors need to hold the stages up with the rubber bands'
   // help: 0.6 V at the bottom, 0.9 V at 16 in and at the top.
   config.gravity_volts = 0.9;

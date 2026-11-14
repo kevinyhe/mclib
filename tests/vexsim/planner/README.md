@@ -275,7 +275,7 @@ and **Export C++** copies it.
 The claw height is the middle of the jaws. A motor turn winds
 pi / 1.5 = 2.09 in of string and raises the claw five times that,
 10.47 in. The lift reads its height from one motor's encoder and takes off
-the 0.25 in the strings stretch once the stages hang on them. The encoder
+the 0.185 in the strings stretch once the stages hang on them. The encoder
 works as the drive's do: a reading is held for the smart port's 10 ms and
 counts the green cartridge's 900 ticks a turn, 0.012 in of claw height.
 
@@ -336,7 +336,8 @@ does this. Four things make it work:
 To turn a Toggle, back up to 2 in or less off the wall in the middle of
 the Toggle and add a **Turn a Toggle with the roller** step. It turns the
 roller as far as you set, read from its motor's encoder, while the drive
-pushes the robot back onto the wall, then stops both. Each flap turns the
+pushes the robot back onto the wall, then stops both. The encoder works as
+the lift's does: held for 10 ms and 900 ticks a turn. Each flap turns the
 Toggle one face, its top toward the wall. On red's wall (the left and
 bottom Toggles) the first face from yellow is blue and the second red. On
 blue's wall (top and right) the first is red and the second blue. With the
@@ -453,8 +454,8 @@ and `vexsim/foam.py`. The planner adds these:
 | What | Guess | Why |
 | --- | --- | --- |
 | Lift presets | the claw heights in the table above | worked out from the Goal and Pin heights: "on" sets the held Cup's rim on the Pin's flange, "over" carries the Cup's bottom 0.25 in over the Pin's tip; vexsim's `LIFT_HEIGHTS` |
-| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V, and `gravity_volts` 0.9 V to hold the stages up with the rubber bands' help | tuned in the simulator. With nothing in the claw, a move up ends 0.00 to 0.09 in from the preset and a move down 0.18 to 0.25 in high; 0.5 s later the claw sits 0.12 to 0.21 in high |
-| String stretch | 0.25 in | measured in the simulator: 0.24 in holding nothing, 0.26 to 0.31 in holding a stack |
+| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V; `gravity_volts` 0.9 V to hold the stages up with the rubber bands' help; `hold_ki` 0.3 V per inch per 10 ms after arrival, capped at 1 V | tuned in the simulator. A lift step ends up to 0.19 in off the preset. 0.5 s later the claw is 0.00 to 0.05 in over it holding nothing and within 0.03 in holding a stack. Top ends 0.09 in low: the stages are on their stops at 46.63 in |
+| String stretch | 0.185 in | measured in the simulator 0.5 s after a move: 0.15 to 0.18 in holding nothing, 0.18 to 0.23 in holding a stack, less after a move down than after a move up. 0.185 in is the middle |
 | Claw step | 170 ms | the 160 ms opening stroke from vexsim's valve and 12 mm piston, guesses in its `GUESSES`, and a margin |
 | Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
 | Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
