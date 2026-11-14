@@ -1170,6 +1170,17 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result["summary"]["broke_rule_in_step"], 0)
         self.assertEqual(result["autonomous"]["rules"]["motors_w"]["passed"], False)
 
+    def test_13_a_55_w_drive_is_inside_r11_but_over_r10_with_the_cascade(self):
+        project = dict(field="override", preload="none", robot=dict(preset="six_motor_55w"),
+                       start=dict(x=0, y=-61.7, heading=0), steps=[dict(type="drive", distance=5)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 1, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        self.assertIn("The drive motors are rated 55 W and all the motors 99 W. The limits are 55 W for the drive "
+                      "(R11) and 88 W in all (R10).", result["steps"][0]["rule_breaks"])
+        self.assertEqual(result["autonomous"]["rules"]["motors_w"],
+                         dict(drive=55, total=99.0, drive_limit=55.0, total_limit=88.0, passed=False))
+
     def run_together(self, projects):
         def run(item):
             name, project = item

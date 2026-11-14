@@ -43,7 +43,7 @@ OUTPUT = C.CFUNCTYPE(None, C.c_int, C.c_int, C.c_double)
 
 
 def build(destination, extra_sources=()):
-    sources = ["control/motion", "control/chassis_io", "control/motion_config",
+    sources = ["control/motion", "control/chassis_io", "control/motion_config", "device/types",
                "control/motion_math", "control/scaling", "control/robot_state",
                "control/odometry", "control/slide_estimator", "chassis/chassis_math", "pid", "math", "utils",
                "control/ramsete", "path/trajectory", "path/path", "path/spline",
@@ -69,6 +69,10 @@ def load_library(library):
     lib = C.CDLL(str(library))
     lib.sim_init.argtypes = [ADVANCE, OUTPUT, C.c_double, C.c_double, C.c_double, C.c_int]
     lib.sim_init.restype = None
+    lib.sim_volts_for_5_5w_motor.argtypes = [C.c_double]
+    lib.sim_volts_for_5_5w_motor.restype = C.c_double
+    lib.sim_reading_scale_for_5_5w_motor.argtypes = [C.c_int]
+    lib.sim_reading_scale_for_5_5w_motor.restype = C.c_double
     lib.sim_run.argtypes = [C.c_int] + [C.c_double] * 4 + [C.c_int] * 2 + [C.c_double] * 2
     lib.sim_run.restype = C.c_int
     lib.sim_pose.argtypes = [C.POINTER(C.c_double)]
@@ -153,6 +157,8 @@ def load_library(library):
 # drive: drive encoders only. two: forward and sideways tracking wheels.
 # vertical / horizontal: one tracking wheel, drive encoders for the rest.
 TRACKING_MODES = ("drive", "two", "vertical", "horizontal")
+#: vexsim cartridge names in the order of mclib::device::Gearset
+MCLIB_GEARSETS = ("red", "green", "blue")
 # PoseFusion's odometry variance per inch, (forward, sideways), for each mode.
 # A tracking wheel drifts far less than the drive encoders, but only in the
 # direction it rolls: with one wheel, the other direction is as unsure as
@@ -261,7 +267,7 @@ class PhysicsBridge:
                  gps_latency_ms=0, gps_latency_known=False, traction="none"):
         from vexsim import Simulator, presets
         from vexsim.chassis import add_tracking_wheels, with_traction_wheels
-        from vexsim.motor import BrakeMode
+        from vexsim.motor import BrakeMode, v5_5_5w
         from vexsim.sim import SimConfig
         from vexsim.units import INCH
         self.lib, self.inch = lib, INCH
@@ -291,6 +297,19 @@ class PhysicsBridge:
         self.sim.dynamics.constrained = constrained
         self.sides = [[m for unit in units for m in unit.motors] for units in
                       (chassis.left_units(), chassis.right_units())]
+        # A side with both kinds is a three-list MotorGroup: its 5.5 W motors
+        # are read on the 11 W motors' shaft and get less voltage. A side of
+        # one kind is a one-list group and reads and drives as it is.
+        five_five_watt = v5_5_5w().name
+        self.listed_5_5w = []
+        self.reading_scales = []
+        for side in self.sides:
+            mixed = len({motor.spec.name for motor in side}) > 1
+            listed = [mixed and motor.spec.name == five_five_watt for motor in side]
+            gearset = next(motor.cartridge for motor, flag in zip(side, listed) if not flag)
+            scale = lib.sim_reading_scale_for_5_5w_motor(MCLIB_GEARSETS.index(gearset)) if mixed else 1.0
+            self.listed_5_5w.append(listed)
+            self.reading_scales.append([scale if flag else 1.0 for flag in listed])
         self.modes = [BrakeMode.COAST, BrakeMode.BRAKE, BrakeMode.HOLD]
         self.fault = fault
         self.fault_injected = False
@@ -320,7 +339,9 @@ class PhysicsBridge:
         self.accelerometer = None
         self.step_callback = ADVANCE(self.advance)
         self.output_callback = OUTPUT(self.write)
-        wheel = chassis.left_units()[0]
+        listed_names = {motor.name for side, flags in zip(self.sides, self.listed_5_5w)
+                        for motor, flag in zip(side, flags) if flag}
+        wheel = next(unit for unit in chassis.left_units() if unit.driven and unit.motors[0].name not in listed_names)
         lib.sim_init(self.step_callback, self.output_callback, 2 * wheel.radius / INCH,
                      chassis.track_width / INCH, 1.0 / wheel.gear_ratio, encoder_heading)
         trackers = {u.name: u for u in chassis.wheel_units if u.name.startswith("track_")}
@@ -419,10 +440,10 @@ class PhysicsBridge:
         for label, units in (("left", self.sim.chassis.left_units()),
                              ("right", self.sim.chassis.right_units())):
             frame[f"{label}_wheel_angle_rad"] = sum(u.angle for u in units) / len(units)
-        for label, motors in zip(("left", "right"), self.sides):
-            encoders = [self.sim.encoders[m.name] for m in motors]
-            frame.update({f"{label}_encoder_deg": sum(math.degrees(e.position) for e in encoders) / len(encoders),
-                          f"{label}_encoder_rpm": sum(e.velocity for e in encoders) * 30 / math.pi / len(encoders),
+        for side, (label, motors) in enumerate(zip(("left", "right"), self.sides)):
+            encoder_deg, encoder_rpm = self.side_encoders(side)
+            frame.update({f"{label}_encoder_deg": encoder_deg,
+                          f"{label}_encoder_rpm": encoder_rpm,
                           f"{label}_current_amps": sum(abs(m.current) for m in motors),
                           f"{label}_temp_c": max(m.temperature for m in motors)})
         for label, name, sign in (("parallel", "track_parallel", 1),
@@ -450,19 +471,31 @@ class PhysicsBridge:
         if self.exceptions:
             raise RuntimeError("; ".join(self.exceptions))
 
+    def side_encoders(self, side):
+        """Mean encoder position (deg) and speed (rpm) of one drive side, as
+        mclib's MotorGroup reads them."""
+        motors, scales = self.sides[side], self.reading_scales[side]
+        encoders = [self.sim.encoders[m.name] for m in motors]
+        degrees = sum(math.degrees(e.position) * scale for e, scale in zip(encoders, scales)) / len(motors)
+        rpm = sum(e.velocity * scale for e, scale in zip(encoders, scales)) * 30 / math.pi / len(motors)
+        return degrees, rpm
+
     def write(self, side, mode, volts):
         try:
             if not math.isfinite(volts):
                 raise ValueError(f"invalid motor voltage {volts}")
             # Match MotorGroup::setVoltage: clamp to the rail, then integer mV.
-            volts = math.trunc(max(-12.0, min(12.0, volts)) * 1000) / 1000
+            clamped = max(-12.0, min(12.0, volts))
+            volts = math.trunc(clamped * 1000) / 1000
             self.commands[side] = (mode, volts)
             self.peak_command = max(self.peak_command, abs(volts))
-            for motor in self.sides[side]:
-                if mode == 0:
-                    motor.set_voltage(volts)
-                else:
+            for motor, listed in zip(self.sides[side], self.listed_5_5w[side]):
+                if mode != 0:
                     motor.stop(self.modes[mode - 1])
+                elif listed:
+                    motor.set_voltage(math.trunc(self.lib.sim_volts_for_5_5w_motor(clamped) * 1000) / 1000)
+                else:
+                    motor.set_voltage(volts)
         except Exception as error:
             self.exceptions.append(str(error))
             self.sim.stop_all(self.modes[1])
@@ -481,11 +514,10 @@ class PhysicsBridge:
             reading = sample.contents
             reading.millis = round(self.sim.t * 1000)
             reading.heading = -math.degrees(self.unwrapped_heading)
-            for side, name in zip(self.sides, ("left", "right")):
-                setattr(reading, name, sum(math.degrees(self.sim.encoders[m.name].position)
-                                          for m in side) / len(side))
-                setattr(reading, name + "_rpm", sum(self.sim.encoders[m.name].velocity
-                                                    for m in side) * 30 / math.pi / len(side))
+            for side, name in enumerate(("left", "right")):
+                degrees, rpm = self.side_encoders(side)
+                setattr(reading, name, degrees)
+                setattr(reading, name + "_rpm", rpm)
             if self.tracking_mode != "drive" and "track_parallel" in self.sim.tracking:
                 reading.vertical = math.degrees(self.sim.tracking["track_parallel"].position)
             if self.tracking_mode != "drive":
@@ -755,7 +787,7 @@ def move_tolerance(name, action):
 #: The drives the basic moves run on: (name prefix, vexsim preset, traction wheels)
 MOVE_DRIVES = (("four_motor_200", "four_motor_200", "none"), ("six_motor_450", "six_motor_450", "none"),
                ("speed_base", "speed_base", "none"), ("override_cascade", "override_cascade", "none"),
-               ("six_motor_450_middle_traction", "six_motor_450", "middle"))
+               ("six_motor_450_middle_traction", "six_motor_450", "middle"), ("six_motor_55w", "six_motor_55w", "none"))
 
 
 def scenarios():

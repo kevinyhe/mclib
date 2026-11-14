@@ -67,6 +67,16 @@ The job installs `mujoco` and `numpy` at the versions in
   the diagonal move to a point, the boomerang and both `moveToPose()` moves
   miss by 2.7, 1.9 and 1.8 in. It passes 18 with two tracking wheels, 15 in
   `vertical` and 16 in `horizontal`.
+- `six_motor_55w`: the 55 W drive Override allows (R11). Each side has two
+  blue 11 W motors and one 5.5 W motor, all geared to 450 RPM at the wheels.
+  The runner drives it as a `MotorGroup` with the 5.5 W motors in their own
+  list does: they get `voltsFor5_5WMotor()` of each voltage, and their
+  readings are scaled by `readingScaleFor5_5WMotor()`. It passes 11 of 18
+  moves in `drive`, 17 in `two`, 10 in `vertical` and 17 in `horizontal`.
+  That is the same moves as `six_motor_450` except two. The boomerang with two
+  tracking wheels ends 1.70 in off against 1.5 allowed (0.48 in on
+  `six_motor_450`). The arc in `vertical` ends 5.72 in off against 5.5. Without
+  the 8/12 voltage cut that boomerang ends 0.32 in off.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   `moveToPose()` forward and in reverse, arcs and swings, at default gains.
 - `profiled/*`: the seven stopping moves (drive forward and reverse, both

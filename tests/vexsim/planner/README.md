@@ -214,7 +214,7 @@ are traction wheels. The rest stay omnis.
 | Choice | Wheels |
 | --- | --- |
 | None | omnis on every corner |
-| The middle wheel each side | the middle pair on a 6-wheel drive (the 6-motor drivetrain only) |
+| The middle wheel each side | the middle pair on a 6-wheel drive (the 6-motor drivetrains only) |
 | Every driven wheel | all of them |
 
 Omnis roll sideways freely. Traction wheels grip sideways as hard as they
@@ -448,11 +448,13 @@ opened." A held stack is one Pin and one Cup, inside <SG6> (Q&A 3166).
 
 The first step checks the robot against the rules: at most 18 in long, wide
 and tall at the start (SG1), 88 W of motors in all (R10) and 55 W on the
-drive (R11). The three lift motors are 33 W and the claw uses no motor, so
-a six-motor drive (66 W) breaks both: "The drive motors are rated 66 W and
-all the motors 99 W. The limits are 55 W for the drive (R11) and 88 W in
-all (R10)." New Override routines use the owner's four-motor drive (44 W,
-77 W in all). During the run a step breaks a rule if the robot gets wider or
+drive (R11). The three lift motors and the roller motor are 44 W and the
+claw uses no motor, so a six-motor drive (66 W) breaks both: "The drive
+motors are rated 66 W and all the motors 110 W. The limits are 55 W for the
+drive (R11) and 88 W in all (R10)." The 55 W drive of four 11 W and two
+5.5 W motors is inside R11 but makes 99 W in all with these mechanisms. New
+Override routines use the owner's four-motor drive (44 W, 88 W in all).
+During the run a step breaks a rule if the robot gets wider or
 longer than 24 in (SG2), taller than 50 in (SG3), or holds more than one
 Pin and one Cup (SG6).
 
@@ -751,6 +753,7 @@ field.
 | [path_settings_and_gains.json](examples/path_settings_and_gains.json) | the S-curve with a higher speed limit, acceleration and cornering, and changed turn gains, with what each one bought |
 | [worn_field.json](examples/worn_field.json) | the S-curve at 60% battery and 70% grip: the robot slides 15.7 in off the path and runs into the time limit |
 | [no_inertial_sensor.json](examples/no_inertial_sensor.json) | a square with heading from the drive encoders: every 90° turn really turns about 70°; switch Heading to the inertial sensor and run again to compare |
+| [fifty_five_watt_drive.json](examples/fifty_five_watt_drive.json) | a drive, a turn and a boomerang on the 55 W drive (four 11 W and two 5.5 W motors): the boomerang ends 1.53 in off in 2.67 s, against 0.34 in in 3.68 s on the 66 W drive |
 | [traction_wheels.json](examples/traction_wheels.json) | the S-curve on drive encoders with traction wheels in the middle pair: it ends 0.86 in off with odometry 1.1 in off, against 5.75 in and 5.2 in on omnis |
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal: red 20, and 2 of the 6 Pin halves the Autonomous Win Point needs. Turning the bottom Toggle as well only starts at 18 s, past the end of the autonomous |
 | [override_five_halves.json](examples/override_five_halves.json) | both Toggles, the red preload and a yellow stack on the red left Goal, and a yellow stack on the neutral bottom Goal, with chained paths and lift and claw actions during them and one turn in place: red 30 at 15 s and 50 (5 Pin halves) at the end, 16.8 s. A start 0.25 in off can lose a stack |

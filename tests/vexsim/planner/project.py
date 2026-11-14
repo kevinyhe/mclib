@@ -20,6 +20,9 @@ RETIRED_PROJECT_FIELDS = {"stop_on_failure"}
 PRESETS = {
     "six_motor_450": dict(label="6 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
                           body_length_in=15.0, body_width_in=12.5, drive_watts=66, wheels_per_side=3),
+    "six_motor_55w": dict(label="6 motors, 55 W: four 11 W and two 5.5 W, 450 RPM, 3.25 in wheels",
+                          track_width_in=11.5, body_length_in=15.0, body_width_in=12.5, drive_watts=55,
+                          wheels_per_side=3),
     "four_motor_450": dict(label="4 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
                            body_length_in=15.0, body_width_in=12.5, drive_watts=44, wheels_per_side=2),
     "four_motor_200": dict(label="4 motors, 200 RPM, 3.25 in wheels", track_width_in=11.5,
@@ -52,7 +55,7 @@ HEADING_SOURCES = {
 
 #: The partner's and opponents' robots a routine can put on the Override field (vexsim's other_robots)
 OTHER_ROBOT_ROLES = {"partner": "Partner robot", "opponent 1": "Opponent robot 1", "opponent 2": "Opponent robot 2"}
-OTHER_ROBOT_DRIVES = ("four_motor_450", "six_motor_450", "four_motor_200", "speed_base")
+OTHER_ROBOT_DRIVES = ("four_motor_450", "six_motor_450", "six_motor_55w", "four_motor_200", "speed_base")
 OTHER_ROBOT_FIELDS = {
     "length_in": dict(label="Length", unit="in", low=6, high=24, step=.5, default=18,
                       help="Front to back. A robot starts within 18 in (SG1) and may expand to 24 in (SG2)."),

@@ -7,6 +7,7 @@
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/characterize.hpp"
+#include "mclib/device/types.hpp"
 #include "mclib/control/pose_filter.hpp"
 #include "mclib/control/profiled_moves.hpp"
 #include "mclib/telemetry/file_sink.hpp"
@@ -194,6 +195,15 @@ std::uint8_t get_status() { return 2 | (sample.disabled ? 1 : 0); }
 }
 namespace mclib::time {
 std::uint32_t systemMillis() { return sample.millis; }
+}
+
+// A drive side with 11 W and 5.5 W motors drives and reads its 5.5 W motors
+// through these, as device::MotorGroup does on a robot.
+extern "C" double sim_volts_for_5_5w_motor(double volts) {
+  return mclib::device::voltsFor5_5WMotor(volts);
+}
+extern "C" double sim_reading_scale_for_5_5w_motor(int gearset) {
+  return mclib::device::readingScaleFor5_5WMotor(static_cast<mclib::device::Gearset>(gearset));
 }
 
 extern "C" void sim_init(Advance step, Output write, double diameter_in,
