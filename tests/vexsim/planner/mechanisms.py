@@ -65,6 +65,9 @@ MAX_HEIGHT_IN = 50.0
 MAX_MOTOR_WATTS = 88.0
 MAX_DRIVE_WATTS = 55.0
 
+#: Encoder ticks per output turn of a V5 motor, by cartridge, as vexsim gives the drive motors
+ENCODER_TICKS_PER_REV = {"red": 1800.0, "green": 900.0, "blue": 300.0}
+
 READ_MOTOR_DEGREES = C.CFUNCTYPE(C.c_double)
 WRITE_MOTOR_VOLTS = C.CFUNCTYPE(None, C.c_double)
 SET_CLAW_VALVE = C.CFUNCTYPE(None, C.c_int)
@@ -103,14 +106,20 @@ def declare_cascade(lib):
 class CascadeRig:
     """cascade::Rig in the C++, reading and driving the world's lift motors
     and opening and closing its claw's valve. The three lift motors share a
-    shaft: the rig reads one and drives all three. Errors in the callbacks go
+    shaft: the rig reads one motor's encoder and drives all three. The
+    encoder is vexsim's, updated after each physics step like the drive's,
+    so the lift reads a held, quantised position the way the drive does.
+    step_world() steps the world and the encoder. Errors in the callbacks go
     to the bridge, which cancels the running motion and raises once C++
     returns."""
 
     def __init__(self, lib, bridge, world):
+        from vexsim.sensors import Encoder
         self.lib = lib
         self.bridge = bridge
+        self.world = world
         self.lift_motors = world.mechanism.lift.motors
+        self.lift_encoder = Encoder(ticks_per_rev=ENCODER_TICKS_PER_REV[self.lift_motors[0].cartridge])
         self.claw = world.mechanism.claw
         self.roller_motor = world.mechanism.roller.motor
         self.read_callback = READ_MOTOR_DEGREES(self.read_lift)
@@ -123,9 +132,13 @@ class CascadeRig:
                                  self.read_roller_callback, self.write_roller_callback,
                                  preset_number("claw", claw_start))
 
+    def step_world(self, dt):
+        self.world.step(dt)
+        self.lift_encoder.update(self.lift_motors[0].position, self.world.sim.t)
+
     def read_lift(self):
         try:
-            return math.degrees(self.lift_motors[0].position)
+            return math.degrees(self.lift_encoder.position)
         except Exception as error:
             self.bridge.exceptions.append(str(error))
             return math.nan

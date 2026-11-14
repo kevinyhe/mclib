@@ -73,10 +73,6 @@ inline Lift::Table liftPresets() {
           {LiftPreset::Top, 46.72}};
 }
 
-// What the lift motors need to hold the stages up with the rubber bands'
-// help: 0.6 V at the bottom, 0.9 V at 16 in and at the top.
-constexpr double kLiftHoldVolts = 0.9;
-
 inline mclib::mechanism::PositionMechanismConfig liftConfig() {
   mclib::mechanism::PositionMechanismConfig config;
   config.kp = 6.0;
@@ -85,6 +81,9 @@ inline mclib::mechanism::PositionMechanismConfig liftConfig() {
   config.small_error = 0.15;
   config.big_error = 0.5;
   config.derivative_tolerance = 0.05;
+  // What the lift motors need to hold the stages up with the rubber bands'
+  // help: 0.6 V at the bottom, 0.9 V at 16 in and at the top.
+  config.gravity_volts = 0.9;
   return config;
 }
 
@@ -122,7 +121,7 @@ class Rig {
       Volts roller_volts, ClawPreset claw_start)
       : m_lift(LiftPreset::Down, liftPresets(),
                [lift_motor_degrees] { return clawHeightIn(lift_motor_degrees()); },
-               [lift_volts](double volts) { lift_volts(volts + kLiftHoldVolts); }, liftConfig()),
+               std::move(lift_volts), liftConfig()),
         m_claw_valve(std::move(claw_valve)),
         m_roller_motor_degrees(std::move(roller_motor_degrees)),
         m_roller_volts(std::move(roller_volts)) {

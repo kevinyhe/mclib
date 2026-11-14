@@ -274,8 +274,10 @@ and **Export C++** copies it.
 
 The claw height is the middle of the jaws. A motor turn winds
 pi / 1.5 = 2.09 in of string and raises the claw five times that,
-10.47 in. The lift reads its height from the motors' angle and takes off
-the 0.25 in the strings stretch once the stages hang on them.
+10.47 in. The lift reads its height from one motor's encoder and takes off
+the 0.25 in the strings stretch once the stages hang on them. The encoder
+works as the drive's do: a reading is held for the smart port's 10 ms and
+counts the green cartridge's 900 ticks a turn, 0.012 in of claw height.
 
 | Claw preset | Jaws |
 | --- | --- |
@@ -451,7 +453,7 @@ and `vexsim/foam.py`. The planner adds these:
 | What | Guess | Why |
 | --- | --- | --- |
 | Lift presets | the claw heights in the table above | worked out from the Goal and Pin heights: "on" sets the held Cup's rim on the Pin's flange, "over" carries the Cup's bottom 0.25 in over the Pin's tip; vexsim's `LIFT_HEIGHTS` |
-| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V, plus 0.9 V to hold the stages up with the rubber bands' help | tuned in the simulator: every preset ends within 0.1 in, except On a Neutral Goal, where the stack resting on the Pin stops it up to 0.27 in high |
+| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V, and `gravity_volts` 0.9 V to hold the stages up with the rubber bands' help | tuned in the simulator. With nothing in the claw, a move up ends 0.00 to 0.09 in from the preset and a move down 0.18 to 0.25 in high; 0.5 s later the claw sits 0.12 to 0.21 in high |
 | String stretch | 0.25 in | measured in the simulator: 0.24 in holding nothing, 0.26 to 0.31 in holding a stack |
 | Claw step | 170 ms | the 160 ms opening stroke from vexsim's valve and 12 mm piston, guesses in its `GUESSES`, and a margin |
 | Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
@@ -655,8 +657,6 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 ## Limits
 
 - Nothing starts in the Loaders; a **Match load** step puts a stack there.
-- The lift's encoders are exact: the planner reads the simulated shaft with
-  no 10 ms delay.
 - The claw's 200 mL tank starts at 100 psi and loses air on each stroke
   (77 strokes take it to 25 psi). It never leaks.
 - Loose Pins and Cups do not touch the Toggles. A held one does.

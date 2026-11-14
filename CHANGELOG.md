@@ -3,6 +3,27 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `PositionMechanismConfig::gravity_volts`: volts that hold the load still,
+  added to the PID output before the `max_voltage` clamp. `gravity_model`
+  `Lift` adds the same voltage at every height. `Arm` scales it by the cosine
+  of the arm's angle from level, set with `arm_level_position` and
+  `arm_units_per_degree`. It stays on after arrival, including with
+  `hold_output = false`, and is off under a manual voltage, on a sensor fault
+  and after `onDisabled()`. It defaults to 0, so existing code is unchanged.
+
+### Changed
+
+- The path planner's cascade lift holds itself up with `gravity_volts`
+  instead of adding 0.9 V outside the loop, so the exported C++ uses it too.
+  A robot project needs an mclib with `gravity_volts` to build that export.
+- The path planner reads the lift through a simulated V5 motor encoder: a
+  position held for the smart port's 10 ms and quantised to the cartridge's
+  ticks, as the drive's encoders are. It used to read the exact shaft angle.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes
