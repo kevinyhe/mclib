@@ -89,7 +89,8 @@ class IdealBridge:
             reading.left = self.left_distance * 360 / (math.pi * DIAMETER)
             reading.right = self.right_distance * 360 / (math.pi * DIAMETER)
             reading.current_ma = 0.0  # Electrical behavior is deliberately absent.
-            reading.velocity_rpm = (abs(left) + abs(right)) / 2 / (math.pi * DIAMETER) * 60
+            reading.left_rpm = left / (math.pi * DIAMETER) * 60
+            reading.right_rpm = right / (math.pi * DIAMETER) * 60
             reading.millis = self.millis
             reading.disabled = 0
             reading.cancel = bool(self.exceptions)

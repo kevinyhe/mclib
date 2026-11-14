@@ -128,8 +128,10 @@ struct MotionConfig {
    * the -1 sentinel" in motion.hpp: it differs from routine to routine. The
    * scheduler-driven driveDistance() applies it whenever it is non-zero. A
    * stopping moveToPoint() stops applying it once it turns in place within
-   * 8 in of the target, or comes within distance_exit.small_error of the
-   * target along its line, so it can slow down there.
+   * 8 in of the target, comes within distance_exit.small_error of the
+   * target along its line, or is close enough inside 8 in that braking at
+   * 150 in/s^2 from its speed would only just stop it at the target, so it
+   * can slow down there.
    */
   QVoltage min_voltage = 1.5 * units::volt;
 

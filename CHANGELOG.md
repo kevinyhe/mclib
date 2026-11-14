@@ -3,6 +3,44 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `useProfiledMoves()` (`mclib/control/profiled_moves.hpp`): `driveTo()`,
+  `turnToAngle()`, `swing()` and `moveToPoint()` with `exit` true follow a
+  planned speed with kS/kV/kA feedforward instead of a distance PID, then
+  settle with their PID. Turns and swings take their own feedforward
+  (`turn_gains`), because turning in place scrubs the wheels. Opt-in;
+  `usePidMoves()` goes back. In the physics simulator the seven stopping
+  moves on four drives took a third less time with every odometry setup
+  (18.4 s against 29.1 s with two tracking wheels) and mostly ended closer.
+  Swings on the faster drives got slower (0.85 s against 0.65 s on
+  `six_motor_450`). A profiled `moveToPoint()` brakes before it turns in
+  place, and its `min_speed` floor stops once the plan has to slow down or
+  once it turns in place. See docs/motion.md.
+- `moveToPose()`: drive a planned curve to a pose with RAMSETE, as an
+  alternative to `boomerang()`. The curve comes from the new
+  `path::planToPose()`, a cubic Bezier that leaves along the start heading
+  and arrives along the target heading. Also as
+  `ChassisController::makeMoveToPoseCommand()` and `Routine::moveToPose()`.
+  In the physics simulator with tracking wheels, to (24, 24) at 90°, it
+  ended closer than `boomerang()` on every drive (0.13-0.60 in against
+  0.40-2.97 in) and was faster on all but the Override cascade drive.
+
+### Fixed
+
+- A stopping `moveToPoint()` given a voltage floor (`min_speed`) held it
+  until the target, so a robot that came in fast from a chained move could
+  not brake and slid past. Inside 8 in the floor now also stops once
+  braking at 150 in/s² from the robot's speed would only just stop it at the
+  target. In `tests/vexsim/chain_audit.py`, which now passes each step its
+  floor (the planner's change to `run()` had dropped it), 6 of 18 stops on
+  the 450 rpm drives timed out with 4-8 V floors and 2 still do. Those 18
+  stops took 25.9 s in all, down from 29.2 s; one took 0.05 s longer. On
+  `four_motor_200` they took 15.25 s, down from 15.74 s. Calls without a
+  floor are unchanged.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes

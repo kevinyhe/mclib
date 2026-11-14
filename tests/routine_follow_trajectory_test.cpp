@@ -50,6 +50,21 @@ struct Recorded {
   double max_volts = 0;
 } recorded;
 
+struct RecordedPose {
+  int calls = 0;
+  double x_in = 0;
+  double y_in = 0;
+  int dir = 0;
+  double heading_deg = 0;
+  double lead = 0;
+  double b = 0;
+  double max_velocity_ips = 0;
+  double timeout_ms = 0;
+  bool exit = true;
+  double max_volts = 0;
+  double early_exit_in = 0;
+} recorded_pose;
+
 mclib::path::Trajectory straight(double length_in) {
   mclib::path::TrajectoryConstraints limits;
   limits.max_velocity = 40 * mclib::units::inps;
@@ -118,6 +133,40 @@ int main() {
     CHECK_NEAR(recorded.timeout_ms, 2000.0, 1e-9);
   }
 
+  std::printf("-- moveToPose: the target and options reach the chassis command\n");
+  {
+    mclib::path::TrajectoryConstraints limits;
+    limits.max_velocity = 30 * mclib::units::inps;
+    limits.max_acceleration = 60 * mclib::control::inps2;
+    Routine routine(chassis);
+    routine.moveToPose({24_in, 36_in}, -1, 90_deg, 0.4, config, limits, 4_s)
+        .withMaxVoltage(9_V)
+        .withEarlyExit(3_in);
+    CHECK(!routine.hasConfigurationError());
+    runToEnd(routine);
+    CHECK_NEAR(recorded_pose.x_in, 24.0, 1e-9);
+    CHECK_NEAR(recorded_pose.y_in, 36.0, 1e-9);
+    CHECK_EQ(recorded_pose.dir, -1);
+    CHECK_NEAR(recorded_pose.heading_deg, 90.0, 1e-9);
+    CHECK_NEAR(recorded_pose.lead, 0.4, 1e-12);
+    CHECK_EQ(recorded_pose.b, 50.0);
+    CHECK_NEAR(recorded_pose.max_velocity_ips, 30.0, 1e-9);
+    CHECK_NEAR(recorded_pose.timeout_ms, 4000.0, 1e-9);
+    CHECK(!recorded_pose.exit);
+    CHECK_NEAR(recorded_pose.max_volts, 9.0, 1e-12);
+    CHECK_NEAR(recorded_pose.early_exit_in, 3.0, 1e-9);
+  }
+
+  std::printf("-- moveToPose takes atDistanceFromEnd\n");
+  {
+    mclib::path::TrajectoryConstraints limits;
+    Routine routine(chassis);
+    routine.moveToPose({0_in, 24_in}, 1, 0_deg, 0.4, config, limits, 2_s)
+        .atDistanceFromEnd(6_in, std::make_unique<InstantCommand>(
+                                     [] {}, std::initializer_list<Subsystem*>{}));
+    CHECK(!routine.hasConfigurationError());
+  }
+
   std::printf("-- no chassis is a configuration error: nothing runs\n");
   {
     int ran = 0;
@@ -170,6 +219,25 @@ std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
   recorded.timeout_ms = time_limit.ms();
   recorded.exit = exit;
   recorded.max_volts = max_output.volts();
+  return finished();
+}
+
+std::unique_ptr<Command> ChassisController::makeMoveToPoseCommand(
+    QLength x, QLength y, int dir, QAngle final_heading, double lead,
+    const control::RamseteConfig& config, const path::TrajectoryConstraints& limits,
+    QTime time_limit, bool exit, QVoltage max_output, QLength early_exit_range) {
+  ++recorded_pose.calls;
+  recorded_pose.x_in = x.in();
+  recorded_pose.y_in = y.in();
+  recorded_pose.dir = dir;
+  recorded_pose.heading_deg = final_heading.deg();
+  recorded_pose.lead = lead;
+  recorded_pose.b = config.gains.b;
+  recorded_pose.max_velocity_ips = limits.max_velocity.inps();
+  recorded_pose.timeout_ms = time_limit.ms();
+  recorded_pose.exit = exit;
+  recorded_pose.max_volts = max_output.volts();
+  recorded_pose.early_exit_in = early_exit_range.in();
   return finished();
 }
 

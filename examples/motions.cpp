@@ -130,7 +130,9 @@ void driveToPoint() {
 
 // boomerang() arrives at a point facing a chosen way. The 0.6 is the lead, 0
 // to 1: larger swings wider into the point, and 0 drives to the point and
-// then turns.
+// then turns. With measured feedforward, moveToPose() in trajectories.cpp
+// drives the same move on a planned curve. In the simulator, with tracking
+// wheels, it ended closer on every drive and was faster on all but one.
 void driveToPose() {
   boomerang(24_in, 36_in, 1, 90_deg, 0.6, 3_s);
   // Backward. The heading is still the way the front of the robot ends up.

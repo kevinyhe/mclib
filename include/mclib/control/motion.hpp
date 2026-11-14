@@ -406,7 +406,9 @@ mclib::control::MotionResult turnToPoint(QLength x,
  * is more than 30 deg off the line, it turns in place again. Farther out, if
  * it turns 90 deg without getting 1 in closer, it turns in place until the
  * target is within 10 deg. @p min_speed stops applying once it turns in place
- * within 8 in, or comes within 0.5 in of the target along its line.
+ * within 8 in, comes within 0.5 in of the target along its line, or is close
+ * enough inside 8 in that braking at 150 in/s^2 from its speed would only
+ * just stop it at the target.
  *
  * @param x          Field X of the target.
  * @param y          Field Y of the target.
@@ -536,3 +538,47 @@ mclib::control::MotionResult followTrajectory(
     bool exit = true,
     QVoltage max_output = 12.0 * mclib::units::volt,
     QLength early_exit_range = 0.0 * mclib::units::inch);
+
+/**
+ * @brief Drive a planned curve to a pose, followed with RAMSETE: an
+ *        alternative to `boomerang()`.
+ *
+ * Plans the curve from the odometry pose to (@p x, @p y) arriving on
+ * @p final_heading with `path::planToPose()`, plans a trajectory along it
+ * with @p limits, and runs `followTrajectory()` with @p config, settle
+ * included. Where `boomerang()` chases a carrot with two PIDs, this plans
+ * the speed along the whole curve and corrects on the pose.
+ *
+ * @param x              Field X of the target.
+ * @param y              Field Y of the target.
+ * @param dir            +1 drives forward, -1 backs along the curve.
+ * @param final_heading  The absolute body compass heading to arrive on;
+ *                       backing does not add 180 degrees to it.
+ * @param lead           Length of each of the curve's control arms over the
+ *                       straight-line distance. 0.39 makes a 90 degree
+ *                       corner nearly a circle; larger swings wider.
+ * @param config         RAMSETE gains and per-side drive feedforward.
+ * @param limits         Speed limits for the plan. Its `reversed` is set
+ *                       from @p dir.
+ * @param time_limit     Give up after this long, planning and settle
+ *                       included.
+ * @param exit           True stops and holds at the end. False leaves the
+ *                       last voltages on for chaining.
+ * @param max_output     Voltage cap. Both sides scale down together.
+ * @param early_exit_range Chained only: end once this much of the curve is
+ *                       left.
+ * @return `InvalidValue`, without moving, when @p dir is not +1 or -1, or
+ *         the curve folds back on itself (see `path::planToPose()`), or the
+ *         limits plan no trajectory. Otherwise as `followTrajectory()`.
+ */
+mclib::control::MotionResult moveToPose(QLength x,
+                                        QLength y,
+                                        int dir,
+                                        QAngle final_heading,
+                                        double lead,
+                                        const mclib::control::RamseteConfig& config,
+                                        const mclib::path::TrajectoryConstraints& limits,
+                                        QTime time_limit,
+                                        bool exit = true,
+                                        QVoltage max_output = 12.0 * mclib::units::volt,
+                                        QLength early_exit_range = 0.0 * mclib::units::inch);

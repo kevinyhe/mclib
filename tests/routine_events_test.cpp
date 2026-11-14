@@ -291,6 +291,7 @@ std::unique_ptr<Command> ChassisController::makeTurnToPointCommand(QLength, QLen
   return std::make_unique<ScriptedMotion>();
 }
 
+std::unique_ptr<Command> ChassisController::makeMoveToPoseCommand(QLength, QLength, int, QAngle, double, const control::RamseteConfig&, const path::TrajectoryConstraints&, QTime, bool, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(const path::Trajectory&, const control::RamseteConfig&, QTime, bool, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeDriveToCommand(QLength, QTime, bool, QVoltage, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeDriveDistanceCommand(QLength, QTime, bool, QVoltage) { return nullptr; }

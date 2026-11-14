@@ -467,6 +467,7 @@ std::unique_ptr<Command> ChassisController::makeBoomerangCommand(QLength, QLengt
   return nullptr;
 }
 
+std::unique_ptr<Command> ChassisController::makeMoveToPoseCommand(QLength, QLength, int, QAngle, double, const control::RamseteConfig&, const path::TrajectoryConstraints&, QTime, bool, QVoltage, QLength) { return nullptr; }
 std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
     const path::Trajectory&, const control::RamseteConfig&, QTime, bool, QVoltage, QLength) {
   return nullptr;

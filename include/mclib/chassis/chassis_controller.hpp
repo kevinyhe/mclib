@@ -207,6 +207,24 @@ public:
       bool exit = true,
       QVoltage max_output = 12.0 * units::volt,
       QLength early_exit_range = 0.0 * units::inch);
+  /**
+   * @brief moveToPose() as a command.
+   *
+   * The command keeps its own copy of @p config and @p limits. It plans the
+   * curve from wherever the robot is each time it starts.
+   */
+  std::unique_ptr<Command> makeMoveToPoseCommand(
+      QLength x,
+      QLength y,
+      int dir,
+      QAngle final_heading,
+      double lead,
+      const control::RamseteConfig& config,
+      const path::TrajectoryConstraints& limits,
+      QTime time_limit,
+      bool exit = true,
+      QVoltage max_output = 12.0 * units::volt,
+      QLength early_exit_range = 0.0 * units::inch);
   // Driver control. Each returns a command meant to be the subsystem's
   // default: it runs whenever no autonomous command owns the drive, reads
   // the sticks every scheduler pass, shapes them through the curves in

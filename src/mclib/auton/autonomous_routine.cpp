@@ -409,7 +409,7 @@ Routine::MotionStep& Routine::MotionStep::withEarlyExit(QLength range) {
   if (m_routine->m_steps[m_index].remaining_unit != RemainingUnit::Length) {
     m_routine->configurationError(
         "withEarlyExit() with a distance only works on driveTo, curveCircle, "
-        "moveToPoint, boomerang and followTrajectory.");
+        "moveToPoint, boomerang, followTrajectory and moveToPose.");
     return *this;
   }
   if (!(range.raw() >= 0) || !std::isfinite(range.raw())) {
@@ -457,7 +457,7 @@ Routine::MotionStep& Routine::MotionStep::atDistanceFromEnd(QLength distance,
   if (m_routine->m_steps[m_index].remaining_unit != RemainingUnit::Length) {
     m_routine->configurationError(
         "atDistanceFromEnd() only works on driveTo, curveCircle, moveToPoint, "
-        "boomerang and followTrajectory.");
+        "boomerang, followTrajectory and moveToPose.");
     return *this;
   }
   m_routine->addEvent(m_index, EventMeasure::Remaining, distance.in(), std::move(command));
@@ -595,6 +595,16 @@ Routine::MotionStep Routine::MotionStep::followTrajectory(
     const control::RamseteConfig& config,
     QTime timeout) {
   return m_routine->followTrajectory(trajectory, config, timeout);
+}
+
+Routine::MotionStep Routine::MotionStep::moveToPose(Point point,
+                                                    int dir,
+                                                    QAngle final_heading,
+                                                    double lead,
+                                                    const control::RamseteConfig& config,
+                                                    const path::TrajectoryConstraints& limits,
+                                                    QTime timeout) {
+  return m_routine->moveToPose(point, dir, final_heading, lead, config, limits, timeout);
 }
 
 Routine::MotionStep& Routine::MotionStep::rebuild() {
@@ -1150,6 +1160,45 @@ Routine::MotionStep Routine::followTrajectory(const path::Trajectory& trajectory
     return addMissingChassisStep();
   }
   return followTrajectory(*m_chassis, trajectory, config, timeout);
+}
+
+Routine::MotionStep Routine::moveToPose(ChassisController& chassis,
+                                        Point point,
+                                        int dir,
+                                        QAngle final_heading,
+                                        double lead,
+                                        const control::RamseteConfig& config,
+                                        const path::TrajectoryConstraints& limits,
+                                        QTime timeout) {
+  return addMotion(
+      RemainingUnit::Length,
+      [&chassis, point, dir, final_heading, lead, config, limits](const MotionOptions& options) {
+        return chassis.makeMoveToPoseCommand(point.x,
+                                             point.y,
+                                             dir,
+                                             final_heading,
+                                             lead,
+                                             config,
+                                             limits,
+                                             options.timeout,
+                                             options.exit,
+                                             options.max_voltage,
+                                             options.early_exit_distance);
+      },
+      timeout);
+}
+
+Routine::MotionStep Routine::moveToPose(Point point,
+                                        int dir,
+                                        QAngle final_heading,
+                                        double lead,
+                                        const control::RamseteConfig& config,
+                                        const path::TrajectoryConstraints& limits,
+                                        QTime timeout) {
+  if (m_chassis == nullptr) {
+    return addMissingChassisStep();
+  }
+  return moveToPose(*m_chassis, point, dir, final_heading, lead, config, limits, timeout);
 }
 
 void Routine::clear() {
