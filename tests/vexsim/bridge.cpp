@@ -493,6 +493,8 @@ extern "C" int sim_run(int action, double a, double b, double heading,
                                min_volts)); break;
     case 7: record(boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
                              limit, exit, volts * volt, true, min_volts)); break;
+    case 14: record(moveToPose(a * inch, b * inch, direction, heading * degree, boomerang_lead,
+                               ramsete_config, ramsete_limits, limit, exit, volts * volt)); break;
     case 9:
     case 10:
     case 13: {

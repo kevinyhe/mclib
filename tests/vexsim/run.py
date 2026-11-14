@@ -47,7 +47,7 @@ def build(destination, extra_sources=()):
                "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
                "control/ramsete", "path/trajectory", "path/path", "path/spline",
                "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose",
-               "path/arc", "control/characterize", "control/async_motion",
+               "path/arc", "path/pose_path", "control/characterize", "control/async_motion",
                "telemetry/file_sink", "control/profile", "control/feedforward"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
@@ -608,6 +608,10 @@ def scenarios():
             ("point_forward", 6, {"b": 24}, (0, 24), 0),
             ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
             ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
+            # moveToPose(): the boomerang's target on a planned curve (RAMSETE).
+            ("pose", 14, {"a": 24, "b": 24, "heading": 90, "lead": 0.4}, (24, 24), 90),
+            ("pose_reverse", 14, {"a": 24, "b": -24, "heading": -90, "direction": -1,
+                                  "lead": 0.4}, (24, -24), -90),
             ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
             ("reverse_arc", 3, {"a": -90, "b": 24}, (24, -24), -90),
             # curveCircle() / curveCircleReverse() after useRamseteForArcs().
@@ -623,7 +627,7 @@ def scenarios():
                        args=args, target=target, angle=angle,
                        tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
                                        else TRACKING_MODES),
-                       position_tolerance=(1.5 if action == 7 else
+                       position_tolerance=(1.5 if action in (7, 14) else
                                            2.5 if name.endswith("_ramsete_config") else
                                            5.5 if action in (2, 3) else 2.5))
     # The stopping moves on a planned speed (useProfiledMoves()), on every
@@ -745,7 +749,7 @@ def main():
             # followTrajectory() settles after the plan: a turn, then either a
             # straight correction or a back-off and re-approach. Give it twice
             # the single-motion limit.
-            if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
+            if case["action"] in (9, 10, 13, 14) or case["name"].endswith("_ramsete_config"):
                 case["args"]["timeout"] = 2 * args.motion_timeout_ms
     sys.path.insert(0, str(args.vexsim.resolve()))
     destination = (args.output or Path(tempfile.mkdtemp(prefix="mclib-vexsim-"))).resolve()
@@ -756,7 +760,7 @@ def main():
     feedforward_cache = {}
     for case in cases:
         feedforward = None
-        if (case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config")
+        if (case["action"] in (9, 10, 13, 14) or case["name"].endswith("_ramsete_config")
                 or case.get("profiled")):
             feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
                                               feedforward_cache)

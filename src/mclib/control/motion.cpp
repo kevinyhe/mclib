@@ -17,6 +17,7 @@
 #include "mclib/control/robot_state.hpp"
 #include "mclib/math.hpp"
 #include "mclib/path/arc.hpp"
+#include "mclib/path/pose_path.hpp"
 #include "mclib/path/trajectory.hpp"
 #include "mclib/sync.hpp"
 #include "mclib/pid.hpp"
@@ -2291,4 +2292,29 @@ MotionResult followTrajectory(const mclib::path::Trajectory& trajectory,
     return result;
   }
   return safety.result();
+}
+
+MotionResult moveToPose(QLength x, QLength y, int dir, QAngle final_heading, double lead,
+                        const mclib::control::RamseteConfig& config,
+                        const mclib::path::TrajectoryConstraints& limits, QTime time_limit,
+                        bool exit, QVoltage max_voltage, QLength early_exit_range)
+{
+  if (mclib::control::requireDrive("moveToPose") == nullptr) {
+    return MotionResult::NoDrive;
+  }
+  MotionSafety safety(time_limit, {x.in(), y.in(), final_heading.rad(), lead});
+  if (dir != 1 && dir != -1) safety.reject();
+  if (!safety.running()) return safety.result();
+  const mclib::path::Path path = mclib::path::planToPose(
+      safety.pose(), {x.in(), y.in(), final_heading.rad()}, dir < 0, lead);
+  mclib::path::TrajectoryConstraints plan_limits = limits;
+  plan_limits.reversed = dir < 0;
+  const mclib::path::Trajectory trajectory = path.valid()
+      ? mclib::path::Trajectory::generate(path, plan_limits)
+      : mclib::path::Trajectory{};
+  if (trajectory.empty()) {
+    safety.reject();
+    return safety.result();
+  }
+  return followTrajectory(trajectory, config, time_limit, exit, max_voltage, early_exit_range);
 }

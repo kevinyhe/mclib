@@ -17,6 +17,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   (18.4 s against 29.1 s with two tracking wheels) and mostly ended closer.
   Swings on the faster drives got slower (0.85 s against 0.65 s on
   `six_motor_450`). See docs/motion.md.
+- `moveToPose()`: drive a planned curve to a pose with RAMSETE, as an
+  alternative to `boomerang()`. The curve comes from the new
+  `path::planToPose()`, a cubic Bezier that leaves along the start heading
+  and arrives along the target heading. Also as
+  `ChassisController::makeMoveToPoseCommand()` and `Routine::moveToPose()`.
+  In the physics simulator with tracking wheels, to (24, 24) at 90°, it
+  ended closer than `boomerang()` on every drive (0.13-0.60 in against
+  0.40-2.97 in) and was faster on all but the Override cascade drive.
 
 ### Fixed
 

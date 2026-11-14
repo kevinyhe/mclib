@@ -101,7 +101,7 @@ and `missedEvents()` counts it.
 along a curve. `atDistanceFromEnd` uses the distance the motion steers by:
 
 - `moveToPoint`, `boomerang`: straight-line distance to the target
-- `followTrajectory`, `driveTo`: distance left along the path
+- `followTrajectory`, `moveToPose`, `driveTo`: distance left along the path
 - `curveCircle`, `curveCircleReverse`: distance left along the outer wheel's
   path. With `useRamseteForArcs()` on and the step not chained, distance left
   along the robot centre's path.
@@ -118,7 +118,7 @@ leaves the drive on. A chained motion ends when:
 - `moveToPoint`, `boomerang`: the robot is inside
   `MotionConfig::distance_exit.big_error` of the target (1.5 in by default), or
   it passes the target within 8 in.
-- `followTrajectory`: the plan's time runs out.
+- `followTrajectory`, `moveToPose`: the plan's time runs out.
 
 A chained motion that times out still brakes.
 

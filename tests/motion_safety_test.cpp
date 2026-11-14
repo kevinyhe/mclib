@@ -1476,6 +1476,73 @@ int main() {
     CHECK_NEAR(pid_drive_again.miss, pid_drive.miss, 1e-9);
   }
 
+  // moveToPose() plans a curve from the odometry pose and follows it.
+  {
+    const auto start = [&] {
+      clearCancel();
+      now_ms = 0;
+      hw.heading = hw.encoder = 0;
+      hw.left = hw.right = 0;
+      resetOdometry({0, 0, 0});
+      robotState().setCorrectAngleDeg(0);
+      robotState().setPrevOutputs(0, 0);
+    };
+    start();
+    CHECK(moveToPose(24_in, 24_in, 0, 90_deg, 0.4, ramsete_config, limits, 1_s) ==
+          MotionResult::InvalidValue);
+    CHECK(moveToPose(0_in, -24_in, 1, 0_deg, 0.4, ramsete_config, limits, 1_s) ==
+          MotionResult::InvalidValue);
+    CHECK(moveToPose(24_in, 24_in, 1, 90_deg, 0, ramsete_config, limits, 1_s) ==
+          MotionResult::InvalidValue);
+    CHECK_EQ(now_ms, 0);
+    CHECK_EQ(hw.left, 0);
+    CHECK_EQ(hw.right, 0);
+
+    // A drive that follows the follower's feedforward, with 0.02 V per
+    // in/s^2 of inertia it does not know about.
+    mclib::Pose2D pose{0, 0, 0};
+    double left_ips = 0, right_ips = 0;
+    const double track_in = 12;
+    for (const int dir : {1, -1}) {
+      start();
+      pose = {0, 0, 0};
+      left_ips = right_ips = 0;
+      on_delay = [&] {
+        const double dt = 0.01;
+        const auto accelerate = [&](double& speed, double volts) {
+          const double friction = std::fabs(speed) > 1e-9 ? std::copysign(0.5, speed)
+                                  : std::fabs(volts) > 0.5 ? std::copysign(0.5, volts) : volts;
+          speed += (volts - friction - 0.2 * speed) / 0.02 * dt;
+        };
+        accelerate(left_ips, hw.left);
+        accelerate(right_ips, hw.right);
+        pose.theta = mclib::wrapAngle(pose.theta + (left_ips - right_ips) / track_in * dt);
+        const double forward = (left_ips + right_ips) / 2;
+        pose.x += forward * std::sin(pose.theta) * dt;
+        pose.y += forward * std::cos(pose.theta) * dt;
+        hw.encoder += forward * dt * 360 / (4 * mclib::kPi);
+        hw.heading = pose.theta * 180 / mclib::kPi;
+        resetOdometry(pose);
+      };
+      const double target_y = 24.0 * dir;
+      const QAngle arrive = dir * 90_deg;
+      RamseteConfig follow = ramsete_config;
+      follow.gains = {50.0, 0.7};
+      const MotionResult result =
+          moveToPose(24_in, target_y * 1_in, dir, arrive, 0.4, follow, limits, 6_s);
+      on_delay = {};
+      const double miss_in = std::hypot(pose.x - 24, pose.y - target_y);
+      const double heading_miss_deg =
+          std::fabs(mclib::wrapAngle(pose.theta - arrive.rad())) * 180 / mclib::kPi;
+      std::printf("moveToPose(24, %.0f, dir %d, %.0f deg): %s, %u ms, miss %.2f in, %.2f deg\n",
+                  target_y, dir, arrive.rad() * 180 / mclib::kPi, toString(result),
+                  static_cast<unsigned>(now_ms), miss_in, heading_miss_deg);
+      CHECK(result == MotionResult::Reached);
+      CHECK(miss_in <= motionConfig().distance_exit.big_error);
+      CHECK(heading_miss_deg <= motionConfig().turn_exit.big_error);
+    }
+  }
+
   bindDrive(nullptr);
 
   // With no drive bound there is nothing to move, and the caller has to be
@@ -1483,6 +1550,8 @@ int main() {
   now_ms = 0;
   CHECK(driveTo(24_in, 100_ms) == MotionResult::NoDrive);
   CHECK(boomerang(0_in, 24_in, 1, 0_deg, 0.5, 100_ms) == MotionResult::NoDrive);
+  CHECK(moveToPose(0_in, 24_in, 1, 0_deg, 0.4, ramsete_config, limits, 100_ms) ==
+        MotionResult::NoDrive);
   CHECK_EQ(now_ms, 0);
   CHECK(std::string(toString(MotionResult::TimedOut)) == "TimedOut");
   return mclib::test::summary("motion safety");

@@ -289,6 +289,21 @@ void followArcsWithCurveCircle() {
   mclib::control::useEncoderArcs();
 }
 
+// moveToPose() arrives at a point facing a chosen way, as boomerang() does,
+// on a planned curve followed with RAMSETE. 0.4 is the lead: how far the
+// curve leaves along the start heading and comes in along the end heading,
+// over the distance. 0.39 makes a 90 deg corner nearly a circle; larger
+// swings wider. A target behind the robot, or one to arrive at against the
+// start heading, returns InvalidValue without moving: drive there in two
+// moves.
+void driveToPoseOnAPlan() {
+  reached("to pose", moveToPose(24_in, 36_in, 1, 90_deg, 0.4, follower_config,
+                                cruiseLimits(), 5_s));
+  // Backward. The heading is still the way the front of the robot ends up.
+  reached("back", moveToPose(0_in, 0_in, -1, 0_deg, 0.4, follower_config,
+                             cruiseLimits(), 5_s));
+}
+
 // The steps inside followTrajectory(), for a loop or a command of your own.
 // This one ends when the plan does. It does not settle on the end point.
 void followWithYourOwnLoop() {
@@ -696,12 +711,13 @@ void initialize() {
   selector.add("chain two", chainTwoTrajectories);
   selector.add("planned arc", followAnArc);
   selector.add("curveCircle", followArcsWithCurveCircle);
+  selector.add("moveToPose", driveToPoseOnAPlan);
   selector.add("own loop", followWithYourOwnLoop);
   selector.add("pure pursuit", followCornersWithPurePursuit);
   selector.add("pursuit+prof", purePursuitAtProfileSpeed);
   selector.add("profile facts", printProfileFacts);
   selector.add("profile", driveProfilesThereAndBack);
-  // Three columns: 15 buttons are too small to press in the default two.
+  // Three columns: 16 buttons are too small to press in the default two.
   selector.setLayout({.columns = 3});
   selector.bindController(master);
   selector.loadSelection();

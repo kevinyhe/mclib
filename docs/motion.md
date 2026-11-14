@@ -595,6 +595,55 @@ same slipping wheels: odometry was 4.3-4.9 in off at the end.
 `generate()` returns an empty trajectory when the path is not `valid()` or a
 required limit is zero, negative or not finite.
 
+### Driving to a pose (moveToPose)
+
+`moveToPose()` arrives at a point facing a chosen way, as `boomerang()` does.
+It plans a curve from the odometry pose with `path::planToPose()`, plans a
+trajectory along it with your limits, and runs `followTrajectory()`, settle
+included. `boomerang()` chases a moving carrot with two PIDs. This plans the
+speed along the whole curve and corrects on the pose.
+
+```cpp
+moveToPose(24_in, 24_in, 1, 90_deg, 0.4, follow, limits, 5_s);
+moveToPose(0_in, 0_in, -1, 0_deg, 0.4, follow, limits, 5_s);  // backward
+```
+
+The curve is a cubic Bezier. It leaves along the start heading and comes in
+along the target heading, each control arm `lead` times the straight-line
+distance. 0.39 makes a 90° corner nearly a circle; larger swings wider. A
+curve that folds back on itself, where the robot would have to stop and
+reverse, returns `InvalidValue` without moving: a target behind the start
+heading, one to arrive at against the start heading, or a target straight
+ahead with a lead of 1 or more. Drive those in two moves.
+
+`limits.reversed` is set from `dir`. `Routine::moveToPose()` and
+`ChassisController::makeMoveToPoseCommand()` plan the curve when the step
+starts, from wherever the robot is.
+
+In the physics simulator, to (24, 24) arriving at 90° from the origin, lead
+0.4, with the RAMSETE scenarios' tuning in `tests/vexsim/run.py` (b = 50,
+measured kS and kV, 70% of top speed, 60 in/s²). Time, then miss:
+
+| Drive | Odometry | `boomerang()` lead 0.5 | `moveToPose()` |
+| --- | --- | --- | --- |
+| four_motor_200 | two tracking wheels | 3.61 s, 0.72 in | 2.14 s, 0.28 in |
+| six_motor_450 | two tracking wheels | 3.32 s, 0.47 in | 2.50 s, 0.17 in |
+| speed_base | two tracking wheels | 2.55 s, 0.41 in | 2.45 s, 0.33 in |
+| four_motor_200 | sideways wheel, drive encoders | 3.56 s, 1.62 in | 2.14 s, 0.13 in |
+| six_motor_450 | sideways wheel, drive encoders | 2.61 s, 1.24 in | 2.53 s, 0.15 in |
+| speed_base | sideways wheel, drive encoders | 2.72 s, 2.97 in | 2.41 s, 0.60 in |
+| override_cascade | sideways wheel, drive encoders | 1.93 s, 0.40 in | 2.88 s, 0.33 in |
+
+It ended closer every time and was faster on all but the cascade drive,
+where the plan's 60 in/s² holds it back: at 120 in/s² it took 1.75 s and
+missed by 0.27 in. Backing to (24, -24) arriving at -90° came within
+0.14 s and 0.08 in of the forward drive.
+
+With drive encoders only, or one forward tracking wheel, both miss by 3 to
+11 in: the odometry is that far off after a curve. With b = 2 (the library
+default) and two tracking wheels it still arrived within 0.6 in, but took
+5.3-7.5 s.
+
 ### Logging
 
 `PurePursuit::attachLogger(logger)` logs goal x, goal y, cross-track error,
