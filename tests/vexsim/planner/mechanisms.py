@@ -104,14 +104,14 @@ def declare_cascade(lib):
 
 
 class CascadeRig:
-    """cascade::Rig in the C++, reading and driving the world's lift motors
-    and opening and closing its claw's valve. The three lift motors share a
-    shaft: the rig reads one motor's encoder and drives all three. The
-    encoder is vexsim's, updated after each physics step like the drive's,
-    so the lift reads a held, quantised position the way the drive does.
-    step_world() steps the world and the encoder. Errors in the callbacks go
-    to the bridge, which cancels the running motion and raises once C++
-    returns."""
+    """cascade::Rig in the C++, reading and driving the world's lift and
+    roller motors and opening and closing its claw's valve. The three lift
+    motors share a shaft: the rig reads one motor's encoder and drives all
+    three. The encoders are vexsim's, updated after each physics step like
+    the drive's, so the lift and the roller read a held, quantised position
+    the way the drive does. step_world() steps the world and the encoders.
+    Errors in the callbacks go to the bridge, which cancels the running
+    motion and raises once C++ returns."""
 
     def __init__(self, lib, bridge, world):
         from vexsim.sensors import Encoder
@@ -122,6 +122,7 @@ class CascadeRig:
         self.lift_encoder = Encoder(ticks_per_rev=ENCODER_TICKS_PER_REV[self.lift_motors[0].cartridge])
         self.claw = world.mechanism.claw
         self.roller_motor = world.mechanism.roller.motor
+        self.roller_encoder = Encoder(ticks_per_rev=ENCODER_TICKS_PER_REV[self.roller_motor.cartridge])
         self.read_callback = READ_MOTOR_DEGREES(self.read_lift)
         self.write_callback = WRITE_MOTOR_VOLTS(self.write_lift)
         self.valve_callback = SET_CLAW_VALVE(self.set_claw_valve)
@@ -135,6 +136,7 @@ class CascadeRig:
     def step_world(self, dt):
         self.world.step(dt)
         self.lift_encoder.update(self.lift_motors[0].position, self.world.sim.t)
+        self.roller_encoder.update(self.roller_motor.position, self.world.sim.t)
 
     def read_lift(self):
         try:
@@ -157,7 +159,7 @@ class CascadeRig:
 
     def read_roller(self):
         try:
-            return math.degrees(self.roller_motor.position)
+            return math.degrees(self.roller_encoder.position)
         except Exception as error:
             self.bridge.exceptions.append(str(error))
             return math.nan
