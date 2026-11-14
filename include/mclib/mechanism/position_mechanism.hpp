@@ -44,7 +44,8 @@ struct PositionMechanismConfig {
    * it if the mechanism genuinely needs more authority to hold, and check the
    * motor temperature when you do.
    *
-   * Only matters when ki is non-zero, and ki defaults to 0.
+   * It also caps the hold_ki sum. With ki and hold_ki both 0, the defaults,
+   * it does nothing.
    */
   double integral_max_volts = 2.0;
 
@@ -68,10 +69,22 @@ struct PositionMechanismConfig {
    * |error| <= small_error, and PID::update() zeroes its accumulated error
    * over that same band, so the integral is 0 on every held tick. A loaded
    * mechanism settles wherever kp * error balances the load, up to small_error
-   * of steady droop. Lower small_error to shrink that, at the cost of a
-   * tighter arrival test.
+   * of steady droop. hold_ki integrates that out; lowering small_error
+   * shrinks it at the cost of a tighter arrival test.
    */
   bool hold_output = true;
+
+  /**
+   * @brief Integral gain for the hold after arrival. Defaults to 0.
+   *
+   * The PID zeroes its own integral inside small_error, so the hold above is
+   * P only and can sit anywhere in that band. hold_ki takes that error out:
+   * from the tick after arrival, hold_ki * error is added up every tick and
+   * the sum is added to the output. The sum is capped at integral_max_volts
+   * (0 means no cap) and cleared by moveTo(), a manual voltage, a sensor
+   * fault and onDisabled(). Volts per unit of error per tick.
+   */
+  double hold_ki = 0.0;
 
   /// @brief How gravity_volts changes with the mechanism's position.
   enum class GravityModel {
@@ -238,6 +251,7 @@ private:
   void holdTarget(double target);
   double clampVoltage(double volts) const;
   double gravityVolts(double position) const;
+  double holdVolts(double error);
 
   PositionSource m_position_source;
   VoltageSink m_voltage_sink;
@@ -247,6 +261,7 @@ private:
   double m_manual_voltage = 0.0;
   bool m_arrived = false;
   bool m_sensor_fault = false;
+  double m_hold_volts = 0.0;
 };
 
 }  // namespace mechanism

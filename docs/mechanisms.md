@@ -71,9 +71,12 @@ With `hold_output = true` (the default), the PID keeps driving after it reaches
 the target, so a loaded arm holds its position. `atTarget()` becomes true as
 soon as the target is reached either way.
 
-The hold uses P and D only. Within `small_error` of the target the integral is
-zeroed, so a loaded arm can droop by up to `small_error`. Lower `small_error`
-to reduce the droop.
+The PID zeroes its integral within `small_error` of the target, so a loaded
+arm can droop by up to `small_error`. `hold_ki` takes that out: from the tick
+after arrival it adds up `hold_ki * error` every tick and adds the sum to the
+output, capped at `integral_max_volts`. Every `moveTo()`, manual voltage,
+sensor fault and disable clears the sum. It defaults to 0. Lowering
+`small_error` also reduces the droop, but tightens the arrival test.
 
 With `hold_output = false`, output drops to 0 V on arrival and the loop restarts
 only after the position drifts outside `small_error`.

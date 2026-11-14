@@ -77,6 +77,9 @@ const mclib::mechanism::PositionMechanismConfig lift_config{
     // close to the target. False outputs 0 V on arrival and starts again once
     // the lift has dropped past small_error.
     .hold_output = true,
+    // Takes out what the hold leaves inside small_error: after arrival, volts
+    // per inch of error added up every pass, capped at integral_max_volts.
+    .hold_ki = 0.1,
     // Volts that hold the lift still on their own. They are added to the
     // loop's output, so the loop only fixes what is left and the lift sits
     // closer to its target. To measure: raise the voltage until the lift

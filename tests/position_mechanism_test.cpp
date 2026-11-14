@@ -301,6 +301,51 @@ int main() {
     CHECK_NEAR(lift.volts, 1.5, 1e-12);
   }
 
+  // --- hold_ki integrates out the droop inside small_error -----------------
+  CHECK_NEAR(PositionMechanismConfig{}.hold_ki, 0.0, 1e-12);
+  {
+    PositionMechanismConfig config = baseConfig(true);
+    config.hold_ki = 0.05;
+    config.integral_max_volts = 1.0;
+    Rig held(config);
+    held.position = 10.0;
+    held.mechanism.moveTo(10.0);
+    CHECK(settle(held, 50) > 0);
+
+    // 1 unit low, inside small_error: P alone gives 0.5 V; each tick adds 0.05 V.
+    held.position = 9.0;
+    held.tick();
+    CHECK_NEAR(held.volts, 0.5 + 0.05, 1e-12);
+    held.tick();
+    CHECK_NEAR(held.volts, 0.5 + 0.10, 1e-12);
+    for (int i = 0; i < 100; ++i) held.tick();
+    std::printf("hold_ki 0.05 after 102 ticks 1 unit low: %.4f V (cap 1.0)\n", held.volts);
+    CHECK_NEAR(held.volts, 0.5 + 1.0, 1e-12);
+
+    // Back on target the sum stays: it is what holds the load there.
+    held.position = 10.0;
+    held.tick();
+    CHECK_NEAR(held.volts, 1.0, 1e-12);
+    // Past the target it unwinds instead of resetting.
+    held.position = 10.5;
+    held.tick();
+    CHECK_NEAR(held.volts, -0.25 + 1.0 - 0.025, 1e-12);
+
+    held.mechanism.moveTo(10.0);
+    held.tick();
+    CHECK_NEAR(held.volts, -0.25, 1e-12);
+
+    held.position = 10.0;
+    CHECK(settle(held, 50) > 0);
+    held.position = 9.0;
+    held.tick();
+    held.mechanism.setManualVoltage(0.0);
+    held.mechanism.moveTo(10.0);
+    held.position = 10.0;
+    held.tick();
+    CHECK_NEAR(held.volts, 0.0, 1e-12);
+  }
+
   // --- Gravity: an arm -------------------------------------------------------
   // Level at a reading of 30, two units per arm degree. Sitting on the target
   // leaves only the gravity voltage.
