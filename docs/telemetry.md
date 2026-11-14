@@ -87,6 +87,68 @@ card fails, logging does nothing and the program continues.
 `tests/telemetry_test.cpp` checks the CSV output on the host. Only
 `src/mclib/telemetry/flush_task.cpp` includes PROS.
 
+### Log a routine for the path planner
+
+The path planner's **Robot log…** button draws a log over the plan and the
+simulated run, and says how far apart they are in each step. It needs the
+pose: columns `x_in` and `y_in`, and `heading_deg` for the heading gaps.
+Nothing logs the pose unless you add it. This runs a routine exported from
+the planner and logs the pose every 20 ms from a task of its own:
+
+```cpp
+#include "main.h"
+
+#include <atomic>
+
+using namespace mclib::units::literals;
+
+// Runs @p routine and logs where odometry puts the robot to
+// /usd/<base_name>NNN.csv.
+void runAndLog(void (*routine)(), const char* base_name) {
+  static mclib::telemetry::RowBuffer<256> buffer;
+  mclib::telemetry::SdCardSink sink(base_name);
+  mclib::telemetry::Logger log(sink, buffer, {.period = 20 * mclib::units::millisecond});
+  auto x = log.addLength("x");             // x_in
+  auto y = log.addLength("y");             // y_in
+  auto heading = log.addAngle("heading");  // heading_deg
+  mclib::telemetry::FlushTask flusher(log);
+
+  std::atomic<bool> running{true};
+  pros::Task sampler([&] {
+    while (running) {
+      const mclib::Pose2D pose = mclib::control::robotState().pose();
+      log.set(x, pose.x * 1_in);
+      log.set(y, pose.y * 1_in);
+      log.set(heading, pose.theta * 1_rad);
+      log.sample();
+      pros::delay(10);
+    }
+  });
+  routine();
+  running = false;
+  sampler.join();
+  flusher.stop();
+}
+
+void autonomous() { runAndLog(runLeftSide, "auton"); }
+```
+
+`runLeftSide` is the function the planner exported for a routine named
+"Left side". The first row is written when the routine starts, so the
+planner lines it up with the start of the run. If it is off, set **Log
+starts at** under Activity.
+
+The log is what odometry believed, not where the robot really was. The
+planner compares it with the simulated odometry at the same time into each
+step, with the planned path, and with each step's target.
+
+Without a step column the planner splits the log by the simulated run's step
+times, which drift if the robot is faster or slower than the simulation. To
+split it by the robot's own step times, add `auto step = log.addNumber("step");`
+and set it to the planner's step number, from 1, before each step:
+`log.set(step, 3.0);`. The exported routine marks each step with a comment
+such as `// 3. Turn to heading`.
+
 ## USB serial
 
 `mclib/telemetry/file_sink.hpp`. `stdoutSink()` sends the CSV to the PROS

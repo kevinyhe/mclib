@@ -247,11 +247,45 @@ CONDITIONS = {
                          help="Lower grip makes the wheels slip more."),
     "noise_seed": dict(default=1, label="Sensor noise seed", unit="", low=0, high=2147483647, step=1,
                        help="Change it to get different IMU noise. The same seed repeats a run exactly."),
+    "placement_x_in": dict(default=0, label="Placed off the start: X", unit="in", low=-6, high=6, step=.1,
+                           help="How far right of the start pose the robot really stands. Odometry still starts at "
+                                "the start pose, as when a robot placed by hand is a little off. A placement into a "
+                                "field element or piece is cut back until the robot touches it."),
+    "placement_y_in": dict(default=0, label="Placed off the start: Y", unit="in", low=-6, high=6, step=.1,
+                           help="How far forward of the start pose the robot really stands. Odometry still starts at "
+                                "the start pose."),
+    "placement_heading_deg": dict(default=0, label="Placed off the start: heading", unit="°", low=-15, high=15,
+                                  step=.1, help="How far clockwise of the start heading the robot really faces. The "
+                                                "inertial sensor still reads the start heading."),
+}
+
+#: Run many times: how many runs, how much each one's start and conditions
+#: change, and how close to its target a step must end to count as on target
+REPEAT = {
+    "count": dict(default=20, label="Runs", unit="", low=2, high=50, step=1,
+                  help="How many times to run the routine. Each run takes as long as one Run simulation; several go "
+                       "at once."),
+    "placement_in": dict(default=.5, label="Placement, up to", unit="in", low=0, high=6, step=.1,
+                         help="Each run stands the robot up to this far off the start pose, in X and in Y. Odometry "
+                              "still starts at the start pose."),
+    "placement_deg": dict(default=1, label="Heading, up to", unit="°", low=0, high=15, step=.1,
+                          help="Each run turns the robot up to this far off the start heading. The inertial sensor "
+                               "still reads the start heading."),
+    "grip_percent": dict(default=10, label="Grip, up to", unit="% either way", low=0, high=50, step=1,
+                         help="Each run's floor grip is the routine's grip times a number up to this far either side "
+                              "of 1. Tiles differ from field to field, and vexsim's grip is a guess."),
+    "battery_percent": dict(default=30, label="Battery, down to", unit="% below the routine's", low=0, high=100,
+                            step=5, help="Each run's battery charge is between the routine's and this much lower."),
+    "on_target_in": dict(default=2, label="On target within", unit="in", low=.1, high=24, step=.1,
+                         help="A step counts as on target when it ends before its time limit, this close to its "
+                              "target position and within the heading below."),
+    "on_target_deg": dict(default=5, label="and within", unit="°", low=.1, high=90, step=.1,
+                          help="How close to its target heading a step must end to count as on target."),
 }
 
 LIMITS = dict(max_steps=40, max_points=30, max_simulated_s=120, max_body_bytes=262144,
-              queue_size=4, history_size=40, hold_ms=300, min_point_gap_in=.5, min_handle_in=.5,
-              max_handle_in=300, settle_allowance_ms=4000, chain_allowance_ms=500)
+              queue_size=4, history_size=40, batch_history_size=5, hold_ms=300, min_point_gap_in=.5,
+              min_handle_in=.5, max_handle_in=300, settle_allowance_ms=4000, chain_allowance_ms=500)
 
 DEFAULT_PROJECT = dict(
     format=FORMAT, version=VERSION, name="New routine", field=OLD_FILE_FIELD, preload="none",
@@ -563,5 +597,5 @@ def config():
     return dict(format=FORMAT, version=VERSION, game_fields=GAME_FIELDS, presets=PRESETS, tracking=TRACKING,
                 heading_sources=HEADING_SOURCES, gains=GAINS, slew=SLEW, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
                 actions=ACTIONS, preload=PRELOAD,
-                path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, limits=LIMITS,
+                path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, repeat=REPEAT, limits=LIMITS,
                 default_project=default_project())

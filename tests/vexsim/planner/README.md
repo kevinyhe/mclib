@@ -60,15 +60,16 @@ stops the run on screen.
 
 | Part | What it does |
 | --- | --- |
-| Top bar | name, New, Open, Save, Examples (a menu with each example's description), Undo, Redo, Mirror (left ↔ right or front ↔ back), Export C++, status, ? for help, Run. Short messages such as "Saved" or "Mirrored" show at the bottom of the field for a few seconds. |
+| Top bar | name, New, Open, Save, Examples (a menu with each example's description), Undo, Redo, Mirror (left ↔ right or front ↔ back), Export C++, status, ? for help, Run many, Run. Short messages such as "Saved" or "Mirrored" show at the bottom of the field for a few seconds. |
 | Routine (left) | the start pose and the steps in order, with each step's label in full, its plan or result, and its lift and claw actions. **Add a step** opens a list of step types with a search box: type part of a name, then Enter adds the first match after the selected step. Drag a step to move it. Its ⋯ button duplicates, moves or deletes it. |
-| Activity (left) | each stage of the current job with its time, then a log of what happened |
-| Field (centre) | the routine on a 144 in field. Drag to edit. Top view, or on the Override field a 3D view. |
+| Activity (left) | each stage of the current job with its time, then a log of what happened. With a robot log open, its name, its start time and how far it got from the run. |
+| Field (centre) | the routine on a 144 in field. Drag to edit. Top view, or on the Override field a 3D view. **Robot log…** draws a log from your robot. |
 | Playback | play, playback speed, which run to show, which run to compare with. Under them, a timeline with one block per step, from when the step started to when it ended (red underline: it broke a rule), diamonds where lift and claw actions ran, and a dashed red line at 15 s, when autonomous ends. Click or drag on it to move playback; clicking a block also selects that step. Before a run it shows the selected path's plan. When the routine has changed since the run shown, **Open its routine** puts the routine that run used back in the editor; Ctrl+Z goes back to yours. |
 | Graph | hidden until you pick a tab: Speed (planned and simulated), Voltage, Heading, Odometry error, or Lift and claw (claw height, the height the lift was sent to and the jaw gap, on the Override robot). Its time axis lines up with the timeline above it. Click it to jump there. Hide closes it again. |
 | Step tab (right) | the selected step's settings, its plan, and what it did in the last run. Each setting has its name on the left and its value on the right, with the unit inside the box. **Automatic** (or **Default**) next to a value means the planner works it out; click it to set your own. Lift and claw actions show one line each; click one to edit it. |
-| Robot & settings tab | drivetrain, odometry sensors, start pose, path defaults, simulated battery and grip, PID gains |
+| Robot & settings tab | drivetrain, odometry sensors, start pose, path defaults, simulated battery, grip and how far off the start the robot is placed, PID gains |
 | Telemetry tab | every recorded value at the playback time: position, speeds, controller, motors, sensors |
+| Run many tab | run the routine many times with the start and conditions changed, and see how the runs spread |
 
 ## Paths
 
@@ -498,6 +499,78 @@ next time the robot stood still (under 0.5 in/s and 2°/s), if that came
 before the end of the next step. A drive handed
 on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
 
+## Run many
+
+One run shows one robot on one field. **Run many…** runs the routine many
+times, 20 by default, each with the robot and the field a little different,
+and shows how often each step lands and how the score spreads. Each run is a
+full simulation, the same as **Run simulation**, and up to
+`--parallel-runs` go at once. A single **Run simulation** goes ahead of the
+run-many's waiting runs.
+
+Each run changes, at random within the settings in the tab:
+
+| What | Default | How |
+| --- | --- | --- |
+| Where the robot stands | up to 0.5 in in X and in Y, and 1° | The robot stands off the start pose, but odometry and the inertial sensor start at the start pose, as when a robot placed by hand is a little off. |
+| Floor grip | up to 10% either way | the routine's grip times 0.9 to 1.1. Tiles differ from field to field, and vexsim's grip is a guess. |
+| Battery | up to 30% below the routine's | from the routine's charge down to 30% less |
+| Sensor noise | every run its own seed | |
+
+Each run's changes are kept as its routine's **Simulated conditions**:
+**Placed off the start** X, Y and heading, grip, battery and noise seed. Set
+them by hand to run one case again.
+
+The tab then lists:
+
+- red's score at the end of the autonomous period, as how many runs got
+  each score, and how many earned the Autonomous Win Point and Bonus;
+- where the runs ended: within how far of their middle, and the range of
+  headings;
+- how far the last step with a target ended from it, and how long each run
+  took;
+- for each step, how many runs **finished** it (a motion ended before its
+  time limit, the lift or roller reached its preset, the wall reset found
+  the wall), how many ended it **on target** (finished, and within 2 in and
+  5° of the target, set in the tab), and its miss, median and worst;
+- every run, worst first. Worst is a broken rule, then the lowest red score
+  at 15 s, then the lowest final score, then the fewest steps on target,
+  then the furthest last miss. **Show** puts a run on the field, with its
+  steps and playback; **Open its routine** then puts its routine, with its
+  conditions, in the editor.
+
+The field draws every run's path in thin blue and the worst in red.
+
+A placement that would put the robot inside a Toggle, a wall or a piece is
+cut back toward the start pose until the robot touches it, within 0.1 in and
+0.25°, the way a robot set down against it stands. Each cut is a new try at
+building the field, about 10 s, and a run takes up to four. The run's first
+step says how far it was placed and what it was moved back from, and its
+line in the list shows where it stood. A start pose that is itself inside
+something stops with that error, as **Run simulation** does.
+
+## Robot log
+
+**Robot log…** above the field opens a CSV your robot logged with mclib's
+telemetry `Logger`, and draws it in green over the plan and the run, with a
+robot at the playback time. The log needs `x_in` and `y_in` columns, and
+`heading_deg` for the heading gaps; [docs/telemetry.md](../../../docs/telemetry.md#log-a-routine-for-the-path-planner)
+has a program that logs them while it runs an exported routine. The page
+reads from the line that starts with `t_ms` and skips lines that start with
+`#`, so a log saved with `pros terminal > run.csv` opens too.
+
+The log's first row is put at the start of the routine. **Log starts at**
+under Activity moves it later or earlier.
+
+The log is what the robot's odometry believed. With a finished run shown,
+each step's card says how far the log got from the simulated odometry at the
+same time into the step, how far it ended from the simulated odometry and
+from the step's target, and for a path, how far it got from the plan.
+Activity names the step where the log got furthest from the simulated
+odometry. A `step` column, set to the planner's step number from 1 before
+each step, splits the log by the robot's own step times; without one the
+page uses the simulated run's.
+
 ## Saving and exporting
 
 - **Save** downloads the routine as JSON. **Open** loads one; files from the
@@ -628,9 +701,10 @@ field.
 | `cascade_helpers.hpp`, `cascade_bridge.cpp`, `mechanisms.py` | the Override lift and claw in C++, shared with the export; Match Loads, the score and the robot rules |
 | `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
 | `export_cpp.py` | the C++ export |
+| `batch.py` | Run many: how each run is changed, and the report |
 | `three_files.py` | serves Three.js from the vexsim checkout to the 3D view |
 | `static/field3d.html`, `static/field3d.js` | the Override field in 3D |
-| `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `planner.css` |
+| `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `robotlog.js` (reads and compares robot logs), `planner.css` |
 
 Each run is kept in its own folder under `--output`: the routine, progress,
 `result.json` with every check and the full recording, `trace.csv`, and
@@ -640,7 +714,8 @@ Each run is kept in its own folder under `--output`: the routine, progress,
 
 ```sh
 cd tests/vexsim/planner
-VEXSIM_PATH=../../../../vexsim python3 -m unittest -v test_planner test_geometry test_server test_three_files
+VEXSIM_PATH=../../../../vexsim python3 -m unittest -v test_planner test_geometry test_server test_three_files \
+  test_batch test_robot_log
 ```
 
 `test_planner` compiles mclib once. Set `MCLIB_PLANNER_CACHE` to a folder to

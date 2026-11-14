@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import random
 import re
 import shutil
 import signal
@@ -28,6 +29,7 @@ import uuid
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+from batch import badness, batch_report, repeat_settings, run_outcome, variations, varied_project  # noqa: E402
 from engine import ROOT, readiness, write_json  # noqa: E402
 from export_cpp import YOU, export  # noqa: E402
 from fields import drawings  # noqa: E402
@@ -36,6 +38,8 @@ from project import LIMITS, PRESETS, TRACKING, ProjectError, config, step_name, 
 from three_files import ThreeMissing, asset as three_asset  # noqa: E402
 
 FINISHED = {"finished", "broke_rule", "cancelled", "error"}
+COMPLETED = {"finished", "broke_rule"}
+STOPPED_EARLY = "The server stopped before this run finished."
 #: A run keeps about 1.5 cores busy and holds about 400 MB.  On 24 threads, 8 at once finish one every
 #: 13.6 s, against one every 61.5 s one at a time, though each takes 108 s instead of 61.5 s.
 PARALLEL_RUNS = max(1, os.cpu_count() // 3)
@@ -160,7 +164,12 @@ class Planner:
         self.shutdown_event = threading.Event()
         self.processes = {}
         self.next_number = 1
+        self.batches = OrderedDict()
+        self.children = {}
+        self.batch_pending = queue.Queue()
+        self.next_batch_number = 1
         self._restore()
+        self._restore_batches()
         self.workers = [threading.Thread(target=self._worker, name=f"run-worker-{n}", daemon=True)
                         for n in range(parallel_runs)]
         for worker in self.workers:
@@ -184,10 +193,30 @@ class Planner:
                 continue
             job["artifact_dir"] = str(path.parent)
             if job.get("status") not in FINISHED:
-                job.update(status="error", error="The server stopped before this run finished.")
+                job.update(status="error", error=STOPPED_EARLY)
                 write_json(path, job)
             self.jobs[job["id"]] = job
             self.next_number = max(self.next_number, job.get("number", 0) + 1)
+
+    def _restore_batches(self):
+        paths = sorted(self.output.glob("[0-9a-f]" * 32 + "/batch.json"),
+                       key=lambda path: path.stat().st_mtime)[-LIMITS["batch_history_size"]:]
+        for path in paths:
+            try:
+                batch = strict_json(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(batch, dict) or batch.get("id") != path.parent.name:
+                continue
+            batch["folder"] = str(path.parent)
+            for child in batch["runs"]:
+                child["artifact_dir"] = str(path.parent / child["id"])
+                if child["status"] not in FINISHED:
+                    child.update(status="error", error=STOPPED_EARLY)
+                self.children[child["id"]] = child
+            self._save_batch(batch)
+            self.batches[batch["id"]] = batch
+            self.next_batch_number = max(self.next_batch_number, batch["number"] + 1)
 
     def engine_state(self, preset, tracking):
         state = readiness(self.vexsim, self.cache, preset, tracking)
@@ -282,6 +311,100 @@ class Planner:
             self._trim()
             return copy.deepcopy(job)
 
+    def submit_batch(self, body):
+        """Queue the routine @p body["project"] many times, each run with the
+        robot placed a little off the start and the conditions changed."""
+        if not isinstance(body, dict) or set(body) != {"project", "settings"}:
+            raise ValueError("Send the routine and the run-many settings.")
+        project = validate_project(body["project"])
+        check_runnable(project)
+        settings = repeat_settings(body["settings"])
+        with self.lock:
+            if self.shutdown_event.is_set():
+                raise BusyError("The planner is stopping.")
+            if any(self._batch_status(batch) in ("queued", "running") for batch in self.batches.values()):
+                raise BusyError("A run-many is still going. Wait for it to finish or cancel it.")
+            identity = uuid.uuid4().hex
+            folder = self.output / identity
+            folder.mkdir()
+            seed = random.SystemRandom().randrange(1, 2 ** 31)
+            batch = dict(id=identity, number=self.next_batch_number, name=project["name"], created_at=time.time(),
+                         settings=settings, seed=seed, cancelled=False, folder=str(folder), runs=[])
+            self.next_batch_number += 1
+            write_json(folder / "project.json", project)
+            for number, conditions in enumerate(variations(project, settings, seed), start=1):
+                child_id = uuid.uuid4().hex
+                destination = folder / child_id
+                destination.mkdir()
+                write_json(destination / "project.json", varied_project(project, conditions))
+                child = dict(id=child_id, number=number, batch=dict(id=identity, number=batch["number"]),
+                             name=project["name"], status="queued", created_at=time.time(), summary=None, error=None,
+                             error_stage=None, error_step=None, artifact_dir=str(destination), conditions=conditions,
+                             outcome=None)
+                batch["runs"].append(child)
+                self.children[child_id] = child
+            self.batches[identity] = batch
+            self._save_batch(batch)
+            for child in batch["runs"]:
+                self.batch_pending.put_nowait(child["id"])
+            while len(self.batches) > LIMITS["batch_history_size"]:
+                oldest = next(iter(self.batches.values()))
+                for child in oldest["runs"]:
+                    self.children.pop(child["id"], None)
+                del self.batches[oldest["id"]]
+            return self.get_batch(identity)
+
+    @staticmethod
+    def _batch_status(batch):
+        statuses = [child["status"] for child in batch["runs"]]
+        if all(status in FINISHED for status in statuses):
+            return "cancelled" if batch["cancelled"] else "finished"
+        return "running" if "running" in statuses or any(status in FINISHED for status in statuses) else "queued"
+
+    def _save_batch(self, batch):
+        write_json(Path(batch["folder"]) / "batch.json", {key: value for key, value in batch.items() if key != "folder"})
+
+    def get_batch(self, identity):
+        """The run-many @p identity: every run's start and outcome, and how the
+        finished runs spread."""
+        with self.lock:
+            batch = self.batches.get(identity)
+            if batch is None:
+                return None
+            batch = copy.deepcopy(batch)
+        runs = [{key: value for key, value in child.items() if key != "artifact_dir"} for child in batch["runs"]]
+        done = [child for child in runs if child["outcome"] is not None]
+        worst_first = [child["number"] for child in sorted(done, key=lambda child: badness(child["outcome"]))]
+        project = self._read(batch["folder"], "project.json")
+        started = [child["started_at"] for child in runs if "started_at" in child]
+        finished = [child["finished_at"] for child in runs if child["status"] in FINISHED and "finished_at" in child]
+        return dict({key: value for key, value in batch.items() if key not in ("folder", "runs")},
+                    status=self._batch_status(batch), runs=runs, project=project,
+                    started_at=min(started) if started else None,
+                    finished_at=max(finished) if finished and len(finished) == len(runs) else None,
+                    report=batch_report([child["outcome"] for child in done], len(project["steps"]), worst_first))
+
+    def list_batches(self):
+        with self.lock:
+            identities = list(reversed(self.batches))
+        return [{key: value for key, value in self.get_batch(identity).items() if key in
+                 ("id", "number", "name", "status", "created_at", "settings")} for identity in identities]
+
+    def cancel_batch(self, identity):
+        with self.lock:
+            batch = self.batches.get(identity)
+            if batch is None:
+                return None
+            batch["cancelled"] = True
+            for child in batch["runs"]:
+                if child["status"] not in FINISHED:
+                    self.cancel(child["id"])
+            self._save_batch(batch)
+        return self.get_batch(identity)
+
+    def _job(self, identity):
+        return self.jobs.get(identity) or self.children.get(identity)
+
     def _trim(self):
         while len(self.jobs) > LIMITS["history_size"]:
             oldest = next((key for key, job in self.jobs.items() if job["status"] in FINISHED), None)
@@ -307,7 +430,7 @@ class Planner:
 
     def get(self, identity, frames_from=0):
         with self.lock:
-            job = self.jobs.get(identity)
+            job = self._job(identity)
             if job is None:
                 return None
             value = copy.deepcopy(job)
@@ -337,7 +460,7 @@ class Planner:
 
     def cancel(self, identity):
         with self.lock:
-            job = self.jobs.get(identity)
+            job = self._job(identity)
             if job is None:
                 return None
             if job["status"] not in FINISHED:
@@ -346,20 +469,30 @@ class Planner:
                 self._stop_process(identity)
         return self.get(identity)
 
+    def _next_run(self):
+        """A single run first, then the next run of a run-many."""
+        try:
+            return self.pending, self.pending.get(timeout=.2)
+        except queue.Empty:
+            pass
+        try:
+            return self.batch_pending, self.batch_pending.get_nowait()
+        except queue.Empty:
+            return None, None
+
     def _worker(self):
         while not self.shutdown_event.is_set():
-            try:
-                identity = self.pending.get(timeout=.2)
-            except queue.Empty:
+            source, identity = self._next_run()
+            if source is None:
                 continue
             try:
                 self._execute(identity)
             finally:
-                self.pending.task_done()
+                source.task_done()
 
     def _execute(self, identity):
         with self.lock:
-            job = self.jobs.get(identity)
+            job = self._job(identity)
             if job is None or job["status"] == "cancelled":
                 return
             destination = Path(job["artifact_dir"])
@@ -384,6 +517,8 @@ class Planner:
                         if process.returncode in (0, 1) and isinstance(result, dict) and not job["error"]:
                             job.update(status="finished" if result["legal"] else "broke_rule", summary=result["summary"],
                                        finished_at=time.time())
+                            if "batch" in job:
+                                self._record_outcome(job, result)
                         else:
                             job.update(status="error", finished_at=time.time(),
                                        error=job["error"] or failure.get("error") or
@@ -399,6 +534,16 @@ class Planner:
                 write_json(destination / "job.json", job)
                 self.processes.pop(identity, None)
                 self._trim()
+                if "batch" in job and job["batch"]["id"] in self.batches:
+                    self._save_batch(self.batches[job["batch"]["id"]])
+
+    def _record_outcome(self, job, result):
+        settings = self.batches[job["batch"]["id"]]["settings"]
+        try:
+            job["outcome"] = run_outcome(result, settings)
+        except (KeyError, IndexError, TypeError) as error:
+            job.update(status="error", error=f"The run finished but its result could not be read: {error!r}. "
+                                             f"See {Path(job['artifact_dir']) / 'result.json'}.")
 
     def _wait(self, job, process):
         deadline = time.monotonic() + self.wall_timeout
@@ -423,7 +568,7 @@ class Planner:
     def close(self):
         self.shutdown_event.set()
         with self.lock:
-            for identity, job in self.jobs.items():
+            for identity, job in [*self.jobs.items(), *self.children.items()]:
                 if job["status"] not in FINISHED:
                     self.cancel(identity)
         deadline = time.monotonic() + 5
@@ -524,6 +669,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200 if project else 404, project or dict(error="No such example."))
         elif path == "/api/runs":
             self.send(200, dict(runs=planner.list()))
+        elif path == "/api/batches":
+            self.send(200, dict(batches=planner.list_batches()))
+        elif re.fullmatch(r"/api/batches/[0-9a-f]{32}", path):
+            batch = planner.get_batch(path.rsplit("/", 1)[1])
+            self.send(200 if batch else 404, batch or dict(error="No such run-many."))
         elif re.fullmatch(r"/api/runs/[0-9a-f]{32}", path):
             start = query.get("frames_from", ["0"])[0]
             job = planner.get(path.rsplit("/", 1)[1], int(start) if start.isdigit() else 0)
@@ -577,6 +727,13 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_body()
             if path == "/api/runs":
                 self.send(202, planner.submit(body))
+            elif path == "/api/batches":
+                self.send(202, planner.submit_batch(body))
+            elif re.fullmatch(r"/api/batches/[0-9a-f]{32}/cancel", path):
+                if body != {}:
+                    raise ValueError("Send an empty object to cancel a run-many.")
+                batch = planner.cancel_batch(path.split("/")[3])
+                self.send(200 if batch else 404, batch or dict(error="No such run-many."))
             elif path == "/api/plan":
                 answer = planner.plan(body)
                 self.send(409 if answer.get("not_ready") else 400 if "error" in answer else 200, answer)

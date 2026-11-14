@@ -3,6 +3,27 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Path planner: **Run many…** runs a routine many times, 20 by default,
+  each with the robot placed up to 0.5 in and 1° off the start pose while
+  odometry starts at the start pose, the grip up to 10% either way, the
+  battery up to 30% lower and its own sensor noise. The **Run many** tab
+  says how many runs finished each step and ended it on target, how red's
+  score at 15 s spread, where the runs ended, and lists every run worst
+  first; **Show** puts one on the field. The field draws every run's path.
+- Path planner: **Placed off the start** X, Y and heading under Simulated
+  conditions, so one such run can be run again. A placement that would put
+  the robot inside a field element or piece is cut back until the robot
+  touches it.
+- Path planner: **Robot log…** draws a CSV logged on the robot with the
+  telemetry `Logger` over the plan and the simulated run, with the playback
+  scrubber, and says per step how far the log was from the simulated
+  odometry, the planned path and the target. `docs/telemetry.md` shows how
+  to log the pose, and a step column, while an exported routine runs.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes
