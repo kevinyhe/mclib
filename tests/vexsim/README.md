@@ -59,6 +59,12 @@ The job installs `mujoco` and `numpy` at the versions in
   tracking wheel, so it runs only in the `drive` and `horizontal` modes. With
   its sideways wheel all 16 moves pass; with drive encoders alone the arcs and
   the boomerang end 4.9-6.9 in off.
+- `six_motor_450_middle_traction`: the six-motor drive again, with traction wheels
+  in the middle pair (vexsim's `with_traction_wheels()`). It slides less, so
+  with drive encoders alone 14 of its 16 moves pass, against 11 on omnis;
+  the diagonal move to a point and the boomerang miss by 2.7 and 1.9 in. It
+  passes 16 with two tracking wheels, 15 in `vertical` and 14 in
+  `horizontal`.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
   arcs and swings, at default gains.
 - The same two arcs through `followTrajectory()` (RAMSETE):
