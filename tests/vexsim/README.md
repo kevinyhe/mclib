@@ -58,23 +58,27 @@ The job installs `mujoco` and `numpy` at the versions in
   Override cascade robot (four 450 RPM motors on 2.75 in omnis, 14 lb, one
   sideways tracking wheel at the centre). It has no forward
   tracking wheel, so it runs only in the `drive` and `horizontal` modes. With
-  its sideways wheel all 16 moves pass; with drive encoders alone the arcs and
-  the boomerang end 4.9-6.9 in off, and with the accelerometer added
-  (`imu/override_cascade/*`) 0.4-2.8 in.
+  its sideways wheel all 18 moves pass; with drive encoders alone the arcs,
+  the boomerang and `moveToPose()` end 4.9-6.9 in off, and with the
+  accelerometer added (`imu/override_cascade/*`) 0.4-2.8 in.
 - `six_motor_450_middle_traction`: the six-motor drive again, with traction wheels
   in the middle pair (vexsim's `with_traction_wheels()`). It slides less, so
-  with drive encoders alone 14 of its 16 moves pass, against 11 on omnis;
-  the diagonal move to a point and the boomerang miss by 2.7 and 1.9 in. It
-  passes 16 with two tracking wheels, 15 in `vertical` and 14 in
-  `horizontal`.
+  with drive encoders alone 14 of its 18 moves pass, against 11 on omnis;
+  the diagonal move to a point, the boomerang and both `moveToPose()` moves
+  miss by 2.7, 1.9 and 1.8 in. It passes 18 with two tracking wheels, 15 in
+  `vertical` and 16 in `horizontal`.
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
-  arcs and swings, at default gains.
+  `moveToPose()` forward and in reverse, arcs and swings, at default gains.
+- `profiled/*`: the seven stopping moves (drive forward and reverse, both
+  turns, both moves to a point, the swing) after `useProfiledMoves()`, on the
+  four drives, against the same targets. They plan at 80% of the measured top
+  speed and 150 in/s².
 - The same two arcs through `followTrajectory()` (RAMSETE):
   `ramsete_arc` and `ramsete_reverse_arc`, plus `ramsete_s_curve` (90° right
   then 90° left, 24 in radius, to (48, 48)). `stress/ramsete_*` runs the arc
   at low battery, low grip and from a start 3.6 in and 8° off the path, and
   the `safety/*/9` cases inject each fault and a timeout into it. Before each, the runner measures
-  the preset's kS, kV and effective track width in the simulator the way
+  the preset's kS, kV, kA and effective track width in the simulator the way
   `docs/motion.md` describes, then plans at 70% of top speed.
   `--ramsete-b`, `--ramsete-zeta` and `--ramsete-accel` change the tuning.
 - Low battery, reduced traction and encoder-only heading.
