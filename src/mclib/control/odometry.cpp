@@ -46,6 +46,7 @@ bool odometryConfigIsValid(const OdometryConfig& config) {
 namespace {
 bool sameSlideConfig(const SlideEstimatorConfig& a, const SlideEstimatorConfig& b) {
   return a.imu_forward_in == b.imu_forward_in && a.imu_right_in == b.imu_right_in &&
+         a.imu_position_sigma_in == b.imu_position_sigma_in &&
          a.accel_sigma_ips2 == b.accel_sigma_ips2 && a.zero_sigma_ips2 == b.zero_sigma_ips2 &&
          a.zero_walk_ips2_per_sqrt_in == b.zero_walk_ips2_per_sqrt_in &&
          a.grip_sigma_ips == b.grip_sigma_ips && a.slide_sigma_s == b.slide_sigma_s;

@@ -110,6 +110,38 @@ void testImuOffTheCentreFeelsTheSpin() {
   CHECK(std::fabs(travel) < 0.01);
 }
 
+/// @brief Spins in place to 6 rad/s and back with an IMU that is really
+///        0.25 in further right than @p config says. Returns the sideways
+///        travel.
+double spinWithMisplacedImu(const SlideEstimatorConfig& config) {
+  SlideEstimator estimator(config);
+  const double true_right_in = config.imu_right_in + 0.25;
+  standStill(estimator, 0.0, 0.5);
+  double travel = 0.0;
+  double rate = 0.0;
+  for (int i = 0; i < 300; ++i) {
+    const double previous = rate;
+    rate = i < 150 ? std::fmin(6.0, rate + 0.1) : std::fmax(0.0, rate - 0.1);
+    const double spin_up = (rate - previous) / kDt;
+    const double accel_right = spin_up * config.imu_forward_in - rate * rate * true_right_in;
+    travel += estimator.update(kDt, 0.0, rate * kDt, accel_right);
+  }
+  return travel;
+}
+
+void testMisplacedImuIsLessOfASlide() {
+  // 0.25 in at 6 rad/s is 9 in/s^2 the turn doesn't explain. Told the IMU
+  // position may be that far off, the estimator counts it as less of a
+  // slide: 0.6 in over the 3 s spin, against 1.7 in.
+  SlideEstimatorConfig config;
+  config.imu_right_in = 3.0;
+  config.imu_forward_in = 4.0;
+  const double allowing_for_it = std::fabs(spinWithMisplacedImu(config));
+  config.imu_position_sigma_in = 0.0;
+  const double sure_of_the_position = std::fabs(spinWithMisplacedImu(config));
+  CHECK(allowing_for_it < 0.5 * sure_of_the_position);
+}
+
 void testNoTimeChangesNothing() {
   SlideEstimator estimator;
   CHECK_EQ(estimator.update(0.0, 1.0, 0.1, 100.0), 0.0);
@@ -125,6 +157,12 @@ void testConfigValidity() {
   bad = {};
   bad.imu_forward_in = NAN;
   CHECK(!mclib::control::slideEstimatorConfigIsValid(bad));
+  bad = {};
+  bad.imu_position_sigma_in = -0.1;
+  CHECK(!mclib::control::slideEstimatorConfigIsValid(bad));
+  SlideEstimatorConfig exact;
+  exact.imu_position_sigma_in = 0.0;
+  CHECK(mclib::control::slideEstimatorConfigIsValid(exact));
 }
 
 OdometryConfig accelerometerConfig() {
@@ -241,6 +279,7 @@ int main() {
   testTurnWithoutSlideReadsNoSlide();
   testSlideIsAddedUp();
   testImuOffTheCentreFeelsTheSpin();
+  testMisplacedImuIsLessOfASlide();
   testNoTimeChangesNothing();
   testConfigValidity();
   testOdometryRefusesAccelerometerWithHorizontalWheel();

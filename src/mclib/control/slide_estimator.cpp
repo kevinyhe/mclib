@@ -10,9 +10,16 @@
 namespace mclib {
 namespace control {
 
+namespace {
+// How many standard deviations of the IMU position error a reading may be
+// off before it counts as a push.
+constexpr double kPositionErrorBound = 3.0;
+}  // namespace
+
 bool slideEstimatorConfigIsValid(const SlideEstimatorConfig& config) {
   const auto positive = [](double value) { return std::isfinite(value) && value > 0.0; };
   return std::isfinite(config.imu_forward_in) && std::isfinite(config.imu_right_in) &&
+         std::isfinite(config.imu_position_sigma_in) && config.imu_position_sigma_in >= 0.0 &&
          positive(config.accel_sigma_ips2) && positive(config.zero_sigma_ips2) &&
          positive(config.zero_walk_ips2_per_sqrt_in) && positive(config.grip_sigma_ips) &&
          positive(config.slide_sigma_s);
@@ -58,9 +65,11 @@ double SlideEstimator::update(double dt_s, double forward_in, double turn_rad,
 
   // An IMU off the tracking centre also feels the turn itself: the pull
   // toward the centre of the spin, and the push of the spin speeding up.
-  const double centre_accel = accel_right_ips2 - m_zero +
-                              rate * rate * m_config.imu_right_in -
-                              m_config.imu_forward_in * rate_change / dt_s;
+  const double spin_up = rate_change / dt_s;
+  const double centre_accel = accel_right_ips2 - m_zero + rate * rate * m_config.imu_right_in -
+                              m_config.imu_forward_in * spin_up;
+  const double position_error_accel =
+      m_config.imu_position_sigma_in * (rate * rate + std::fabs(spin_up));
   const double turn_pull = rate * forward_speed;
   const double unexplained = centre_accel - turn_pull;
 
@@ -69,12 +78,14 @@ double SlideEstimator::update(double dt_s, double forward_in, double turn_rad,
   Mat2 F = Mat2::Identity();
   F(0, 1) = -dt_s;
   Mat2 Q = Mat2::Zero();
-  Q(0, 0) = std::pow(m_config.accel_sigma_ips2 * dt_s, 2);
+  Q(0, 0) = std::pow(m_config.accel_sigma_ips2 * dt_s, 2) + std::pow(position_error_accel * dt_s, 2);
   Q(1, 1) = std::pow(m_config.zero_walk_ips2_per_sqrt_in, 2) * std::fabs(forward_in);
   m_cov = F * m_cov * F.transpose() + Q;
 
-  const double slide_sigma = m_config.grip_sigma_ips +
-                             m_config.slide_sigma_s * (std::fabs(turn_pull) + std::fabs(unexplained));
+  const double push =
+      std::fabs(turn_pull) +
+      std::fmax(0.0, std::fabs(unexplained) - kPositionErrorBound * position_error_accel);
+  const double slide_sigma = m_config.grip_sigma_ips + m_config.slide_sigma_s * push;
   const double innovation_var = m_cov(0, 0) + slide_sigma * slide_sigma;
   const double gain_speed = m_cov(0, 0) / innovation_var;
   const double gain_zero = m_cov(1, 0) / innovation_var;

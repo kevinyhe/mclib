@@ -50,6 +50,10 @@ struct SlideEstimatorConfig {
   double imu_forward_in = 0.0;
   /// @brief IMU position to the right of the tracking centre, inches.
   double imu_right_in = 0.0;
+  /// @brief How well that position is measured, inches. Spinning at 6 rad/s,
+  ///        an IMU 0.25 in from where it is said to be reads 9 in/s^2 that
+  ///        neither the turn nor a slide explains.
+  double imu_position_sigma_in = 0.25;
   /// @brief Noise on one reading, in/s^2. 10 is about 25 mg: the chip itself
   ///        has 1 mg; the rest is the drive shaking it.
   double accel_sigma_ips2 = 10.0;
@@ -64,12 +68,13 @@ struct SlideEstimatorConfig {
   double grip_sigma_ips = 0.5;
   /// @brief How much faster it may slide per in/s^2 of sideways push,
   ///        seconds. The push is the pull the turn needs plus whatever the
-  ///        accelerometer feels that the turn doesn't explain.
+  ///        accelerometer feels that neither the turn nor the error in the
+  ///        IMU position could explain.
   double slide_sigma_s = 1.0;
 };
 
-/// @brief True when every number in @p config is finite and every sigma and
-///        walk is positive.
+/// @brief True when every number in @p config is finite, every sigma and
+///        walk is positive, and `imu_position_sigma_in` is not negative.
 bool slideEstimatorConfigIsValid(const SlideEstimatorConfig& config);
 
 /**
