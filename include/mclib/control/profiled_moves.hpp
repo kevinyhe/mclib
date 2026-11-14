@@ -19,8 +19,9 @@
  * After `useProfiledMoves()`, each of them with `exit` true plans its speed
  * instead: speed up at `limits.max_acceleration`, cruise, and slow down at
  * `limits.max_deceleration` to stop on the target. The voltage is the
- * feedforward for the planned wheel speed and acceleration, plus `kp` and
- * `kd` on how far the wheels are behind the plan.
+ * feedforward for the planned wheel speed and acceleration, plus `kp` on
+ * how far the wheels are behind the plan and `kd` on how much slower than
+ * the plan they went over the last 50 ms.
  *
  * - `driveTo()` plans the distance. Once the plan ends, its distance PID
  *   settles as before.
@@ -31,13 +32,15 @@
  * - `moveToPoint()` sets its speed each tick from the distance left along
  *   its heading: no faster than it can stop from at
  *   `limits.max_deceleration`, and no more than `limits.max_acceleration`
- *   faster than the tick before. It turns in place until it faces within
- *   30 degrees of the target, not 60: steering more than that at speed slid
- *   the robot sideways. Inside `distance_exit.small_error` its distance PID
- *   settles as before.
+ *   faster than the tick before. It first turns in place until it faces
+ *   within 30 degrees of the target, not 60: steering more than that at
+ *   speed slid the robot sideways. Inside `distance_exit.small_error` its
+ *   distance PID settles as before.
  *
- * A move that starts while the robot is still moving from a chained move
- * plans from the speed the last voltage drives at.
+ * `driveTo()` and `moveToPoint()` plan from the robot's forward speed when
+ * they start, the mean of `DriveHardware::driveVelocitiesRpm()`, no faster
+ * than `limits.max_velocity`: a move chained onto a moving robot starts at
+ * its speed, and one after a turn starts from rest.
  *
  * Chained moves (`exit` false), `curveCircle()`, `turnToPoint()`,
  * `boomerang()` and `followTrajectory()` run as before.
@@ -53,8 +56,9 @@ struct ProfiledMoveConfig {
    * @brief Feedforward and gains on how far the wheels are behind the plan.
    * @details `follower.gains` is the feedforward for **one side** of the
    * drive, measured as in `docs/motion.md`: the same numbers as
-   * `RamseteConfig::feedforward`. `kV` must be positive. `kp` and `kd` work
-   * on the inches a wheel is behind the plan; `follower.max_voltage` is
+   * `RamseteConfig::feedforward`. `kV` must be positive. `kp` works on the
+   * inches a wheel is behind the plan; `kd`, in volts per in/s, on how much
+   * slower than the plan it went over the last 50 ms; `follower.max_voltage` is
    * replaced by each move's `max_output`.
    */
   ProfileFollowerConfig follower{};

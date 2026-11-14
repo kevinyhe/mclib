@@ -185,8 +185,9 @@ robot slows for the whole last part of every move. After
 `useProfiledMoves()`, each of them with `exit` true plans its speed instead:
 speed up at `max_acceleration`, cruise, slow down to stop on the target. The
 voltage is the feedforward for the planned speed and acceleration, plus `kp`
-and `kd` on how far the wheels are behind the plan. Once the plan ends, the
-move's own PID settles as before, with the `settle_min_voltage` floor.
+on how far the wheels are behind the plan and `kd` on how much slower than
+the plan they went over the last 50 ms. Once the plan ends, the move's own
+PID settles as before, with the `settle_min_voltage` floor.
 
 ```cpp
 #include "mclib/control/profiled_moves.hpp"
@@ -209,19 +210,28 @@ driveTo(24_in, 2_s);  // now on a planned speed
 
 What each move does:
 
-- `driveTo()` plans the distance. A move that starts while the robot still
-  moves from a chained move plans from the speed its last voltage drives at.
+- `driveTo()` plans the distance, from the robot's forward speed when it
+  starts: the mean of the drive motors' reported speeds, no faster than
+  `max_velocity`. Chained onto a moving robot it starts at that speed; after
+  a turn, from rest.
 - `turnToAngle()` plans the arc each wheel rolls: the turn times half of
   `track_width`, with `turn_gains`.
 - `swing()` plans the arc the moving side rolls: the turn times
   `track_width`, with `turn_gains`.
 - `moveToPoint()` sets its speed each tick from the distance left along its
   heading: no faster than it can stop from at `max_deceleration`, and no
-  more than `max_acceleration` faster than the tick before. It turns in place
+  more than `max_acceleration` faster than the tick before, starting from
+  the robot's forward speed as `driveTo()` does. It first turns in place
   until it faces within 30° of the target, not 60°: steering more than that
   at speed slid the robot sideways, and odometry without a sideways tracking
   wheel can't see a slide. Inside `distance_exit.small_error` its distance
   PID settles.
+
+The speed `kd` compares is taken over 50 ms, not one 10 ms tick. A V5 motor
+or IMU reading refreshes every 10 ms, out of step with the loop, so now and
+then a tick reads the last value again and the next one jumps two. Over one
+tick that read as no speed and then twice the speed, and moved the voltage
+5 V either way at 50 in/s; over 50 ms it moves it 1 V.
 
 The plan skips the slew limit: it already limits the acceleration.
 
@@ -279,10 +289,7 @@ cascade drive is held to 150 in/s². On six_motor_450 a point move stops
 `tests/vexsim/chain_audit.py` ends chains of moves with `exit` false in a
 stopping `moveToPoint()`, 27 stops in all. With profiled moves 1 stop timed
 out and the stops took 32.5 s; with the PID moves 6 timed out and they took
-41.1 s. The planned approach hands over to the PID for good once the target
-is within `distance_exit.small_error` ahead along the robot's heading. A stop
-that starts with the target to the side or behind is already past that, so
-it runs as the PID move.
+41.1 s.
 
 The profiled moves stay opt-in: they need measured gains, and the swings
 above are slower.

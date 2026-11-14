@@ -32,7 +32,7 @@ void (*sim_after_refresh_hook)(std::uint32_t millis) = nullptr;
 }
 
 struct Sample {
-  double heading, left, right, current_ma, velocity_rpm;
+  double heading, left, right, current_ma, left_rpm, right_rpm;
   std::uint32_t millis;
   int disabled, cancel;
   double vertical, horizontal;
@@ -102,7 +102,7 @@ struct SimDrive : mclib::control::DriveHardware {
   double headingDeg() override { return rawHeading() + heading_offset; }
   void setHeadingDeg(double heading) override { heading_offset = heading - rawHeading(); }
   std::vector<double> driveCurrentsMa() override { return {sample.current_ma}; }
-  std::vector<double> driveVelocitiesRpm() override { return {sample.velocity_rpm}; }
+  std::vector<double> driveVelocitiesRpm() override { return {sample.left_rpm, sample.right_rpm}; }
   const mclib::units::DriveGeometry& driveGeometry() const override { return geometry; }
 } drive;
 

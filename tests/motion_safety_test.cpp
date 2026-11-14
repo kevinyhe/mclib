@@ -1412,16 +1412,22 @@ int main() {
 
     const double encoder_deg_per_in = 360 / (4 * mclib::kPi);
     double left_ips = 0, right_ips = 0, fastest_ips = 0;
+    mclib::Pose2D plant_pose{0, 0, 0};
+    // Called on each tick with that tick's voltages, before the drive moves.
+    std::function<void()> on_tick;
+    double pending_encoder = 0, pending_heading = 0;
     const auto start = [&] {
       clearCancel();
       now_ms = 0;
-      hw.heading = hw.encoder = 0;
+      hw.heading = hw.encoder = hw.velocity = 0;
       hw.left = hw.right = 0;
       left_ips = right_ips = fastest_ips = 0;
-      resetOdometry({0, 0, 0});
+      plant_pose = {0, 0, 0};
+      resetOdometry(plant_pose);
       robotState().setCorrectAngleDeg(0);
       robotState().setPrevOutputs(0, 0);
       on_delay = [&] {
+        if (on_tick) on_tick();
         const double dt = 0.01;
         const auto accelerate = [&](double& speed, double volts) {
           const double friction = std::fabs(speed) > 1e-9 ? std::copysign(ks, speed)
@@ -1431,8 +1437,15 @@ int main() {
         accelerate(left_ips, hw.left);
         accelerate(right_ips, hw.right);
         fastest_ips = std::max({fastest_ips, std::fabs(left_ips), std::fabs(right_ips)});
-        hw.encoder += (left_ips + right_ips) / 2 * dt * encoder_deg_per_in;
-        hw.heading += (left_ips - right_ips) / track_in * dt * 180 / mclib::kPi;
+        const double forward_ips = (left_ips + right_ips) / 2;
+        const double turn_rad = (left_ips - right_ips) / track_in * dt;
+        plant_pose.theta = mclib::wrapAngle(plant_pose.theta + turn_rad);
+        plant_pose.x += forward_ips * std::sin(plant_pose.theta) * dt;
+        plant_pose.y += forward_ips * std::cos(plant_pose.theta) * dt;
+        hw.encoder += forward_ips * dt * encoder_deg_per_in;
+        hw.heading += turn_rad * 180 / mclib::kPi;
+        hw.velocity = forward_ips * encoder_deg_per_in / 6;
+        resetOdometry(plant_pose);
       };
     };
     struct Run { MotionResult result; std::uint32_t ms; double miss; double fastest_ips; };
@@ -1474,6 +1487,125 @@ int main() {
     CHECK(planned_turn.miss <= motionConfig().turn_exit.small_error);
     CHECK(pid_drive_again.ms == pid_drive.ms);
     CHECK_NEAR(pid_drive_again.miss, pid_drive.miss, 1e-9);
+
+    // A target far off the nose: the profiled moveToPoint() turns in place
+    // until it faces within 30 deg of it, then drives on the plan, faster
+    // than the PID move.
+    std::uint32_t pid_point_ms[2] = {0, 0};
+    for (const bool use_plan : {false, true})
+    for (const double bearing_deg : {95.0, 150.0}) {
+      const int target_index = bearing_deg > 100 ? 1 : 0;
+      if (use_plan) CHECK(useProfiledMoves(profiled));
+      else usePidMoves();
+      const double target_x = 36 * std::sin(bearing_deg * mclib::kPi / 180);
+      const double target_y = 36 * std::cos(bearing_deg * mclib::kPi / 180);
+      std::optional<double> off_nose_when_driving_deg;
+      start();
+      on_tick = [&] {
+        if (off_nose_when_driving_deg || hw.left * hw.right <= 0) return;
+        off_nose_when_driving_deg =
+            std::fabs(mclib::wrapAngle(std::atan2(target_x - plant_pose.x, target_y - plant_pose.y) -
+                                       plant_pose.theta)) * 180 / mclib::kPi;
+      };
+      const MotionResult result = moveToPoint(target_x * 1_in, target_y * 1_in, 1, 4_s);
+      on_tick = {};
+      on_delay = {};
+      const double miss_in = std::hypot(plant_pose.x - target_x, plant_pose.y - target_y);
+      std::printf("%s moveToPoint() to a target %.0f deg off the nose: %s, %u ms, "
+                  "drove from %.1f deg off, miss %.2f in\n",
+                  use_plan ? "profiled" : "PID", bearing_deg, toString(result), static_cast<unsigned>(now_ms),
+                  off_nose_when_driving_deg.value_or(-1), miss_in);
+      CHECK(result == MotionResult::Reached);
+      CHECK(off_nose_when_driving_deg.has_value() && *off_nose_when_driving_deg <= 30.5);
+      CHECK(miss_in <= motionConfig().distance_exit.big_error);
+      if (use_plan) CHECK(now_ms < pid_point_ms[target_index]);
+      else pid_point_ms[target_index] = now_ms;
+    }
+
+    // A turn leaves the robot still, whatever voltage the chained drive
+    // before it ended on. The next move starts as it would from rest.
+    const auto firstTickVolts = [&](bool after_chained_drive_and_turn, bool point_move) {
+      start();
+      if (after_chained_drive_and_turn) {
+        CHECK(driveTo(24_in, 3_s, false) == MotionResult::Reached);
+        CHECK(turnToAngle(90_deg, 3_s) == MotionResult::Reached);
+      }
+      std::optional<double> first_volts;
+      on_tick = [&] { if (!first_volts) first_volts = (hw.left + hw.right) / 2; };
+      const double ahead_rad = plant_pose.theta;
+      if (point_move)
+        moveToPoint((plant_pose.x + 24 * std::sin(ahead_rad)) * 1_in,
+                    (plant_pose.y + 24 * std::cos(ahead_rad)) * 1_in, 1, 3_s);
+      else
+        driveTo(24_in, 3_s);
+      on_tick = {};
+      on_delay = {};
+      return first_volts.value_or(NAN);
+    };
+    for (const bool point_move : {false, true}) {
+      const double from_rest = firstTickVolts(false, point_move);
+      const double after_turn = firstTickVolts(true, point_move);
+      std::printf("profiled %s first tick: from rest %.2f V, after a chained drive and a turn "
+                  "%.2f V\n", point_move ? "moveToPoint()" : "driveTo()", from_rest, after_turn);
+      CHECK_NEAR(after_turn, from_rest, 0.25);
+    }
+    usePidMoves();
+    std::printf("PID driveTo() first tick: from rest %.2f V, after a chained drive and a turn "
+                "%.2f V\n", firstTickVolts(false, false), firstTickVolts(true, false));
+
+    // A V5 motor or IMU reading refreshes every 10 ms, out of step with the
+    // loop's 10 ms, so now and then a tick reads the last value again and
+    // the next one jumps two updates. At 50 in/s a stale reading is 0.5 in
+    // behind: kp's 2 V/in moves the voltage 1 V on it, and kd's 0.1 V per
+    // in/s on a speed taken over five ticks 1 V more. kd on a one-tick
+    // speed moved it 5 V.
+    CHECK(useProfiledMoves(profiled));
+    const auto voltsPerTick = [&](const std::function<MotionResult()>& move, int stale_every) {
+      start();
+      int tick = 0;
+      double held_encoder = 0, held_heading = 0;
+      std::vector<double> volts;
+      on_tick = [&] {
+        volts.push_back(hw.left);
+        held_encoder = hw.encoder;
+        held_heading = hw.heading;
+      };
+      const std::function<void()> move_drive = on_delay;
+      on_delay = [&] {
+        move_drive();
+        if (stale_every > 0 && ++tick % stale_every == 0) {
+          pending_encoder += hw.encoder - held_encoder;
+          pending_heading += hw.heading - held_heading;
+          hw.encoder = held_encoder;
+          hw.heading = held_heading;
+        } else {
+          hw.encoder += pending_encoder;
+          hw.heading += pending_heading;
+          pending_encoder = pending_heading = 0;
+        }
+      };
+      pending_encoder = pending_heading = 0;
+      move();
+      on_tick = {};
+      on_delay = {};
+      return volts;
+    };
+    const std::vector<std::pair<const char*, std::function<MotionResult()>>> chatter_moves{
+        {"driveTo(48 in)", [] { return driveTo(48_in, 3_s); }},
+        {"moveToPoint(0, 48)", [] { return moveToPoint(0_in, 48_in, 1, 3_s); }},
+        {"turnToAngle(180 deg)", [] { return turnToAngle(180_deg, 3_s); }},
+    };
+    for (const auto& [name, move] : chatter_moves) {
+      const std::vector<double> clean = voltsPerTick(move, 0);
+      const std::vector<double> stale = voltsPerTick(move, 7);
+      double largest_gap = 0;
+      for (std::size_t i = 0; i < std::min(clean.size(), stale.size()); ++i)
+        largest_gap = std::max(largest_gap, std::fabs(stale[i] - clean[i]));
+      std::printf("profiled %s, every 7th reading stale: voltage off the clean run by up to "
+                  "%.2f V\n", name, largest_gap);
+      CHECK(largest_gap <= 2.0);
+    }
+    usePidMoves();
   }
 
   // moveToPose() plans a curve from the odometry pose and follows it.

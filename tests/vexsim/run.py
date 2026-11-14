@@ -29,7 +29,7 @@ CONTROLLER_FIELDS = ("target_heading_deg", "heading_error_deg", "remaining_in",
 
 class Sample(C.Structure):
     _fields_ = [(name, C.c_double) for name in
-                ("heading", "left", "right", "current_ma", "velocity_rpm")]
+                ("heading", "left", "right", "current_ma", "left_rpm", "right_rpm")]
     _fields_ += [("millis", C.c_uint32), ("disabled", C.c_int), ("cancel", C.c_int)]
     _fields_ += [("vertical", C.c_double), ("horizontal", C.c_double)]
     _fields_ += [("gps_x", C.c_double), ("gps_y", C.c_double), ("gps_heading", C.c_double),
@@ -370,6 +370,8 @@ class PhysicsBridge:
             for side, name in zip(self.sides, ("left", "right")):
                 setattr(reading, name, sum(math.degrees(self.sim.encoders[m.name].position)
                                           for m in side) / len(side))
+                setattr(reading, name + "_rpm", sum(self.sim.encoders[m.name].velocity
+                                                    for m in side) * 30 / math.pi / len(side))
             if self.tracking_mode != "drive" and "track_parallel" in self.sim.tracking:
                 reading.vertical = math.degrees(self.sim.tracking["track_parallel"].position)
             if self.tracking_mode != "drive":
@@ -378,8 +380,6 @@ class PhysicsBridge:
                 reading.horizontal = -math.degrees(self.sim.tracking["track_perp"].position)
             reading.current_ma = sum(abs(m.current) for m in self.sim.motors) * 1000 / len(self.sim.motors)
             reading.battery_mv = self.sim.battery.voltage * 1000
-            reading.velocity_rpm = sum(abs(self.sim.encoders[m.name].velocity)
-                                       for m in self.sim.motors) * 30 / math.pi / len(self.sim.motors)
             if self.distance_sensors and reading.millis - self.last_distance_ms >= 20:
                 self.last_distance_ms = reading.millis
                 truth = self.truth()
