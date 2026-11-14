@@ -33,7 +33,7 @@ from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, Rule
                         load_match, mechanism_reading, score_summary, start_overlap_error, toggle_events,
                         toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
-from project import (LIMITS, MECHANISM_STEPS, PRESETS, STEP_TYPES, STILL_STEPS, TRACKING, TRACTION,  # noqa: E402
+from project import (LIMITS, MECHANISM_STEPS, PRESETS, RAMSETE_STEPS, STEP_TYPES, STILL_STEPS, TRACKING, TRACTION,  # noqa: E402
                      ProjectError, carries_speed, check_traction, step_name, step_time_limit, strict_json,
                      validate_project)
 
@@ -44,6 +44,7 @@ EXTRA_SOURCES = [PATH_BRIDGE, CASCADE_BRIDGE, ROOT / "src/mclib/command/subsyste
 STATE_VALUES = 8
 MAX_STATES = 40000
 MOTION_RESULTS = ("Reached", "TimedOut", "Cancelled", "Disabled", "InvalidValue", "NoDrive")
+MOTION_RESULT_INVALID_VALUE = MOTION_RESULTS.index("InvalidValue")
 #: The min_speed that makes an mclib motion use its own min_output floor
 MCLIB_DEFAULT_MIN_SPEED = -1.0
 #: curveCircleReverse() backs the other way round for a same-sign heading change this large or larger:
@@ -53,7 +54,7 @@ ACTIONS = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4, turn_to_point=5, 
                wall_reset=8)
 #: A step that ends further than this from its target, or further off its
 #: heading, gets a hint on why
-MISS_HINT_IN = dict(boomerang=1.5, arc=5.5, reverse_arc=5.5)
+MISS_HINT_IN = dict(boomerang=1.5, pose=1.5, arc=5.5, reverse_arc=5.5)
 DEFAULT_MISS_HINT_IN = 2.5
 HEADING_HINT_DEG = 5.0
 ODOMETRY_DRIFT_IN = 2.5
@@ -166,6 +167,9 @@ def declare_planner(lib):
     lib.planner_follow.restype = C.c_int
     lib.planner_folded_section.argtypes = [doubles, C.c_int]
     lib.planner_folded_section.restype = C.c_int
+    lib.planner_move_to_pose.argtypes = [C.c_double, C.c_double, C.c_int, C.c_double, C.c_double, C.c_double,
+                                         doubles, doubles, C.c_double, C.c_double, C.c_int]
+    lib.planner_move_to_pose.restype = C.c_int
     declare_cascade(lib)
     return lib
 
@@ -398,7 +402,7 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
                     y=entry_pose[1] + step["distance"] * math.cos(radians), heading=commanded_heading)
     if kind in ("point", "wall_reset"):
         return dict(x=step["x"], y=step["y"], heading=step.get("heading"))
-    if kind in ("boomerang", "path"):
+    if kind in ("boomerang", "path", "pose"):
         return dict(x=end_pose[0], y=end_pose[1], heading=end_pose[2])
     if kind == "turn_to_point":
         angle = math.degrees(math.atan2(step["x"] - entry_pose[0], step["y"] - entry_pose[1]))
@@ -413,9 +417,7 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
 
 def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan):
     layout, values, limits = path_inputs(project, step, start, feedforward)
-    settings = project["path_defaults"]
-    ramsete = [feedforward["ks"], feedforward["kv"], settings["ramsete_b"], settings["ramsete_zeta"],
-               feedforward["track_in"]]
+    ramsete = ramsete_values(project, feedforward)
     result = lib.planner_follow(doubles(values), len(layout["sections"]), doubles(limits), doubles(ramsete),
                                 plan["requested_start_ips"], plan["requested_end_ips"], timeout_ms, step["volts"],
                                 0 if step["chain"] else 1)
@@ -423,6 +425,32 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan
         raise RuntimeError("; ".join(bridge.exceptions))
     if result < 0:
         raise ValueError("mclib could not plan this path")
+    return result
+
+
+def ramsete_values(project, feedforward):
+    settings = project["path_defaults"]
+    return [feedforward["ks"], feedforward["kv"], settings["ramsete_b"], settings["ramsete_zeta"],
+            feedforward["track_in"]]
+
+
+def pose_speed_ips(project, feedforward):
+    return project["path_defaults"]["speed_percent"] / 100 * feedforward["top_ips"]
+
+
+def move_to_pose(lib, bridge, project, step, feedforward, timeout_ms):
+    settings = project["path_defaults"]
+    limits = [settings["accel_ips2"], settings["cornering_ips2"], feedforward["track_in"]]
+    result = lib.planner_move_to_pose(step["x"], step["y"], step["direction"], step["heading"], step["lead"],
+                                      pose_speed_ips(project, feedforward), doubles(limits),
+                                      doubles(ramsete_values(project, feedforward)), timeout_ms, step["volts"],
+                                      0 if step["chain"] else 1)
+    if bridge.exceptions:
+        raise RuntimeError("; ".join(bridge.exceptions))
+    if result == MOTION_RESULT_INVALID_VALUE:
+        raise ValueError("mclib could not plan a curve to this pose: the target is behind the robot or "
+                         "arrives against its direction of travel, so the curve folds back on itself. "
+                         "Lower the lead, or turn first")
     return result
 
 
@@ -437,6 +465,8 @@ def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan
         return rig.spin_roller(step, timeout_ms)
     if kind == "path":
         return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan)
+    if kind == "pose":
+        return move_to_pose(lib, bridge, project, step, feedforward, timeout_ms)
     if kind == "reverse_arc":
         change = math.remainder(step["heading"] - bridge.pose()[2], 360)
         if change * step["radius"] > 1e-8 and abs(change) < REVERSE_ARC_HALF_CIRCLE_FROM_DEG:
@@ -884,16 +914,18 @@ def _execute(raw, destination, vexsim, cache, progress):
     setup_cache.use(build_dir / "setup")
     robot = project["robot"]
     feedforward = plans = None
-    if paths:
+    if any(step["type"] in RAMSETE_STEPS for step in project["steps"]):
         feedforward = measure_feedforward(lib, build_dir, robot["preset"], robot["tracking"], robot["traction"],
                                           progress)
+    else:
+        progress.skip("measure", "No path or curve-to-pose steps, so no feedforward is needed.")
+    if paths:
         progress.begin("plan", "Planning speeds along every path with mclib's trajectory planner.")
         plans = plan_paths(lib, project, feedforward, poses)
         total = sum(item["duration_s"] for item in plans if item)
         count = len(paths)
         progress.finish("plan", f"Planned {count} path{'s' * (count != 1)}: {total:.2f} s of driving.")
     else:
-        progress.skip("measure", "No path steps, so no feedforward is needed.")
         progress.skip("plan", "No path steps to plan.")
     time_limits = [step_time_limit(step, plans[index] if plans else None)
                    for index, step in enumerate(project["steps"])]
@@ -1064,6 +1096,8 @@ def _execute(raw, destination, vexsim, cache, progress):
                     notes.append(settle_hint)
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
+        if step["type"] == "pose" and motion_result is not None:
+            info.append(f"moveToPose() returned {MOTION_RESULTS[motion_result]}.")
         if late_actions:
             info.append(f"{late_actions} mechanism action{'s' * (late_actions != 1)} had not run when the "
                         "motion ended, so " + ("they" if late_actions != 1 else "it") + " ran then.")
@@ -1083,7 +1117,7 @@ def _execute(raw, destination, vexsim, cache, progress):
                          score=score_summary(world) if rig else None,
                          move_result=MOVE_RESULTS[motion_result] if step["type"] in MECHANISM_STEPS and
                          motion_result is not None else None,
-                         motion_result=MOTION_RESULTS[motion_result] if step["type"] == "path" and
+                         motion_result=MOTION_RESULTS[motion_result] if step["type"] in RAMSETE_STEPS and
                          motion_result is not None else None))
         odometry_at_rest.watch(rows[-1], handoff_speed_ips)
         odometry_at_rest.report()

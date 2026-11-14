@@ -98,8 +98,12 @@ FIELDS = {
     "direction": dict(label="Direction", choices={"1": "Forward", "-1": "Backward"},
                       help="Drive forward, or back the robot in."),
     "lead": dict(label="Lead", unit="", low=0, high=.99, step=.01,
-                 help="How far behind the target the robot aims, as a fraction of the distance left. "
-                      "Larger swings wider to arrive straighter."),
+                 help_by_step={
+                     "boomerang": "How far behind the target the robot aims, as a fraction of the distance left. "
+                                  "Larger swings wider to arrive straighter.",
+                     "pose": "How long each end of the curve runs straight along the start and end headings, as "
+                             "a fraction of the straight-line distance. 0.39 makes a 90° corner nearly a circle. "
+                             "Larger swings wider."}),
     "current_ma": dict(label="Stall current", unit="mA", low=0, high=10000, step=50,
                        help="Motor current that counts as pushing against the wall."),
     "wait_ms": dict(label="Wait", unit="ms", low=10, high=120000, step=10,
@@ -175,6 +179,12 @@ STEP_TYPES = {
                                   "behind the target.",
                       fields=["x", "y", "heading", "direction", "lead"],
                       defaults=dict(x=24, y=24, heading=90, direction=1, lead=.5, min_volts=None)),
+    "pose": dict(label="Drive to a pose on a curve", call="moveToPose()",
+                 description="Plan a curve that leaves along the current heading and arrives at a field position "
+                             "facing a heading, then follow it with RAMSETE, as a path does. It uses the path "
+                             "defaults' speed, acceleration, cornering and RAMSETE settings.",
+                 fields=["x", "y", "heading", "direction", "lead"],
+                 defaults=dict(x=24, y=24, heading=90, direction=1, lead=.4)),
     "arc": dict(label="Arc", call="curveCircle()",
                 description="Drive around a circle of the given radius until facing the heading.",
                 fields=["heading", "radius"], defaults=dict(heading=90, radius=24, min_volts=None)),
@@ -225,6 +235,8 @@ STEP_TYPES = {
                        defaults=dict(loader="red_left", match_load_pin="red_yellow_up")),
 }
 MECHANISM_STEPS = {kind for kind, info in STEP_TYPES.items() if "mechanism" in info}
+#: Steps that drive a planned trajectory with RAMSETE, so need the measured feedforward
+RAMSETE_STEPS = ("path", "pose")
 STILL_STEPS = {kind for kind, info in STEP_TYPES.items() if info.get("still")}
 
 ACTIONS = dict(
@@ -401,6 +413,9 @@ def _field(step, key, where):
         raise ValueError(f"{where}: Radius must be at least 1 in either way, not {value:g}")
     if key == "lead" and value >= 1:
         raise ValueError(f"{where}: Lead must be less than 1")
+    if key == "lead" and step["type"] == "pose" and value <= 0:
+        raise ValueError(f"{where}: Lead must be more than 0, or the curve has no straight ends to leave and "
+                         "arrive along")
     return value
 
 

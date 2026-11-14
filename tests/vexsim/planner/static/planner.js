@@ -394,7 +394,7 @@
       step.y = round(pose.y + ahead.y, 0.5);
     }
     if (type === "turn") step.heading = wrapDegrees(Math.round(pose.heading + 90));
-    if (type === "boomerang") step.heading = Math.round(pose.heading);
+    if (["boomerang", "pose"].includes(type)) step.heading = Math.round(pose.heading);
     if (type === "wall_reset") Object.assign(step, { x: round(pose.x, 0.5), y: round(pose.y, 0.5), heading: Math.round(pose.heading) });
     if (["arc", "swing"].includes(type)) step.heading = wrapDegrees(Math.round(pose.heading + 90));
     if (type === "reverse_arc") step.heading = wrapDegrees(Math.round(pose.heading - 90));
@@ -828,7 +828,7 @@
       case "turn": return `to face ${trim(step.heading)}°`;
       case "turn_to_point": return `${step.direction === -1 ? "back toward" : "face"} ${p(step.x, step.y)}`;
       case "point": return `to ${p(step.x, step.y)}${step.direction === -1 ? ", backward" : ""}`;
-      case "boomerang": return `to ${p(step.x, step.y)} facing ${trim(step.heading)}°`;
+      case "boomerang": case "pose": return `to ${p(step.x, step.y)} facing ${trim(step.heading)}°${step.direction === -1 ? ", backward" : ""}`;
       case "arc": case "reverse_arc": return `to ${trim(step.heading)}°, radius ${trim(Math.abs(step.radius))} in ${step.radius < 0 ? "left" : "right"}`;
       case "swing": return `to ${trim(step.heading)}°${step.direction === -1 ? ", backward" : ""}`;
       case "wall_reset": return `set odometry to ${p(step.x, step.y)}, ${trim(step.heading)}°`;
@@ -1501,7 +1501,7 @@
     else if (step.type === "path" && !step.points.length) hint = `Click on the field to add points to step ${state.selected + 1}. The path starts where the robot is.`;
     else if (step.type === "path") hint = `Click to add a point to the end of step ${state.selected + 1}. Click its line to insert one. Drag points and handles to shape it.`;
     else if (step.type === "turn_to_point") hint = `Click or drag to place what step ${state.selected + 1} faces. Near a Goal, Loader or stack it aims at the centre; hold Shift for the grid.`;
-    else if (["point", "boomerang", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
+    else if (["point", "boomerang", "pose", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
     else if (["turn", "arc", "reverse_arc", "swing"].includes(step.type)) hint = `Drag the round knob to set the heading of step ${state.selected + 1}.`;
     else if (step.type === "drive") hint = `Drag the round knob to set how far step ${state.selected + 1} drives.`;
     const takesActions = state.project.field === "override" && !stepInfo(step).still && !(step.type === "path" && !step.points.length);
@@ -1553,7 +1553,7 @@
         (value) => edit(() => { step[key] = key === "direction" ? Number(value) : value; }));
     }
     return numberInput({ label: info.label, unit: info.unit, value: step[key], min: info.low, max: info.high, step: info.step,
-      help: info.help, onCommit: (value) => edit(() => {
+      help: info.help_by_step ? info.help_by_step[step.type] : info.help, onCommit: (value) => edit(() => {
         step[key] = ["timeout_ms", "wait_ms"].includes(key) ? Math.round(value) : value;
         if (stepInfo(step).timed_by === key) step.timeout_ms = step[key];
       }) });
@@ -2023,7 +2023,7 @@
       element("h3", { text: "Speed-up and slow-down" }),
       groupForm("slew", config.slew),
       element("h3", { text: "Controller gains (PID)" }),
-      element("p", { class: "muted small", text: "Used by drive, turn, point, boomerang, arc and swing steps, and by the settle at the end of a path." }),
+      element("p", { class: "muted small", text: "Used by drive, turn, point, boomerang, arc and swing steps, and by the settle at the end of a path or a curve to a pose." }),
       element("div", { class: "form three" }, ...Object.entries(config.gains).map(([key, info]) =>
         numberInput({ label: info.label, value: project.gains[key], min: 0, max: 100, step: 0.05, onCommit: (value) => edit(() => { project.gains[key] = value; }) }))));
   }
@@ -2657,8 +2657,8 @@
         knobs.push({ kind: "handle-in", point: i, at: section.endHandle, anchor: section.end });
       });
       step.points.forEach((point, i) => knobs.push({ kind: "anchor", point: i, at: point }));
-    } else if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
-      if (["boomerang", "wall_reset"].includes(step.type)) {
+    } else if (["point", "turn_to_point", "boomerang", "pose", "wall_reset"].includes(step.type)) {
+      if (["boomerang", "pose", "wall_reset"].includes(step.type)) {
         const tip = along(step.heading, HEADING_KNOB_IN);
         knobs.push({ kind: "target-heading", at: { x: step.x + tip.x, y: step.y + tip.y }, pivot: step });
       }
@@ -2777,7 +2777,7 @@
     const preview = stepPreview(step, start, trackWidth());
     polyline(ctx, preview, selected ? "#2563eb" : "#7b8494", selected ? 2.5 : 1.8, [6, 5]);
     const color = selected ? "#2563eb" : "#7b8494";
-    if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
+    if (["point", "turn_to_point", "boomerang", "pose", "wall_reset"].includes(step.type)) {
       const p = toScreen(step);
       ctx.save();
       ctx.strokeStyle = color;
@@ -3439,7 +3439,7 @@
       return;
     }
     if (step.type === "path") return addPoint(snapped);
-    if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
+    if (["point", "turn_to_point", "boomerang", "pose", "wall_reset"].includes(step.type)) {
       edit(() => Object.assign(step, aimedOrSnapped(step, position, shift)));
       return;
     }

@@ -225,6 +225,9 @@ class ProjectTests(unittest.TestCase):
             (dict(type="drive", distance=900), "Step 1 (Drive straight): Distance must be between -500 and 500 in, not 900"),
             (dict(type="arc", heading=90, radius=0.5), "Step 1 (Arc): Radius must be at least 1 in either way, not 0.5"),
             (dict(type="boomerang", x=0, y=0, heading=0, lead=1), "Step 1 (Drive to a pose): Lead must be between 0 and 0.99, not 1"),
+            (dict(type="pose", x=24, y=24, heading=90, lead=0),
+             "Step 1 (Drive to a pose on a curve): Lead must be more than 0, or the curve has no straight ends to "
+             "leave and arrive along"),
             (path_step([(0, 0)], speeds=[3]), "Step 1 (Path), section 1: Speed limit must be between 5 and 100 %, not 3"),
             (dict(type="path", points=[dict(x=0, y=0)], sections=[]), "Step 1 (Path): needs one section per point (1), found 0"),
         ]
@@ -382,6 +385,25 @@ class ExportTests(unittest.TestCase):
                      "follow.track_width = 14.1_in;", "were measured on the simulated robot"):
             self.assertIn(text, code[self.DRIVE])
         self.assertNotIn("autonomous()", "".join(code.values()))
+        self.compile(exported)
+
+    def test_a_curve_to_a_pose_exports_as_move_to_pose_with_the_paths_follower_and_limits(self):
+        project = validate_project(dict(steps=[
+            dict(type="pose", x=24, y=24, heading=90, lead=.4),
+            dict(type="pose", x=0, y=0, heading=0, direction=-1, lead=.4, chain=True),
+            dict(type="turn", heading=90)]))
+        exported = export(project, self.SETTINGS, [None] * 3)
+        code = self.code(exported)
+        self.assertEqual(list(code), ["src/autons/new_routine.cpp", self.DRIVE, self.PATH_HELPERS])
+        self.assertEqual(exported["drive_numbers"], "measured")
+        for call in ("mclib::control::RamseteConfig follow = planner_robot::followConfig();",
+                     "const path_planner::Limits limits{60, 60, follow.track_width.in()};",
+                     "moveToPose(24_in, 24_in, 1, 90_deg, 0.4, follow, path_planner::poseLimits(60.9, limits), "
+                     "4000_ms, true, 12_V);",
+                     "moveToPose(0_in, 0_in, -1, 0_deg, 0.4, follow, path_planner::poseLimits(60.9, limits), "
+                     "4000_ms, false, 12_V);"):
+            self.assertIn(call, self.routine(exported))
+        self.assertIn("inline mclib::path::TrajectoryConstraints poseLimits(", code[self.PATH_HELPERS])
         self.compile(exported)
 
     def test_each_routine_is_a_function_named_for_it_in_a_file_named_for_it(self):
@@ -1290,6 +1312,32 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(tallest["passed"])
             self.assertGreater(tallest["height"], 49.0)
             self.assertLessEqual(tallest["height"], 50.0)
+
+    def test_18_a_curve_to_a_pose_runs_mclibs_move_to_pose(self):
+        results = self.run_together(dict(
+            curve_to_pose=example("curve_to_pose"),
+            behind=dict(start=dict(x=0, y=-48, heading=0),
+                        steps=[dict(type="pose", x=0, y=-72, heading=0, lead=.4)])))
+
+        with self.subTest("it measures the drive, plans no path, and ends on each pose"):
+            result = results["curve_to_pose"]
+            stages = {stage["id"]: stage["detail"] for stage in result["stages"]}
+            self.assertRegex(stages["measure"], r"kS \d+\.\d\d V, kV ")
+            self.assertEqual(stages["plan"], "No path steps to plan.")
+            curves = [step for step in result["steps"] if step["type"] == "pose"]
+            self.assertEqual(len(curves), 2)
+            for step in curves:
+                self.assertEqual(step["motion_result"], "Reached")
+                self.assertLess(step["position_error_in"], 0.5)
+                self.assertLess(step["heading_error_deg"], 1.0)
+                self.assertLess(step["duration_s"], 3.0)
+                self.assertIn("moveToPose() returned Reached.", step["info"])
+
+        with self.subTest("a target behind the robot is refused with the reason"):
+            step = results["behind"]["steps"][0]
+            self.assertIn("Not run: mclib could not plan a curve to this pose: the target is behind the robot or "
+                          "arrives against its direction of travel, so the curve folds back on itself. Lower the "
+                          "lead, or turn first.", [item["message"] for item in step["readings"]])
 
     def test_17_traction_wheels_and_other_robots(self):
         traction = example("traction_wheels")

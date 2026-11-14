@@ -94,6 +94,12 @@ and the scenarios need its `with_traction_wheels()` and `OtherRobot`.
 - `tests/vexsim/run.py` runs the motion scenarios on the 6-motor drive with
   traction wheels in the middle (`six_motor_450_middle_traction/...`).
 - Planner examples `traction_wheels.json` and `override_other_robots.json`.
+- Path planner: a **Drive to a pose on a curve** step that calls
+  `moveToPose()`, with the Path settings' speed limit, acceleration,
+  cornering and RAMSETE gains. The field draws the planned curve, and Export
+  C++ writes the call with the new `path_planner::poseLimits()`. In the
+  example `curve_to_pose.json` it ends 0.07 in and 0.5° off where
+  `boomerang()` ends 0.14 in and 1.7° off, in about the same time.
 
 ### Changed
 

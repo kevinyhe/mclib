@@ -233,5 +233,14 @@ inline mclib::control::MotionResult followSections(const std::vector<mclib::path
   return MotionResult::Reached;
 }
 
+/**
+ * @brief The plan limits of a "Drive to a pose on a curve" step: its top
+ *        speed and the limits every path shares. moveToPose() sets the
+ *        direction from its `dir`.
+ */
+inline mclib::path::TrajectoryConstraints poseLimits(double max_speed_ips, const Limits& limits) {
+  return detail::constraintsFor({{}, max_speed_ips, false}, limits, 0.0, 0.0);
+}
+
 }  // namespace path_planner
 // END EXPORTED HELPERS

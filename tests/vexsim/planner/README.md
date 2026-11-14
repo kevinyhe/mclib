@@ -96,11 +96,19 @@ itself cannot be planned; the message says which section and what to change.
 ## Other steps
 
 Drive straight, turn to heading, turn to face a point, drive to a point,
-drive to a pose (boomerang), arc, reverse arc, swing turn and wall reset.
-Each one calls the mclib function named next to its title. Drag its target
-or its round heading knob on the field, or type the values. A wall reset
-must be the last step. On the open floor there are no walls, so it locks
-the motors to make them stall.
+drive to a pose (boomerang), drive to a pose on a curve, arc, reverse arc,
+swing turn and wall reset. Each one calls the mclib function named next to
+its title. Drag its target or its round heading knob on the field, or type
+the values. A wall reset must be the last step. On the open floor there are
+no walls, so it locks the motors to make them stall.
+
+Drive to a pose on a curve calls `moveToPose()`. mclib plans a curve that
+leaves along the robot's heading and arrives along the target heading, each
+end straight for Lead times the distance, and follows it with RAMSETE like a
+path, with the Path settings' speed limit, acceleration, cornering, `b` and
+`zeta`. The field draws that curve. A target behind the robot, or one the
+curve would have to fold back to reach, is refused; turn first or lower the
+Lead. Export C++ writes the same call with `path_planner::poseLimits()`.
 
 On a game field the robot pushes on the real wall, and `wallReset()` only
 counts a stall when the motors draw the stall current and turn slower than
@@ -738,6 +746,7 @@ field.
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and run again to compare |
 | [points_arcs_and_swing.json](examples/points_arcs_and_swing.json) | the steps that are not paths: drive to a point, turn to face a point, an arc, a swing turn, a reverse arc and backing up to a point |
+| [curve_to_pose.json](examples/curve_to_pose.json) | Drive to a pose on a curve (`moveToPose()`) out and back, then the same move with `boomerang()`: 0.07 in and 0.5° off against 0.14 in and 1.7°, in about the same time |
 | [keep_moving.json](examples/keep_moving.json) | Keep moving into the next step on a drive, an arc and a point: 6.85 s against 9.48 s with every step stopping, with a voltage cap and a Min voltage |
 | [path_settings_and_gains.json](examples/path_settings_and_gains.json) | the S-curve with a higher speed limit, acceleration and cornering, and changed turn gains, with what each one bought |
 | [worn_field.json](examples/worn_field.json) | the S-curve at 60% battery and 70% grip: the robot slides 15.7 in off the path and runs into the time limit |

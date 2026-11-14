@@ -93,3 +93,17 @@ extern "C" int planner_follow(const double* sections, int section_count, const d
   return static_cast<int>(
       path_planner::followSections(plans, config, timeout_ms * millisecond, volts * volt, exit != 0));
 }
+
+extern "C" int planner_move_to_pose(double x_in, double y_in, int direction, double heading_deg, double lead,
+                                    double max_speed_ips, const double* limits, const double* ramsete,
+                                    double timeout_ms, double volts, int exit) {
+  using namespace mclib::units;
+  mclib::control::RamseteConfig config;
+  config.feedforward.kS = ramsete[0] * volt;
+  config.feedforward.kV = ramsete[1] * volt / inps;
+  config.gains = {ramsete[2], ramsete[3]};
+  config.track_width = ramsete[4] * inch;
+  return static_cast<int>(::moveToPose(x_in * inch, y_in * inch, direction, heading_deg * degree, lead, config,
+                                       path_planner::poseLimits(max_speed_ips, readLimits(limits)),
+                                       timeout_ms * millisecond, exit != 0, volts * volt));
+}
