@@ -3,15 +3,21 @@
 
 Each route is two or three motions with exit=false, ending in one stopping
 moveToPoint(). Every route runs at three voltage floors (the library default,
-4 V and 8 V) on two drives: a 4-motor 450 rpm drive on 2.75 in omnis with one
-team's tuning, and the six_motor_450 preset with the default tuning. Two
-tracking wheels supply the pose.
+4 V and 8 V), given to every motion in it, on three drives: a 4-motor 450 rpm
+drive on 2.75 in omnis with one team's tuning, and the six_motor_450 and
+four_motor_200 presets with the default tuning. Two tracking wheels supply
+the pose.
 
 For each motion it prints how long it ran, its MotionResult, how close the
 robot came to the target, how far it turned, and where it ended.
 
-Known failure: a stopping moveToPoint() that starts at speed after a chained
-move with a 4-8 V floor can circle its target until the time limit.
+Known failures, with the 2 s limit on each stop:
+- On the 450 rpm drives, 2 of 18 stops time out with a 4-8 V floor. Each
+  starts at 26-50 in/s after the hand-off, slides past the target and turns
+  299-322 deg coming back.
+- On four_motor_200, 4 of 9 stops time out. Without a floor the distance PID
+  crawls the last 3 in. With an 8 V floor the zigzag's stop holds the floor
+  while it steers, arcs 9 in past the target and turns 217 deg.
 
     python3 tests/vexsim/chain_audit.py --output /tmp/chain
 """
@@ -62,13 +68,12 @@ def team_drive():
 def run_route(lib, preset, tuning, route, min_volts):
     bridge = PhysicsBridge(lib, preset, tracking_mode="two", tuning=tuning)
     bridge.set_pose(0, 0, 0)
-    lib.sim_set_min_volts(min_volts)
     rows = []
     for label, step, target in ROUTES[route]:
         start = bridge.sim.t
         frames = []
         bridge.on_capture = frames.append
-        bridge.run(**step)
+        bridge.run(**step, min_volts=min_volts)
         closest = min(math.hypot(f["estimated_x"] - target[0], f["estimated_y"] - target[1])
                       for f in frames)
         headings = [f["estimated_heading"] for f in frames]
@@ -91,7 +96,8 @@ def main():
     output = args.output or Path(tempfile.mkdtemp(prefix="mclib-chain-"))
     output.mkdir(parents=True, exist_ok=True)
     lib = build(output)
-    for preset, tuning in (("team_4m_450_275", TEAM_TUNING), ("six_motor_450", None)):
+    for preset, tuning in (("team_4m_450_275", TEAM_TUNING), ("six_motor_450", None),
+                           ("four_motor_200", None)):
         for route in ROUTES:
             for min_volts in MIN_VOLTS:
                 print(f"\n{preset}  {route}  min {min_volts} V")

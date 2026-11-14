@@ -406,7 +406,9 @@ mclib::control::MotionResult turnToPoint(QLength x,
  * is more than 30 deg off the line, it turns in place again. Farther out, if
  * it turns 90 deg without getting 1 in closer, it turns in place until the
  * target is within 10 deg. @p min_speed stops applying once it turns in place
- * within 8 in, or comes within 0.5 in of the target along its line.
+ * within 8 in, comes within 0.5 in of the target along its line, or is close
+ * enough inside 8 in that braking at 150 in/s^2 from its speed would only
+ * just stop it at the target.
  *
  * @param x          Field X of the target.
  * @param y          Field Y of the target.

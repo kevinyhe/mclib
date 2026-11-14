@@ -238,6 +238,36 @@ constexpr double kAimedRad = M_PI / 18.0;
 constexpr double kProgressStepIn = 1.0;
 constexpr double kCirclingTurnRad = M_PI / 2.0;
 
+// Inside kSettleRadiusIn a stopping point move also drops its voltage floor
+// once braking at kFloorBrakeIps2 from its current speed would only just
+// stop it at the target. On the 450 rpm drives in tests/vexsim/chain_audit.py,
+// holding a 4-8 V floor until the target ran 6 of 18 stops out of time; with
+// this rule 2 run out. A 450 rpm drive in the physics simulator brakes at
+// about 200 in/s^2.
+constexpr double kFloorBrakeIps2 = 150.0;
+
+// The drive's forward speed in in/s, from the drive encoders over the last
+// tick. Unknown until the second reading.
+class DriveSpeed {
+ public:
+  std::optional<double> update(double left_deg, double right_deg, uint32_t now_ms) {
+    std::optional<double> speed;
+    if (last_ms_ && now_ms != *last_ms_) {
+      const double travelled_in = (encoderDegreesToInches(left_deg - last_left_deg_) +
+                                   encoderDegreesToInches(right_deg - last_right_deg_)) / 2;
+      speed = travelled_in * 1000.0 / static_cast<uint32_t>(now_ms - *last_ms_);
+    }
+    last_left_deg_ = left_deg;
+    last_right_deg_ = right_deg;
+    last_ms_ = now_ms;
+    return speed;
+  }
+ private:
+  double last_left_deg_ = 0;
+  double last_right_deg_ = 0;
+  std::optional<uint32_t> last_ms_;
+};
+
 // The angle between two lines that differ by @p angle_rad, in [-pi/2, pi/2].
 double angleBetweenLines(double angle_rad) {
   const double wrapped = mclib::wrapAngle(angle_rad);
@@ -1365,6 +1395,7 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
   double progress_mark_in = hypot(x_in - pose.x, y_in - pose.y);
   double turned_since_progress_rad = 0;
   double previous_angle = safety.heading();
+  DriveSpeed drive_speed;
 
   double current_angle = 0;
   // Main PID loop for moving to point
@@ -1404,7 +1435,12 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     }
     const bool reached_along_line =
         may_back_up && remaining * cos(bearing_error) <= cfg().distance_exit.small_error;
-    if ((settle_zone && aiming) || reached_along_line) floor_off = true;
+    const std::optional<double> forward_ips =
+        drive_speed.update(safety.left(), safety.right(), pros::millis());
+    const bool floor_would_overrun =
+        settle_zone && forward_ips &&
+        remaining <= *forward_ips * *forward_ips / (2 * kFloorBrakeIps2);
+    if ((settle_zone && aiming) || reached_along_line || floor_would_overrun) floor_off = true;
     telemetry.target(pid_heading, safety.normalize(on_line ? line_heading_deg : facing_deg));
     pid_distance.setTarget(remaining);
     telemetry.value.heading_error_deg = telemetry.value.target_heading_deg - current_angle;

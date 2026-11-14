@@ -3,6 +3,21 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- A stopping `moveToPoint()` given a voltage floor (`min_speed`) held it
+  until the target, so a robot that came in fast from a chained move could
+  not brake and slid past. Inside 8 in the floor now also stops once
+  braking at 150 in/s² from the robot's speed would only just stop it at the
+  target. In `tests/vexsim/chain_audit.py`, which now passes each step its
+  floor (the planner's change to `run()` had dropped it), 6 of 18 stops on
+  the 450 rpm drives timed out with 4-8 V floors and 2 still do. Those 18
+  stops took 25.8 s in all, down from 29.2 s, and none took longer. On
+  `four_motor_200` two stops got faster and none slower. Calls without a
+  floor are unchanged.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes
