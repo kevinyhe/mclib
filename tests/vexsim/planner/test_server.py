@@ -27,11 +27,11 @@ class StubPlanner:
         self.field_drawings = dict(override=dict(half_in=70.2), open=None)
         self.submitted = []
 
-    def engine_state(self, preset, tracking):
-        return dict(preset=preset, tracking=tracking, ready=False, task=None)
+    def engine_state(self, preset, tracking, traction):
+        return dict(preset=preset, tracking=tracking, traction=traction, ready=False, task=None)
 
-    def prepare(self, preset, tracking):
-        return dict(preset=preset, tracking=tracking, ready=False, task=dict(status="running"))
+    def prepare(self, preset, tracking, traction):
+        return dict(preset=preset, tracking=tracking, traction=traction, ready=False, task=dict(status="running"))
 
     def plan(self, raw):
         validate_project(raw)
@@ -108,7 +108,7 @@ class HttpTests(unittest.TestCase):
                           "override_stack_to_goal", "override_roller", "override_match_load", "override_five_halves",
                           "points_arcs_and_swing", "keep_moving", "path_settings_and_gains", "worn_field",
                           "no_inertial_sensor", "override_wall_reset", "override_center_goal",
-                          "override_lift_heights"})
+                          "override_lift_heights", "traction_wheels", "override_other_robots"})
         status, project = self.json("GET", "/api/examples/s_curve")
         self.assertEqual(status, 200)
         self.assertNotIn("description", project)
@@ -146,7 +146,11 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/runs", b"{}", {"Content-Type": "text/plain"})[0], 400)
         self.assertEqual(self.request("POST", "/api/runs", b'{"name": "a", "name": "b"}')[0], 400)
         self.assertEqual(self.status_for_declared_length(LIMITS["max_body_bytes"] + 1), 413)
-        self.assertEqual(self.request("POST", "/api/prepare", dict(preset="huge", tracking="two"))[0], 400)
+        self.assertEqual(self.request("POST", "/api/prepare", dict(preset="huge", tracking="two", traction="none"))[0],
+                         400)
+        self.assertEqual(self.request("POST", "/api/prepare", dict(preset="six_motor_450", tracking="two"))[0], 400)
+        self.assertEqual(self.request("POST", "/api/prepare",
+                                      dict(preset="four_motor_450", tracking="two", traction="middle"))[0], 400)
         self.assertEqual(self.request("POST", f"/api/runs/{'a' * 32}/cancel", dict(now=True))[0], 400)
 
     def test_serves_only_the_page_files(self):

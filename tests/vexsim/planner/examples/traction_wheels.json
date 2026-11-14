@@ -1,0 +1,14 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Traction wheels in the middle",
+  "description": "PENDING",
+  "robot": {"preset": "six_motor_450", "tracking": "drive", "traction": "middle"},
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 24, "y": -12}, {"x": 0, "y": 24}, {"x": -24, "y": 56}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": null, "reverse": false},
+                  {"speed_percent": null, "reverse": false}]},
+    {"type": "turn", "heading": 180}
+  ]
+}

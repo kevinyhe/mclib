@@ -67,7 +67,7 @@ stops the run on screen.
 | Playback | play, playback speed, which run to show, which run to compare with. Under them, a timeline with one block per step, from when the step started to when it ended (red underline: it broke a rule), diamonds where lift and claw actions ran, and a dashed red line at 15 s, when autonomous ends. Click or drag on it to move playback; clicking a block also selects that step. Before a run it shows the selected path's plan. When the routine has changed since the run shown, **Open its routine** puts the routine that run used back in the editor; Ctrl+Z goes back to yours. |
 | Graph | hidden until you pick a tab: Speed (planned and simulated), Voltage, Heading, Odometry error, or Lift and claw (claw height, the height the lift was sent to and the jaw gap, on the Override robot). Its time axis lines up with the timeline above it. Click it to jump there. Hide closes it again. |
 | Step tab (right) | the selected step's settings, its plan, and what it did in the last run. Each setting has its name on the left and its value on the right, with the unit inside the box. **Automatic** (or **Default**) next to a value means the planner works it out; click it to set your own. Lift and claw actions show one line each; click one to edit it. |
-| Robot & settings tab | drivetrain, odometry sensors, start pose, path defaults, simulated battery and grip, PID gains |
+| Robot & settings tab | drivetrain, traction wheels, odometry sensors, start pose, the other robots on the Override field, path defaults, simulated battery and grip, PID gains |
 | Telemetry tab | every recorded value at the playback time: position, speeds, controller, motors, sensors |
 
 ## Paths
@@ -196,6 +196,56 @@ axle is at (0, -71.45), 1.25 in behind the inside face of red's wall, as in
 VEX's field CAD. New routines start at (0, -61.7) facing
 +Y, the robot's back 1 in off that wall, so the roller's flaps are 0.25 in
 in front of the left Toggle and do not touch it.
+
+## Traction wheels
+
+**Traction wheels** on the Robot & settings tab picks which driven wheels
+are traction wheels. The rest stay omnis.
+
+| Choice | Wheels |
+| --- | --- |
+| None | omnis on every corner |
+| The middle wheel each side | the middle pair on a 6-wheel drive (the 6-motor drivetrain only) |
+| Every driven wheel | all of them |
+
+Omnis roll sideways freely. Traction wheels grip sideways as hard as they
+grip forward (0.81 static, 0.66 sliding), so the robot slides less in
+turns but turns slower: the wheels at the ends have to scrub sideways to
+turn it. vexsim measured the 6-motor drive in a 12 V / 7 V curve: it slid
+sideways at 30 in/s on omnis, 6 in/s with middle traction wheels and 1 in/s
+with all traction, and turned at 155, 94 and 38 °/s. Changing the setting
+measures the robot again, once. The exported C++ says which wheels were
+traction wheels in its "Simulated on" line.
+
+## Other robots
+
+On the Override field, **Other robots** on the Robot & settings tab puts
+the partner's robot and up to two opponents' robots on the field, so you
+can check your routine does not hit them. **Add partner** and **Add
+opponent** place one opposite your robot; drag it on the field to move it,
+and its knob to turn it.
+
+Each is a box the size you give it (6 to 24 in each way, 6 to 50 in tall,
+2 to 40 lb) on a drivetrain from the list, with traction wheels if you
+pick them. It has no lift or claw, and no bumpers. Your robot, the Pins and
+Cups, the walls and the Goals all hit it. It holds still with its motors
+braking, as teams set them in autonomous. **Draw path**, then clicks on the
+field, give it a path; right-click a point to delete it. With a path, it
+waits for **Starts driving at**, then follows the path from where it really
+is (pure pursuit, 12 in ahead) at its **Drive voltage**, slows to 3 V over
+the last 24 in, and brakes 2 in from the end or once past it.
+
+A braking robot on omnis rolls away sideways when pushed and resists a push
+from the front. In vexsim, the Override robot driving at 8 V for 2 s pushed
+a 15 lb robot 35 in head-on and 49 in from the side.
+
+When your robot hits one, the step says so as for a wall: "Hit the partner
+robot at (38, 0) 0.52 s into the step, peak 120 N, drive current up to
+2.4 A." If the hit stopped your robot short, the hint names that robot.
+The run's summary says where each other robot ended up and whether it
+finished its path. A robot that starts inside a Goal, a stack, a wall or
+another robot is refused before the run, by name. The exported C++ lists
+the other robots in its header; it does not drive them.
 
 ## The Override robot: cascade lift, pneumatic claw and Toggle roller
 
@@ -457,6 +507,9 @@ and `vexsim/foam.py`. The planner adds these:
 | Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
 | Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
 | Exported ports | lift on ports 7, -8 and 9 and roller on port 10 with green cartridges, claw valve on ADI port A | placeholders: change them in `include/planner/robot_cascade.hpp`, which the planner never replaces |
+| Air leak | the claw's tank, sealed, falls from 100 to 90 psi in an hour | VEX publishes no leak rate; a slow leak at the fittings; vexsim's `GUESSES["Air leak"]` |
+| Traction wheel grip | 0.81 static and 0.66 sliding, sideways as forward; grip peaks at 8% slip | the forward numbers are the VEX Forum tilt test; sideways and the slip peak are guesses; vexsim's `foam.GUESSES` |
+| Other robots | a box with no bumpers on a planner drivetrain, motors on brake while holding still, pure pursuit 12 in ahead on its true position, 6 V of turn per radian | how much a robot resists a push is set by its wheels and brake mode; a team's own code would follow its path on its odometry, with its own errors; vexsim's `other_robots.GUESSES` |
 
 ## What each step reports
 
@@ -567,6 +620,8 @@ project on another computer.
 | Click the selected path's line | insert a point |
 | Hover over a planned path | show the distance and time from the path's start to that point, out of the path's total, and the planned speed there |
 | Drag a point, handle or target | move it (Shift: 6 in grid and 15° headings) |
+| Drag another robot or its knob | move or turn it |
+| Click the field while drawing another robot's path | add a point to that path; right-click one to delete it |
 | Click near a Goal, Loader or stack, on a Turn to face a point step | aim at its centre (Shift: the 6 in grid instead) |
 | Right-click a step's line (Override) | add a lift or claw action there |
 | Drag an action's diamond | change where it runs |
@@ -590,7 +645,7 @@ project on another computer.
 ## Examples
 
 Open one from the Examples menu. Between them they use every step type,
-drivetrain, odometry setup, lift height and action time, which
+drivetrain, odometry setup, traction wheel choice, other robot, lift height and action time, which
 `test_planner.py` checks, and the numbers in their descriptions were
 measured in the simulator. The game examples are all on the Override
 field.
@@ -627,6 +682,7 @@ field.
 | `path_helpers.hpp`, `path_bridge.cpp` | path planning and following in C++, shared with the export |
 | `cascade_helpers.hpp`, `cascade_bridge.cpp`, `mechanisms.py` | the Override lift and claw in C++, shared with the export; Match Loads, the score and the robot rules |
 | `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
+| `other_robots.py` | the partner's and opponents' robots: from the routine to vexsim and back |
 | `export_cpp.py` | the C++ export |
 | `three_files.py` | serves Three.js from the vexsim checkout to the 3D view |
 | `static/field3d.html`, `static/field3d.js` | the Override field in 3D |
@@ -658,8 +714,13 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 - The lift's encoders are exact: the planner reads the simulated shaft with
   no 10 ms delay.
 - The claw's 200 mL tank starts at 100 psi and loses air on each stroke
-  (77 strokes take it to 25 psi). It never leaks.
-- Loose Pins and Cups do not touch the Toggles. A held one does.
-- Every simulated drive has omni wheels on all corners.
+  (77 strokes take it to 25 psi). It also leaks, 10 psi an hour, which a
+  routine never notices.
+- Traction wheels are the only other wheel. No drive has mecanum, X-drive
+  or tank treads.
+- The other robots are boxes with no lift, claw or intake, and drive their
+  paths perfectly on their true position. Nothing checks the rules between
+  robots: crossing the Autonomous Line, or contact with an opponent in
+  their zone.
 - A routine can hold 40 steps and a path 30 points. The time limits must add
   up to at most 120 s.

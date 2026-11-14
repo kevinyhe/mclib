@@ -1,0 +1,28 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Override: the other robots on the field",
+  "description": "PENDING",
+  "field": "override",
+  "preload": "none",
+  "robot": {"preset": "override_cascade", "tracking": "horizontal"},
+  "slew": {"speed_up_v": 0.3, "slow_down_v": 1},
+  "start": {"x": 0, "y": -61.7, "heading": 0},
+  "other_robots": [
+    {"role": "partner", "x": 60.5, "y": 0, "heading": -90, "drive": "four_motor_450", "traction": "none",
+     "length_in": 18, "width_in": 18, "height_in": 18, "mass_lb": 15, "volts": 6, "start_ms": 500,
+     "path": [{"x": 38, "y": 0}]},
+    {"role": "opponent 1", "x": 0, "y": 60.5, "heading": 180, "drive": "six_motor_450", "traction": "all",
+     "length_in": 18, "width_in": 18, "height_in": 24, "mass_lb": 18, "volts": 6, "start_ms": 0, "path": []},
+    {"role": "opponent 2", "x": -60.5, "y": 0, "heading": 90, "drive": "four_motor_200", "traction": "none",
+     "length_in": 16, "width_in": 15, "height_in": 14, "mass_lb": 12, "volts": 6, "start_ms": 0, "path": []}
+  ],
+  "steps": [
+    {"type": "drive", "note": "the bite onto the blue/red stack straight ahead", "distance": 32.5},
+    {"type": "claw", "note": "close on the Cup and the Pin", "claw_preset": "closed"},
+    {"type": "drive", "note": "to the Center Goal, lifting on the way", "distance": 24.5, "timeout_ms": 2000, "actions": [{"when": "start", "mechanism": "lift", "preset": "over_center_goal"}]},
+    {"type": "lift", "note": "set the Cup's rim on the Goal's Pin", "lift_preset": "on_center_goal"},
+    {"type": "claw", "claw_preset": "open"},
+    {"type": "drive", "note": "back away, then lower the lift", "distance": -8, "actions": [{"when": "time", "value": 300, "mechanism": "lift", "preset": "down"}]}
+  ]
+}
