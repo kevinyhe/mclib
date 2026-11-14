@@ -8,6 +8,7 @@
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/characterize.hpp"
 #include "mclib/control/pose_filter.hpp"
+#include "mclib/control/profiled_moves.hpp"
 #include "mclib/telemetry/file_sink.hpp"
 #include "mclib/telemetry/logger.hpp"
 #include "mclib/control/ramsete.hpp"
@@ -199,8 +200,10 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   last_motion_result = 0;
   ramsete_config = {};
   ramsete_limits = {};
-  // The arc switch is library-global; each simulated robot starts without it.
+  // The arc and profiled-move switches are library-global; each simulated
+  // robot starts without them.
   mclib::control::useEncoderArcs();
+  mclib::control::usePidMoves();
   fusion_rig = FusionRig{};
   wall_check.reset();
   wall_reading_in = -1;
@@ -446,6 +449,28 @@ extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, doub
   ramsete_limits.max_acceleration = max_ips2 * mclib::control::inps2;
   ramsete_limits.max_lateral_acceleration = max_lateral_ips2 * mclib::control::inps2;
   ramsete_limits.track_width = drive.geometry.track_width;
+}
+
+// driveTo(), turnToAngle(), swing() and moveToPoint() on a planned speed,
+// with kS, kV and the track width from sim_set_ramsete().
+extern "C" int sim_use_profiled_moves(double ka_v_per_ips2, double turn_ks_v,
+                                      double turn_kv_v_per_ips, double turn_ka_v_per_ips2,
+                                      double kp_v_per_in, double kd_v_per_ips, double max_ips,
+                                      double accel_ips2, double decel_ips2, double jerk_ips3) {
+  using namespace mclib::units;
+  mclib::control::ProfiledMoveConfig config;
+  config.follower.gains = ramsete_config.feedforward;
+  config.follower.gains.kA = ka_v_per_ips2 * volt / mclib::control::inps2;
+  config.turn_gains = {turn_ks_v * volt, turn_kv_v_per_ips * volt / inps,
+                       turn_ka_v_per_ips2 * volt / mclib::control::inps2};
+  config.follower.kp = kp_v_per_in * volt / inch;
+  config.follower.kd = kd_v_per_ips * volt / inch;
+  config.limits.max_velocity = max_ips * inps;
+  config.limits.max_acceleration = accel_ips2 * mclib::control::inps2;
+  config.limits.max_deceleration = decel_ips2 * mclib::control::inps2;
+  config.limits.max_jerk = jerk_ips3 * mclib::control::inps3;
+  config.track_width = ramsete_config.track_width;
+  return mclib::control::useProfiledMoves(config) ? 0 : -1;
 }
 
 extern "C" int sim_run(int action, double a, double b, double heading,

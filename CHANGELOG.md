@@ -5,6 +5,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+### Added
+
+- `useProfiledMoves()` (`mclib/control/profiled_moves.hpp`): `driveTo()`,
+  `turnToAngle()`, `swing()` and `moveToPoint()` with `exit` true follow a
+  planned speed with kS/kV/kA feedforward instead of a distance PID, then
+  settle with their PID. Turns and swings take their own feedforward
+  (`turn_gains`), because turning in place scrubs the wheels. Opt-in;
+  `usePidMoves()` goes back. In the physics simulator the seven stopping
+  moves on four drives took a third less time with every odometry setup
+  (18.4 s against 29.1 s with two tracking wheels) and mostly ended closer.
+  Swings on the faster drives got slower (0.85 s against 0.65 s on
+  `six_motor_450`). See docs/motion.md.
+
 ### Fixed
 
 - A stopping `moveToPoint()` given a voltage floor (`min_speed`) held it

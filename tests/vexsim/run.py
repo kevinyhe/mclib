@@ -48,7 +48,7 @@ def build(destination, extra_sources=()):
                "control/ramsete", "path/trajectory", "path/path", "path/spline",
                "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose",
                "path/arc", "control/characterize", "control/async_motion",
-               "telemetry/file_sink"]
+               "telemetry/file_sink", "control/profile", "control/feedforward"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -108,6 +108,9 @@ def load_library(library):
     if hasattr(lib, "sim_characterize_grip"):
         lib.sim_characterize_grip.argtypes = [C.c_char_p, C.c_int, C.c_double]
         lib.sim_characterize_grip.restype = C.c_int
+    if hasattr(lib, "sim_use_profiled_moves"):
+        lib.sim_use_profiled_moves.argtypes = [C.c_double] * 10
+        lib.sim_use_profiled_moves.restype = C.c_int
     if hasattr(lib, "sim_arcs_use_ramsete"):
         lib.sim_arcs_use_ramsete.argtypes = [C.c_int]
         lib.sim_arcs_use_ramsete.restype = None
@@ -151,6 +154,12 @@ ODOM_VAR = dict(drive=(0.09, 0.09), two=(0.0005, 0.0005),
                 vertical=(0.0005, 0.09), horizontal=(0.09, 0.0005))
 TRACKERS_READ = dict(drive=set(), two={"track_parallel", "track_perp"}, vertical={"track_parallel"},
                      horizontal={"track_perp"})
+
+
+# useProfiledMoves() in the profiled/ scenarios: plan at 80% of the measured
+# top speed and 150 in/s^2, 1 V per inch behind the plan and 0.05 V per in/s.
+PROFILED_KP, PROFILED_KD, PROFILED_TOP_FRACTION, PROFILED_ACCEL = 2.0, 0.1, 0.8, 150.0
+PROFILED_DECEL, PROFILED_JERK = 0.0, 0.0
 
 
 class PhysicsBridge:
@@ -425,6 +434,18 @@ class PhysicsBridge:
                                  0.7 * feedforward["top_ips"], accel, lateral,
                                  feedforward["track_in"])
 
+    def use_profiled_moves(self, feedforward, kp=PROFILED_KP, kd=PROFILED_KD,
+                           top_fraction=PROFILED_TOP_FRACTION, accel=PROFILED_ACCEL,
+                           decel=PROFILED_DECEL, jerk=PROFILED_JERK):
+        """driveTo(), turnToAngle(), swing() and moveToPoint() on a planned
+        speed, from a measure_feedforward() result. Call set_ramsete() first:
+        the bridge takes the feedforward and track width from it."""
+        if self.lib.sim_use_profiled_moves(feedforward["ka"], feedforward["turn_ks"],
+                                           feedforward["turn_kv"], feedforward["turn_ka"], kp, kd,
+                                           top_fraction * feedforward["top_ips"], accel,
+                                           decel, jerk):
+            raise ValueError("useProfiledMoves() refused the config")
+
     def follow(self, points, reversed=False, timeout=4000, volts=12):
         """followTrajectory() along a spline from the current pose through
         @p points, a list of (x, y) in inches. Returns the MotionResult int."""
@@ -506,31 +527,69 @@ def box_range(truth, sensor, max_range=78.0):
 
 
 def measure_feedforward(lib, preset, tracking_mode, cache):
-    """kS and kV for one side of @p preset, measured in the simulator.
+    """kS, kV and kA for one side of @p preset, measured in the simulator.
 
     Holds 4 V and then 8 V on both sides for 1.5 s each and fits
     V = kS + kV * speed through the two steady speeds - the same measurement
-    docs/motion.md asks for on a real robot. Then spins in place at 6 V per
-    side for the effective track width, 2 * (V - kS) / kV / turn rate.
+    docs/motion.md asks for on a real robot. kA is the least-squares fit of
+    the voltage left over, V - kS - kV * speed, against the acceleration while
+    the 4 V hold speeds up: from 8 V the drive speeds up at its grip or
+    current limit, about 210 in/s^2 on six_motor_450, not at what the
+    voltage asks for. Then spins in place at 6 V per side for the effective
+    track width, 2 * (V - kS) / kV / turn rate, and at 4 V and 8 V for the
+    turning kS, kV and kA (from 4 V), with the wheel speed taken as the turn
+    rate times half the effective track width.
     """
     key = (preset, tracking_mode)
     if key not in cache:
-        speeds = []
+        speeds, traces = [], []
         for volts in (4.0, 8.0):
             bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
             bridge.run(11, timeout=1500, volts=volts)
             speeds.append(bridge.sim.state.speed / bridge.inch)
+            traces.append(bridge.control_trace)
         kv = 4.0 / (speeds[1] - speeds[0])
         ks = 4.0 - kv * speeds[0]
         top = (12.0 - ks) / kv
+        ka = fit_acceleration_gain(traces[0], ks, kv)
         bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
         bridge.run(12, timeout=1500, volts=6.0)
         turn_rate = abs(bridge.sim.state.r)
         track = 2 * (6.0 - ks) / kv / turn_rate
-        cache[key] = dict(ks=ks, kv=kv, top_ips=top, track_in=track)
-        print(f"{preset}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), top={top:.1f} in/s, "
-              f"effective track={track:.2f} in", flush=True)
+        spin_speeds, spin_traces = [], []
+        for volts in (4.0, 8.0):
+            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+            bridge.run(12, timeout=1500, volts=volts)
+            spin_speeds.append(abs(bridge.sim.state.r) * track / 2)
+            spin_traces.append([dict(t=frame["t"], left_volts=abs(frame["left_volts"]),
+                                     forward_speed_ips=math.radians(abs(frame["yaw_rate_dps"])) * track / 2)
+                                for frame in bridge.control_trace])
+        turn_kv = 4.0 / (spin_speeds[1] - spin_speeds[0])
+        turn_ks = 4.0 - turn_kv * spin_speeds[0]
+        turn_ka = fit_acceleration_gain(spin_traces[0], turn_ks, turn_kv)
+        cache[key] = dict(ks=ks, kv=kv, ka=ka, top_ips=top, track_in=track,
+                          turn_ks=turn_ks, turn_kv=turn_kv, turn_ka=turn_ka)
+        print(f"{preset}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), kA={ka:.4f} V/(in/s^2), "
+              f"top={top:.1f} in/s, effective track={track:.2f} in; turning kS={turn_ks:.3f} V, "
+              f"kV={turn_kv:.4f} V/(in/s), kA={turn_ka:.4f} V/(in/s^2)", flush=True)
     return cache[key]
+
+
+def fit_acceleration_gain(trace, ks, kv, min_speed_ips=2.0, min_accel_ips2=20.0):
+    """kA from a constant-voltage run's control trace, with central-difference
+    accelerations, over the ticks where the robot is moving and speeding up."""
+    leftover_times_accel = accel_squared = 0.0
+    for before, frame, after in zip(trace, trace[1:], trace[2:]):
+        accel = ((after["forward_speed_ips"] - before["forward_speed_ips"]) /
+                 (after["t"] - before["t"]))
+        if frame["forward_speed_ips"] < min_speed_ips or accel < min_accel_ips2:
+            continue
+        leftover = frame["left_volts"] - ks - kv * frame["forward_speed_ips"]
+        leftover_times_accel += leftover * accel
+        accel_squared += accel * accel
+    if not accel_squared:
+        raise RuntimeError("the hold never sped up fast enough to fit kA")
+    return leftover_times_accel / accel_squared
 
 
 # The robot's owner's Override cascade drive has one sideways tracking wheel
@@ -567,6 +626,23 @@ def scenarios():
                        position_tolerance=(1.5 if action == 7 else
                                            2.5 if name.endswith("_ramsete_config") else
                                            5.5 if action in (2, 3) else 2.5))
+    # The stopping moves on a planned speed (useProfiledMoves()), on every
+    # drive, against the same targets and tolerances.
+    for preset in ("four_motor_200", "six_motor_450", "speed_base", "override_cascade"):
+        for name, action, args, target, angle in (
+            ("drive_forward", 1, {"a": 24}, (0, 24), 0),
+            ("drive_reverse", 1, {"a": -24}, (0, -24), 0),
+            ("turn_right", 0, {"a": 90}, None, 90),
+            ("turn_left", 0, {"a": -90}, None, -90),
+            ("point_forward", 6, {"b": 24}, (0, 24), 0),
+            ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
+            ("swing", 4, {"a": 90}, None, 90),
+        ):
+            yield dict(name=f"profiled/{preset}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle, profiled=True,
+                       tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
+                                       else TRACKING_MODES),
+                       position_tolerance=2.5)
     # The same moves with a PoseFilter correcting odometry from four wall
     # distance sensors. Mostly matters with drive encoders only, whose
     # odometry drifts 4-10 in on these moves.
@@ -680,7 +756,8 @@ def main():
     feedforward_cache = {}
     for case in cases:
         feedforward = None
-        if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
+        if (case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config")
+                or case.get("profiled")):
             feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
                                               feedforward_cache)
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,
@@ -690,6 +767,8 @@ def main():
                                accel=args.ramsete_accel)
             if case["name"].endswith("_ramsete_config"):
                 lib.sim_arcs_use_ramsete(1)
+            if case.get("profiled"):
+                bridge.use_profiled_moves(feedforward)
         error = None
         try:
             wall_result = bridge.run(case["action"], **case["args"])

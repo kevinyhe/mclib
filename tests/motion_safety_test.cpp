@@ -3,6 +3,7 @@
 #include "mclib/control/chassis_io.hpp"
 #include "mclib/control/motion_config.hpp"
 #include "mclib/control/odometry.hpp"
+#include "mclib/control/profiled_moves.hpp"
 #include "mclib/control/ramsete.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/path/spline.hpp"
@@ -1376,6 +1377,103 @@ int main() {
                 std::hypot(pose.x, pose.y));
     CHECK(result == MotionResult::Reached);
     CHECK(orbit_turned_deg < 120);
+  }
+
+  // useProfiledMoves() on a drive that follows its feedforward exactly:
+  // each side speeds up by (V - kS - kV * speed) / kA.
+  {
+    const double ks = 0.5, kv = 0.15, ka = 0.02, track_in = 12;
+    ProfiledMoveConfig profiled;
+    profiled.follower.gains = {ks * 1_V, kv * 1_V / mclib::units::inps, ka * 1_V / inps2};
+    profiled.follower.kp = 2_V / 1_in;
+    profiled.follower.kd = 0.1_V / 1_in;
+    profiled.turn_gains = profiled.follower.gains;
+    profiled.limits.max_velocity = 50 * mclib::units::inps;
+    profiled.limits.max_acceleration = 150 * inps2;
+    profiled.track_width = track_in * 1_in;
+
+    ProfiledMoveConfig bad = profiled;
+    bad.follower.gains.kV = 0 * mclib::units::volt / mclib::units::inps;
+    CHECK(!useProfiledMoves(bad));
+    CHECK(profiledMoveConfigProblem(bad) != nullptr);
+    bad = profiled;
+    bad.turn_gains.kV = 0 * mclib::units::volt / mclib::units::inps;
+    CHECK(!useProfiledMoves(bad));
+    bad = profiled;
+    bad.follower.kp = -1_V / 1_in;
+    CHECK(!useProfiledMoves(bad));
+    bad = profiled;
+    bad.limits.max_acceleration = 0 * inps2;
+    CHECK(!useProfiledMoves(bad));
+    bad = profiled;
+    bad.track_width = -1_in;
+    CHECK(!useProfiledMoves(bad));
+    CHECK(profiledMoveConfigProblem(profiled) == nullptr);
+
+    const double encoder_deg_per_in = 360 / (4 * mclib::kPi);
+    double left_ips = 0, right_ips = 0, fastest_ips = 0;
+    const auto start = [&] {
+      clearCancel();
+      now_ms = 0;
+      hw.heading = hw.encoder = 0;
+      hw.left = hw.right = 0;
+      left_ips = right_ips = fastest_ips = 0;
+      resetOdometry({0, 0, 0});
+      robotState().setCorrectAngleDeg(0);
+      robotState().setPrevOutputs(0, 0);
+      on_delay = [&] {
+        const double dt = 0.01;
+        const auto accelerate = [&](double& speed, double volts) {
+          const double friction = std::fabs(speed) > 1e-9 ? std::copysign(ks, speed)
+                                  : std::fabs(volts) > ks ? std::copysign(ks, volts) : volts;
+          speed += (volts - friction - kv * speed) / ka * dt;
+        };
+        accelerate(left_ips, hw.left);
+        accelerate(right_ips, hw.right);
+        fastest_ips = std::max({fastest_ips, std::fabs(left_ips), std::fabs(right_ips)});
+        hw.encoder += (left_ips + right_ips) / 2 * dt * encoder_deg_per_in;
+        hw.heading += (left_ips - right_ips) / track_in * dt * 180 / mclib::kPi;
+      };
+    };
+    struct Run { MotionResult result; std::uint32_t ms; double miss; double fastest_ips; };
+    const auto drive24 = [&] {
+      start();
+      const MotionResult result = driveTo(24_in, 3_s);
+      on_delay = {};
+      return Run{result, now_ms, std::fabs(hw.encoder / encoder_deg_per_in - 24), fastest_ips};
+    };
+    const auto turn90 = [&] {
+      start();
+      const MotionResult result = turnToAngle(90_deg, 3_s);
+      on_delay = {};
+      return Run{result, now_ms, std::fabs(hw.heading - 90), fastest_ips};
+    };
+
+    const Run pid_drive = drive24();
+    const Run pid_turn = turn90();
+    CHECK(useProfiledMoves(profiled));
+    const Run planned_drive = drive24();
+    const Run planned_turn = turn90();
+    usePidMoves();
+    const Run pid_drive_again = drive24();
+    std::printf("driveTo(24 in) on a feedforward drive: PID %s %u ms, miss %.2f in; "
+                "profiled %s %u ms, miss %.2f in, top %.1f in/s\n",
+                toString(pid_drive.result), static_cast<unsigned>(pid_drive.ms), pid_drive.miss,
+                toString(planned_drive.result), static_cast<unsigned>(planned_drive.ms),
+                planned_drive.miss, planned_drive.fastest_ips);
+    std::printf("turnToAngle(90 deg): PID %s %u ms, miss %.2f deg; profiled %s %u ms, "
+                "miss %.2f deg\n",
+                toString(pid_turn.result), static_cast<unsigned>(pid_turn.ms), pid_turn.miss,
+                toString(planned_turn.result), static_cast<unsigned>(planned_turn.ms),
+                planned_turn.miss);
+    CHECK(planned_drive.result == MotionResult::Reached);
+    CHECK(planned_drive.miss <= motionConfig().distance_exit.small_error);
+    CHECK(planned_drive.fastest_ips <= 50 * 1.05);
+    CHECK(planned_drive.ms < pid_drive.ms);
+    CHECK(planned_turn.result == MotionResult::Reached);
+    CHECK(planned_turn.miss <= motionConfig().turn_exit.small_error);
+    CHECK(pid_drive_again.ms == pid_drive.ms);
+    CHECK_NEAR(pid_drive_again.miss, pid_drive.miss, 1e-9);
   }
 
   bindDrive(nullptr);

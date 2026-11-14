@@ -12,6 +12,7 @@
 #include "mclib/control/scaling.hpp"
 #include "mclib/control/swing_math.hpp"
 #include "mclib/control/odometry.hpp"
+#include "mclib/control/profiled_moves.hpp"
 #include "mclib/control/ramsete.hpp"
 #include "mclib/control/robot_state.hpp"
 #include "mclib/math.hpp"
@@ -160,8 +161,11 @@ class MotionObservation {
     value.target_heading_deg = target;
     pid.setTarget(target);
   }
-  double heading(PID& pid, double input) {
+  void observeHeading(double input) {
     value.heading_error_deg = value.target_heading_deg - input;
+  }
+  double heading(PID& pid, double input) {
+    observeHeading(input);
     return pid.update(input);
   }
   void publish(MotionPhase phase, double drive, double yaw,
@@ -395,6 +399,159 @@ std::optional<ArcFollower> arcFollower() {
 }
 }  // namespace
 
+namespace {
+mclib::sync::Mutex g_profiled_mutex;
+std::optional<mclib::control::ProfiledMoveConfig> g_profiled_moves;
+
+std::optional<mclib::control::ProfiledMoveConfig> profiledMoves() {
+  mclib::sync::LockGuard lock(g_profiled_mutex);
+  return g_profiled_moves;
+}
+
+using mclib::control::FeedforwardGains;
+using mclib::control::ProfiledMoveConfig;
+using mclib::control::SimpleMotorFeedforward;
+
+/// @brief The limits for one move: the configured ones, with the top speed
+///        no higher than @p max_output drives through @p gains.
+mclib::control::ProfileConstraints moveLimits(const ProfiledMoveConfig& config,
+                                              const FeedforwardGains& gains, double max_output) {
+  mclib::control::ProfileConstraints limits = config.limits;
+  const QVelocity reachable = SimpleMotorFeedforward(gains)
+      .maxAchievableVelocity(max_output * mclib::units::volt, QAcceleration{});
+  limits.max_velocity = std::max(QVelocity{}, std::min(limits.max_velocity, reachable));
+  return limits;
+}
+
+/// @brief The wheel speed, in/s, that @p volts holds once the drive stops
+///        speeding up. Zero below kS.
+double steadySpeedIps(const ProfiledMoveConfig& config, double volts) {
+  if (std::fabs(volts) <= config.follower.gains.kS.volts()) return 0;
+  return SimpleMotorFeedforward(config.follower.gains)
+      .maxAchievableVelocity(volts * mclib::units::volt, QAcceleration{}).inps();
+}
+
+/// @brief Half the track width the profiled turns use, inches.
+double profiledTurnRadiusIn(const ProfiledMoveConfig& config) {
+  return config.track_width.in() > 0 ? config.track_width.in() / 2 : halfTrackWidthIn();
+}
+
+// One planned move: a MotionProfile over the inches a wheel rolls, followed
+// with a ProfileFollower against the clock.
+class PlannedMove {
+ public:
+  PlannedMove(const ProfiledMoveConfig& config, const FeedforwardGains& gains, double distance_in,
+              double start_speed_ips, double max_output)
+      : follower_(withGains(config.follower, gains)),
+        profile_(mclib::control::MotionProfile::generate(
+            distance_in * mclib::units::inch, moveLimits(config, gains, max_output),
+            start_speed_ips * mclib::units::inps)),
+        start_ms_(pros::millis()),
+        last_ms_(start_ms_) {
+    follower_.setMaxVoltage(max_output * mclib::units::volt);
+  }
+  bool running() const { return elapsedMs() < profile_.duration().ms(); }
+  /// @brief The voltage for this tick, given the inches the wheel has rolled.
+  double volts(double rolled_in) {
+    const uint32_t now = pros::millis();
+    const QTime dt = static_cast<double>(static_cast<uint32_t>(now - last_ms_)) * mclib::units::millisecond;
+    last_ms_ = now;
+    const auto setpoint = profile_.sample(elapsedMs() * mclib::units::millisecond);
+    return follower_.calculate(setpoint, rolled_in * mclib::units::inch, dt).volts();
+  }
+ private:
+  static mclib::control::ProfileFollowerConfig withGains(mclib::control::ProfileFollowerConfig follower,
+                                                         const FeedforwardGains& gains) {
+    follower.gains = gains;
+    return follower;
+  }
+  double elapsedMs() const { return static_cast<uint32_t>(pros::millis() - start_ms_); }
+  mclib::control::ProfileFollower follower_;
+  mclib::control::MotionProfile profile_;
+  uint32_t start_ms_;
+  uint32_t last_ms_;
+};
+
+// moveToPoint()'s planned speed: from the distance left each tick, no faster
+// than it can stop from, and no more than max_acceleration faster than the
+// tick before.
+class PlannedApproach {
+ public:
+  PlannedApproach(const ProfiledMoveConfig& config, double start_speed_ips, double max_output)
+      : feedforward_(config.follower.gains),
+        kd_(config.follower.kd.raw() * mclib::units::inch.raw()),
+        limits_(moveLimits(config, config.follower.gains, max_output)),
+        speed_ips_(start_speed_ips),
+        last_ms_(pros::millis()) {}
+  /// @brief The robot stopped to turn in place: plan from rest again.
+  void restart() { speed_ips_ = 0; last_ms_ = pros::millis(); }
+  /// @brief The voltage along the heading for this tick.
+  double volts(double remaining_in, double measured_ips) {
+    const uint32_t now = pros::millis();
+    const double dt_s = std::max(1, static_cast<int>(static_cast<uint32_t>(now - last_ms_))) / 1000.0;
+    last_ms_ = now;
+    const double accel_ips2 = limits_.max_acceleration.raw() / mclib::units::inch.raw();
+    const double decel_ips2 = limits_.effectiveDeceleration().raw() / mclib::units::inch.raw();
+    const double stop_ips = std::sqrt(2 * decel_ips2 * std::max(0.0, remaining_in));
+    const double planned = std::min({limits_.max_velocity.inps(), stop_ips, speed_ips_ + accel_ips2 * dt_s});
+    const double acceleration = (planned - speed_ips_) / dt_s;
+    speed_ips_ = planned;
+    return feedforward_.calculate(planned * mclib::units::inps,
+                                  acceleration * mclib::control::inps2).volts() +
+           kd_ * (planned - measured_ips);
+  }
+ private:
+  SimpleMotorFeedforward feedforward_;
+  double kd_;
+  mclib::control::ProfileConstraints limits_;
+  double speed_ips_;
+  uint32_t last_ms_;
+};
+}  // namespace
+
+namespace {
+bool usableGains(const FeedforwardGains& gains) {
+  const auto finite = [](double value) { return std::isfinite(value); };
+  return gains.kV.raw() > 0 && finite(gains.kV.raw()) && gains.kS.raw() >= 0 &&
+         finite(gains.kS.raw()) && gains.kA.raw() >= 0 && finite(gains.kA.raw());
+}
+}  // namespace
+
+const char* mclib::control::profiledMoveConfigProblem(const ProfiledMoveConfig& config) {
+  const auto finite = [](double value) { return std::isfinite(value); };
+  if (!usableGains(config.follower.gains))
+    return "follower.gains needs a positive kV, and kS and kA of zero or more";
+  if (!usableGains(config.turn_gains))
+    return "turn_gains needs a positive kV, and kS and kA of zero or more";
+  if (!(config.limits.max_velocity.raw() > 0) || !finite(config.limits.max_velocity.raw()) ||
+      !(config.limits.max_acceleration.raw() > 0) || !finite(config.limits.max_acceleration.raw()))
+    return "limits.max_velocity and limits.max_acceleration must be positive";
+  if (!(config.limits.max_deceleration.raw() >= 0) || !finite(config.limits.max_deceleration.raw()) ||
+      !(config.limits.max_jerk.raw() >= 0) || !finite(config.limits.max_jerk.raw()))
+    return "limits.max_deceleration and limits.max_jerk must be zero or more";
+  for (const double gain : {config.follower.kp.raw(), config.follower.ki.raw(), config.follower.kd.raw(),
+                            config.follower.integral_max.raw()})
+    if (!(gain >= 0) || !finite(gain)) return "follower.kp, ki, kd and integral_max must be zero or more";
+  if (!(config.track_width.raw() >= 0) || !finite(config.track_width.raw()))
+    return "track_width must be zero or more";
+  return nullptr;
+}
+
+bool mclib::control::useProfiledMoves(const ProfiledMoveConfig& config) {
+  if (const char* problem = profiledMoveConfigProblem(config)) {
+    std::printf("useProfiledMoves(): %s. The moves are unchanged.\n", problem);
+    return false;
+  }
+  mclib::sync::LockGuard lock(g_profiled_mutex);
+  g_profiled_moves = config;
+  return true;
+}
+
+void mclib::control::usePidMoves() {
+  mclib::sync::LockGuard lock(g_profiled_mutex);
+  g_profiled_moves.reset();
+}
+
 void mclib::control::useRamseteForArcs(const RamseteConfig& config,
                                        const path::TrajectoryConstraints& limits) {
   mclib::sync::LockGuard lock(g_arc_mutex);
@@ -486,9 +643,28 @@ MotionResult turnToAngle(QAngle turn_angle_target, QTime time_limit, bool exit, 
   }
   else
   {
+    const std::optional<ProfiledMoveConfig> profiled = exit ? profiledMoves() : std::nullopt;
+    const double start_heading_deg = safety.heading();
+    const double turn_radius_in = profiled ? profiledTurnRadiusIn(*profiled) : 0;
+    std::optional<PlannedMove> plan;
+    if (profiled)
+      plan.emplace(*profiled, profiled->turn_gains,
+                   degToRad(turn_angle - start_heading_deg) * turn_radius_in, 0, max_output);
     while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && safety.running())
     {
-      const double requested = telemetry.heading(pid, safety.heading());
+      const double heading = safety.heading();
+      double requested;
+      if (plan && plan->running())
+      {
+        telemetry.observeHeading(heading);
+        requested = plan->volts(degToRad(heading - start_heading_deg) * turn_radius_in);
+      }
+      else
+      {
+        requested = telemetry.heading(pid, heading);
+        if (plan)
+          requested = settleFloor(requested, turn_angle - heading, cfg().turn_exit.small_error);
+      }
       output = clampSymmetric(requested, max_output);
       telemetry.publish(MotionPhase::Turn, 0, requested, false,
                         requested != output || fabs(output) > 12);
@@ -566,6 +742,12 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
   // at the end. The observation snapshot is published separately each tick.
   double prev_left_output = state().prevLeftOutput();
   double prev_right_output = state().prevRightOutput();
+  const std::optional<ProfiledMoveConfig> profiled = exit ? profiledMoves() : std::nullopt;
+  std::optional<PlannedMove> plan;
+  if (profiled)
+    plan.emplace(*profiled, profiled->follower.gains, distance_in,
+                 steadySpeedIps(*profiled, (prev_left_output + prev_right_output) / 2) * drive_direction,
+                 max_output);
 
   // Main PID loop for driving straight
   while ((((!pid_distance.targetArrived()) && pros::millis() - start_time <= time_limit_msec && exit) || (exit == false && current_distance < distance_in && pros::millis() - start_time <= time_limit_msec)) && safety.running())
@@ -586,8 +768,15 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
     }
     if (early_exit_in > 0 && distance_in - current_distance <= early_exit_in) break;
     current_angle = safety.heading();
-    left_output = pid_distance.update(current_distance) * drive_direction;
-    if (exit)
+    if (plan && plan->running())
+    {
+      left_output = plan->volts(current_distance) * drive_direction;
+    }
+    else
+    {
+      left_output = pid_distance.update(current_distance) * drive_direction;
+    }
+    if (exit && !(plan && plan->running()))
     {
       // Keep pushing past friction until inside the small band; see
       // MotionConfig::settle_min_voltage.
@@ -621,14 +810,16 @@ MotionResult driveTo(QLength distance, QTime time_limit, bool exit, QVoltage max
     const double before_slew_left = left_output, before_slew_right = right_output;
 
     // Max Acceleration/Deceleration Check
-    // slew limits act as a discrete first order filter on voltage demand to reduce jerk
-    applySlewClamp(left_output,
-                   right_output,
-                   prev_left_output,
-                   prev_right_output,
-                   max_slew_fwd,
-                   max_slew_rev,
-                   true);
+    // slew limits act as a discrete first order filter on voltage demand to
+    // reduce jerk. A planned move already limits its acceleration.
+    if (!(plan && plan->running()))
+      applySlewClamp(left_output,
+                     right_output,
+                     prev_left_output,
+                     prev_right_output,
+                     max_slew_fwd,
+                     max_slew_rev,
+                     true);
     prev_left_output = left_output;
     prev_right_output = right_output;
     telemetry.publish(MotionPhase::Drive, requested_drive, correction_output,
@@ -1016,10 +1207,26 @@ MotionResult swing(QAngle swing_angle_target, double drive_direction, QTime time
   }
 
   // PID loop for exit == true (stop at end)
+  const std::optional<ProfiledMoveConfig> profiled = exit ? profiledMoves() : std::nullopt;
+  const double swing_radius_in = profiled ? 2 * profiledTurnRadiusIn(*profiled) : 0;
+  std::optional<PlannedMove> plan;
+  if (profiled)
+    plan.emplace(*profiled, profiled->turn_gains,
+                 degToRad(swing_angle - entry_angle_deg) * swing_radius_in, 0, max_output);
   while (!pid.targetArrived() && pros::millis() - start_time <= time_limit_msec && exit == true && safety.running())
   {
     current_heading = safety.heading();
-    output = telemetry.heading(pid, current_heading);
+    if (plan && plan->running())
+    {
+      telemetry.observeHeading(current_heading);
+      output = plan->volts(degToRad(current_heading - entry_angle_deg) * swing_radius_in);
+    }
+    else
+    {
+      output = telemetry.heading(pid, current_heading);
+      if (plan)
+        output = settleFloor(output, swing_angle - current_heading, cfg().turn_exit.small_error);
+    }
 
     // Clamp output
     const double requested = output;
@@ -1396,6 +1603,12 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
   double turned_since_progress_rad = 0;
   double previous_angle = safety.heading();
   DriveSpeed drive_speed;
+  const std::optional<ProfiledMoveConfig> profiled = exit ? profiledMoves() : std::nullopt;
+  std::optional<PlannedApproach> approach;
+  if (profiled)
+    approach.emplace(*profiled,
+                     std::max(0.0, steadySpeedIps(*profiled, (prev_left_output + prev_right_output) / 2) * dir),
+                     max_output);
 
   double current_angle = 0;
   // Main PID loop for moving to point
@@ -1446,8 +1659,17 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     telemetry.value.heading_error_deg = telemetry.value.target_heading_deg - current_angle;
     // Calculate drive output based on heading and distance
     const double along = cos(bearing_error);
-    left_output = pid_distance.update(0) * along * dir;
-    if (exit)
+    // The planned approach drives to the point along the heading closest to
+    // the target. It hands over to the distance PID once, inside the small
+    // exit band, so the PID's settle timer starts there.
+    const double remaining_along_heading = remaining * along;
+    if (approach && remaining_along_heading <= cfg().distance_exit.small_error) approach.reset();
+    const bool planned_approach = approach.has_value();
+    if (planned_approach)
+      left_output = approach->volts(remaining_along_heading, forward_ips ? *forward_ips * dir : 0) * dir;
+    else
+      left_output = pid_distance.update(0) * along * dir;
+    if (exit && !planned_approach)
     {
       // The part of the distance left that lies along the heading; see
       // MotionConfig::settle_min_voltage.
@@ -1471,13 +1693,18 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
       break;
     }
     prev_perpendicular_line = perpendicular_line;
-    const bool pivot = settle_zone ? !on_line : aiming || fabs(facing_error) > M_PI / 3.0;
+    // A planned approach speeds up at once, so it turns in place down to
+    // kAimLimitRad first: steering more than that at speed slid the robot
+    // sideways, which odometry without a sideways tracking wheel can't see.
+    const double pivot_above_rad = approach ? kAimLimitRad : M_PI / 3.0;
+    const bool pivot = settle_zone ? !on_line : aiming || fabs(facing_error) > pivot_above_rad;
     // A nearby target beside/behind the robot still needs steering. Allow a
     // symmetric pivot before translating, without the distance-oriented slew
     // turning (+yaw,-yaw) into a lopsided drive command.
     if (remaining > position_band && pivot) {
       progress_mark_in = remaining;
       turned_since_progress_rad = 0;
+      if (approach) approach->restart();
       const double requested_yaw = telemetry.heading(pid_heading, current_angle);
       correction_output = clampSymmetric(requested_yaw, max_output);
       prev_left_output = correction_output;
@@ -1538,14 +1765,16 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     const double before_slew_left = left_output, before_slew_right = right_output;
     // Max Acceleration/Deceleration Check
     // When exit=true, skip decel slew so PID can brake before the target.
-    // Only limit acceleration to prevent wheel slip on startup.
-    applySlewClamp(left_output,
-                   right_output,
-                   prev_left_output,
-                   prev_right_output,
-                   max_slew_fwd,
-                   max_slew_rev,
-                   !exit);
+    // Only limit acceleration to prevent wheel slip on startup. A planned
+    // approach already limits its acceleration.
+    if (!planned_approach)
+      applySlewClamp(left_output,
+                     right_output,
+                     prev_left_output,
+                     prev_right_output,
+                     max_slew_fwd,
+                     max_slew_rev,
+                     !exit);
     prev_left_output = left_output;
     prev_right_output = right_output;
     telemetry.publish(MotionPhase::Point, requested_drive, requested_yaw,
