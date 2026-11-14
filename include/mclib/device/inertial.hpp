@@ -15,6 +15,9 @@
 namespace mclib {
 namespace device {
 
+/// @brief One of the IMU's own axes, either way along it.
+enum class ImuAxis { PlusX, MinusX, PlusY, MinusY, PlusZ, MinusZ };
+
 class Inertial {
 public:
   /**
@@ -61,6 +64,16 @@ public:
 
   /// @brief Typed sibling of setRotationDeg().
   void setRotation(units::QAngle heading);
+
+  /**
+   * @brief What the accelerometer reads along @p axis, in g, or nullopt if
+   *        the IMU is not reporting.
+   *
+   * The raw reading, along the sensor's own axes, so it depends on how the
+   * IMU is mounted. Standing still it reads the floor's tilt and the chip's
+   * zero error; the IMU chip's zero can be 40 mg off. `gain` does not apply.
+   */
+  std::optional<double> accelerationG(ImuAxis axis) const;
 
 private:
   pros::Imu m_imu;

@@ -12,8 +12,10 @@
 #include "mclib/sync.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <optional>
+#include <variant>
 #include <vector>
 
 /**
@@ -36,6 +38,13 @@
  *
  * A reading further from its prediction than `PoseFilterConfig::gate`
  * standard deviations is rejected and changes nothing.
+ *
+ * Readings arrive late. A GPS pose 50 ms old, compared with where the robot
+ * is now at 60 in/s, is 3 in behind. Give `predict()` the time of each step
+ * and give a reading the time it was taken, and the filter applies the
+ * reading at that time: it goes back to the pose it had then, applies the
+ * reading, and steps forward again through the odometry and readings since.
+ * It remembers `PoseFilterConfig::history_ms` of steps.
  *
  * The field frame is the snapshot map's: 0 to 144 in on both axes, heading 0
  * along +Y, clockwise positive. Odometry has to be reset into that frame for
@@ -76,6 +85,9 @@ struct PoseFilterConfig {
   /// @brief Field walls a distance ray may hit, when the sensor's own
   ///        `field_mask` is 0.
   std::uint32_t field_mask = snapshot::MAP_PERIMETER;
+  /// @brief How long the timed `predict()` remembers its steps, ms. A timed
+  ///        reading taken longer ago than this is refused.
+  std::uint32_t history_ms = 250;
 };
 
 /**
@@ -106,6 +118,14 @@ class PoseFilter {
   void predict(const Pose2D& previous_odom, const Pose2D& current_odom);
 
   /**
+   * @brief `predict()` that remembers the step, ending at @p now_ms, so a
+   *        reading taken during the last `PoseFilterConfig::history_ms` can be
+   *        applied at the time it was taken. The untimed `predict()` forgets
+   *        what this remembered.
+   */
+  void predict(const Pose2D& previous_odom, const Pose2D& current_odom, std::uint32_t now_ms);
+
+  /**
    * @brief Blend in one distance sensor reading.
    * @param geometry Where the sensor is on the robot and what it may hit.
    * @param measured_in The reading, inches. Zero, negative or not finite is
@@ -114,6 +134,14 @@ class PoseFilter {
    *         ray hits no wall in range, or the reading was invalid.
    */
   bool updateDistance(const snapshot::SensorGeometry& geometry, double measured_in);
+
+  /**
+   * @brief `updateDistance()` for a reading taken at @p taken_ms, applied at
+   *        that time. See the timed `predict()`.
+   * @return False also when @p taken_ms is older than the remembered steps.
+   */
+  bool updateDistance(const snapshot::SensorGeometry& geometry, double measured_in,
+                      std::uint32_t taken_ms);
 
   /**
    * @brief Blend in a GPS pose.
@@ -126,6 +154,14 @@ class PoseFilter {
   bool updateGps(const Pose2D& measured, double position_sigma_in,
                  double heading_sigma_deg = -1.0);
 
+  /**
+   * @brief `updateGps()` for a reading taken at @p taken_ms, applied at that
+   *        time. See the timed `predict()`.
+   * @return False also when @p taken_ms is older than the remembered steps.
+   */
+  bool updateGps(const Pose2D& measured, double position_sigma_in, double heading_sigma_deg,
+                 std::uint32_t taken_ms);
+
   /// @brief The current estimate.
   const Pose2D& pose() const { return m_pose; }
   /// @brief Covariance of (x in, y in, heading rad).
@@ -136,16 +172,55 @@ class PoseFilter {
   /// @brief Readings used and rejected since the last reset().
   int accepted() const { return m_accepted; }
   int rejected() const { return m_rejected; }
+  /// @brief Timed readings refused since the last reset() because they were
+  ///        taken before the oldest remembered step.
+  int tooOld() const { return m_too_old; }
 
   const PoseFilterConfig& config() const { return m_config; }
   void setConfig(const PoseFilterConfig& config) { m_config = config; }
 
  private:
+  struct Step {
+    double forward = 0.0;
+    double right = 0.0;
+    double turn = 0.0;
+  };
+  struct DistanceReading {
+    snapshot::SensorGeometry geometry;
+    double measured_in;
+  };
+  struct GpsReading {
+    Pose2D measured;
+    double position_sigma_in;
+    double heading_sigma_deg;
+  };
+  using Reading = std::variant<DistanceReading, GpsReading>;
+  /// @brief One timed predict(): the step, the readings applied at its time,
+  ///        and the estimate after both.
+  struct Tick {
+    std::uint32_t time_ms;
+    Step step;
+    std::vector<Reading> readings;
+    Pose2D pose;
+    Mat3 cov;
+  };
+
+  enum class Outcome { Used, Rejected, Ignored };
+
+  void applyStep(const Step& step);
+  Outcome applyReading(const Reading& reading);
+  Outcome applyDistance(const DistanceReading& reading);
+  Outcome applyGps(const GpsReading& reading);
+  bool updateNow(const Reading& reading);
+  bool updateAt(const Reading& reading, std::uint32_t taken_ms);
+
   PoseFilterConfig m_config;
   Pose2D m_pose{};
   Mat3 m_cov = Mat3::Identity();
   int m_accepted = 0;
   int m_rejected = 0;
+  int m_too_old = 0;
+  std::deque<Tick> m_history;
 };
 
 /// @brief One distance sensor for `PoseFusion`.
@@ -159,6 +234,10 @@ struct DistanceSensorInput {
   ///        often than this, so one reading is never counted twice. The V5
   ///        distance sensor updates about every 33 ms.
   std::uint32_t period_ms = 33;
+  /// @brief How long before it is read a reading was taken, ms. The filter
+  ///        applies it at that time. Longer than
+  ///        `PoseFilterConfig::history_ms` is a configuration error.
+  std::uint32_t latency_ms = 0;
 };
 
 /// @brief A GPS sensor for `PoseFusion`.
@@ -174,6 +253,10 @@ struct GpsInput {
   double position_sigma_in = 1.0;
   /// @brief How often the GPS gives a new reading. About 20 ms.
   std::uint32_t period_ms = 20;
+  /// @brief How long before it is read a GPS pose was taken, ms. The filter
+  ///        applies it at that time. `setGps()` refuses one longer than
+  ///        `PoseFilterConfig::history_ms`.
+  std::uint32_t latency_ms = 0;
   /// @brief Where the GPS origin (the field centre) is on the snapshot map
   ///        `PoseFusion` works in. {72, 72} on a 144 in field.
   double origin_x_in = 72.0;
@@ -213,6 +296,9 @@ struct PoseFusionConfig {
  */
 class PoseFusion {
  public:
+  /// @brief A sensor whose `latency_ms` is longer than the filter's
+  ///        `history_ms` is a configuration error: `step()` does nothing and
+  ///        `startOdometry()` refuses this fusion.
   PoseFusion(PoseFusionConfig config, std::vector<DistanceSensorInput> sensors);
 
   /**
@@ -226,8 +312,15 @@ class PoseFusion {
    *                  .error_in = [] { return gps.getErrorM() * 39.37; }});
    * }
    * ```
+   *
+   * @return False, changing nothing, when `latency_ms` is longer than the
+   *         filter's `history_ms`.
    */
-  void setGps(GpsInput gps);
+  bool setGps(GpsInput gps);
+
+  /// @brief True when the constructor was given a distance sensor whose
+  ///        `latency_ms` is longer than the filter's `history_ms`.
+  bool hasConfigurationError() const { return m_config_error; }
 
   /**
    * @brief Start from @p odometry_pose.
@@ -242,7 +335,7 @@ class PoseFusion {
    * @param odometry_pose The odometry pose now.
    * @param now_ms Clock, for sensor periods.
    * @return Where to move odometry's position to (odometry frame), or
-   *         nothing when it is already there.
+   *         nothing when it is already there or `hasConfigurationError()`.
    */
   std::optional<Vec2> step(const Pose2D& odometry_pose, std::uint32_t now_ms);
 
@@ -251,6 +344,9 @@ class PoseFusion {
   /// @brief Readings used and rejected. Safe from any task.
   int accepted() const;
   int rejected() const;
+  /// @brief Readings refused for being taken before the filter's remembered
+  ///        steps: a `latency_ms` longer than `history_ms`. Safe from any task.
+  int tooOld() const;
   /// @brief Position uncertainty, inches. Safe from any task.
   double positionSigmaIn() const;
 
@@ -263,6 +359,7 @@ class PoseFusion {
   std::optional<GpsInput> m_gps;
   std::uint32_t m_last_gps_ms = 0;
   PoseFilter m_filter;
+  bool m_config_error = false;
   Pose2D m_previous{};  // field frame
   bool m_started = false;
   mutable sync::Mutex m_mutex;

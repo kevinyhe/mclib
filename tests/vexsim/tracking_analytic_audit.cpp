@@ -3,7 +3,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
-// Standalone audit: compile with the real odometry.cpp, robot_state.cpp, math.cpp.
+// Standalone audit: compile with the real odometry.cpp, slide_estimator.cpp, robot_state.cpp, math.cpp.
 // The oracle integrates world velocities and wheel-contact velocities using
 // Simpson quadrature. It never calls the library's arc/chord or frame helpers.
 #include "mclib/control/odometry.hpp"

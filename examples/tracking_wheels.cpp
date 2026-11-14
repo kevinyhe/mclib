@@ -85,10 +85,12 @@ const mclib::units::TrackingWheel horizontal_wheel{
 //   vertical wheel         that wheel         not measured
 //   horizontal wheel       drive encoders     that wheel
 //   both wheels            vertical wheel     horizontal wheel
+//   accelerometer          either             estimated from the IMU
 //
-// The heading comes from the IMU in all four. Drive wheels slip when the robot
-// accelerates or is pushed, and a tracking wheel does not. Omni drive wheels
-// also slide sideways in every turn, and only a horizontal wheel sees that.
+// The heading comes from the IMU in all of them. Drive wheels slip when the
+// robot accelerates or is pushed, and a tracking wheel does not. Omni drive
+// wheels also slide sideways in every turn. A horizontal wheel measures that;
+// the IMU's accelerometer estimates it.
 //
 // startOdometry() takes the sample period as a last argument. The default,
 // 10 ms, matches the motion loops.
@@ -120,6 +122,51 @@ bool startWithBothWheels() {
       mclib::control::encoderReader(vertical_tracker), vertical_wheel};
   odometry.horizontal = mclib::control::TrackingWheelSensor{
       mclib::control::encoderReader(horizontal_tracker), horizontal_wheel};
+  return mclib::control::startOdometry(odometry);
+}
+
+// No horizontal wheel, so the IMU's accelerometer estimates the sideways
+// slide instead. It works with drive encoders alone or with a vertical wheel.
+// With drive encoders alone it also reads the IMU's forward axis, so drive
+// wheels spinning faster than the robot moves are not counted as travel.
+//
+// Give the IMU axis that points to the robot's right, and the one that points
+// to its front. To find them, show imu->accelerationG(PlusX), PlusY and PlusZ
+// on the screen, push the robot by hand to its right, then forward, and see
+// which one jumps and which way. A jump down on PlusY makes it MinusY.
+//
+// imu_forward_in and imu_right_in are where the IMU sits, measured from the
+// tracking centre. Spinning at 6 rad/s, an IMU 3 in off the centre reads
+// 0.28 g that is the turn, not a slide, and the odometry takes it away using
+// these. imu_position_sigma_in is how well you measured them: 0.25 in by
+// default.
+//
+// The accelerometer's zero is learned while the robot stands still after
+// startOdometry(). Start odometry before the robot moves, as calibrating the
+// IMU needs anyway.
+bool startWithAccelerometer() {
+  auto odometry = mclib::control::odometrySetupFrom(chassis);
+  odometry.vertical = mclib::control::TrackingWheelSensor{
+      mclib::control::encoderReader(vertical_tracker), vertical_wheel};
+  mclib::control::AccelerometerSensor accelerometer{
+      .right_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::MinusY)};
+  accelerometer.slide.imu_forward_in = 3.0;
+  accelerometer.slide.imu_right_in = -2.0;
+  odometry.accelerometer = accelerometer;
+  return mclib::control::startOdometry(odometry);
+}
+
+bool startWithAccelerometerAndDriveEncoders() {
+  auto odometry = mclib::control::odometrySetupFrom(chassis);
+  mclib::control::AccelerometerSensor accelerometer{
+      .right_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::MinusY),
+      .forward_ips2 =
+          mclib::control::accelerationReader(*imu, mclib::device::ImuAxis::PlusX)};
+  accelerometer.slide.imu_forward_in = 3.0;
+  accelerometer.slide.imu_right_in = -2.0;
+  odometry.accelerometer = accelerometer;
   return mclib::control::startOdometry(odometry);
 }
 

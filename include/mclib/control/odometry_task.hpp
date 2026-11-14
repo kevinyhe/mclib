@@ -6,6 +6,7 @@
 #pragma once
 
 #include "mclib/control/odometry.hpp"
+#include "mclib/device/inertial.hpp"
 #include "mclib/units/geometry.hpp"
 #include "mclib/units/units.hpp"
 
@@ -63,6 +64,45 @@ struct TrackingWheelSensor {
   units::TrackingWheel wheel;
 };
 
+/// @brief Standard gravity, in/s^2: what one g on the IMU is.
+inline constexpr double kGravityIps2 = 386.08858;
+
+/**
+ * @brief The IMU's accelerometer, for odometry with no horizontal tracking
+ *        wheel.
+ *
+ * `right_ips2` and `forward_ips2` return what the accelerometer reads toward
+ * the robot's right and front, in/s^2, or NaN when the IMU is not reporting.
+ * `accelerationReader()` builds them from a `device::Inertial`. With a
+ * vertical tracking wheel `forward_ips2` is not read and may be left empty.
+ * `slide` says where the IMU is: measure `imu_forward_in` and `imu_right_in`
+ * from the tracking centre.
+ */
+struct AccelerometerSensor {
+  std::function<double()> right_ips2;
+  std::function<double()> forward_ips2{};
+  SlideEstimatorConfig slide{};
+};
+
+/**
+ * @brief A reader for `AccelerometerSensor` from any IMU with an
+ *        `accelerationG(device::ImuAxis)` - `device::Inertial`.
+ *
+ * @param axis The sensor axis that points the way to read: to the robot's
+ *        right for `right_ips2`, to its front for `forward_ips2`. To find
+ *        them, push the robot by hand and see which of `accelerationG(PlusX)`,
+ *        `PlusY` or `PlusZ` jumps, and which way.
+ *
+ * The IMU is captured by reference and must outlive the odometry task.
+ */
+template <class Imu>
+std::function<double()> accelerationReader(const Imu& imu, device::ImuAxis axis) {
+  return [&imu, axis]() -> double {
+    const std::optional<double> g = imu.accelerationG(axis);
+    return g.has_value() ? *g * kGravityIps2 : NAN;
+  };
+}
+
 /**
  * @brief Every sensor the odometry task reads, and the geometry to read it
  *        with.
@@ -85,6 +125,9 @@ struct OdometrySetup {
   std::optional<TrackingWheelSensor> vertical;
   /// @brief Sideways-rolling tracking wheel, if fitted.
   std::optional<TrackingWheelSensor> horizontal;
+  /// @brief The IMU's accelerometer, to estimate the sideways slide. Only
+  ///        with no horizontal tracking wheel.
+  std::optional<AccelerometerSensor> accelerometer;
   /// @brief Optional distance-sensor correction, run after every tick
   ///        through an `OdometryFusion`. startOdometry() resets it, and the
   ///        task writes the position it returns back into odometry. When the
@@ -169,12 +212,20 @@ inline OdometryConfig odometryConfigFrom(const OdometrySetup& setup) {
         setup.horizontal->wheel.encoderToDistance(360.0 * units::degree);
     config.horizontal_offset_forward = setup.horizontal->wheel.offset;
   }
+  config.use_accelerometer = setup.accelerometer.has_value();
+  if (setup.accelerometer.has_value()) {
+    config.slide = setup.accelerometer->slide;
+  }
   return config;
 }
 
 /**
  * @brief True when @p setup can drive the odometry: a heading reader plus
- *        either both drive encoders or a vertical tracking wheel.
+ *        either both drive encoders or a vertical tracking wheel, and a
+ *        configuration `odometryConfigIsValid()` accepts. An accelerometer
+ *        needs `right_ips2`, `forward_ips2` too with no vertical tracking
+ *        wheel, and no horizontal tracking wheel. A `fusion` must not have a
+ *        configuration error.
  */
 bool odometrySetupIsUsable(const OdometrySetup& setup);
 
@@ -183,8 +234,8 @@ bool odometrySetupIsUsable(const OdometrySetup& setup);
  *        `odometryTick()`.
  *
  * Exposed so a caller can integrate on its own schedule instead of starting
- * the task. Readers that are not set contribute 0, except `heading_deg`,
- * which gives NaN.
+ * the task. Readers that are not set contribute 0, except `heading_deg` and
+ * the accelerometer, which give NaN. `time_ms` is `time::millis()`.
  */
 OdometrySample sampleOdometrySensors(const OdometrySetup& setup);
 
