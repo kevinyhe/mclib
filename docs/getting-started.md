@@ -161,10 +161,12 @@ void initialize() {
   an IMU 3 in off the centre reads 0.28 g that is the turn, not a slide.
   `slide.imu_position_sigma_in` says how well you measured it: 0.25 in by
   default.
-- Keep the robot still from `startOdometry()` until it first moves, as
-  calibrating the IMU needs anyway. The odometry learns the accelerometer's
-  zero then. The chip's zero can be 40 mg off once soldered; added up for one
-  second that is 15 in/s.
+- The odometry learns the accelerometer's zero whenever the robot stands
+  still: wheels and heading not moving for two ticks in a row. Keep the
+  robot still from `startOdometry()` until it first moves, as calibrating
+  the IMU needs anyway. The chip's zero can be 40 mg off once soldered;
+  added up for one second that is 15 in/s. `setPose()`, a tare and
+  `startOdometry()` start the slide over and keep the zero.
 - It works with drive encoders or a vertical tracker, not with a horizontal
   tracker, which measures the slide itself. `startOdometry()` refuses the
   pair.
@@ -179,24 +181,28 @@ drives (three with a vertical tracker):
 | Sensors | Straight moves and turns in place | Curves: arcs, boomerangs, swings, S-curves, point moves | Moves passing |
 | --- | --- | --- | --- |
 | Drive encoders only | 0.24 / 0.78 in | 4.24 / 9.79 in | 42 of 64 |
-| Drive encoders and accelerometer | 0.11 / 0.22 in | 0.98 / 2.35 in | 62 of 64 |
+| Drive encoders and accelerometer | 0.12 / 0.25 in | 1.03 / 4.87 in | 63 of 64 |
 | Vertical tracker | 0.10 / 0.19 in | 4.53 / 10.72 in | 31 of 48 |
-| Vertical tracker and accelerometer | 0.13 / 0.24 in | 1.13 / 3.88 in | 46 of 48 |
+| Vertical tracker and accelerometer | 0.13 / 0.23 in | 1.19 / 4.80 in | 46 of 48 |
 
 What it costs:
 
 - S-curves can end worse. The two turns' slides cancel without the
   accelerometer; with it the accelerometer's own errors add up instead. The
-  slowest drive's S-curve ends 1.75 in off instead of 0.34 in with drive
-  encoders, and 2.08 in instead of 0.57 in with a vertical tracker. Both
+  slowest drive's S-curve ends 1.69 in off instead of 0.34 in with drive
+  encoders, and 2.11 in instead of 0.57 in with a vertical tracker. Both
   still pass.
-- A turn in place drifts up to 0.14 in.
+- Boomerangs end 0.6 to 6.6 in off, depending on the accelerometer's
+  errors. The fast drive's is the worst case in the table: 4.9 in, against
+  9.8 in without the accelerometer. Over six draws of the errors it misses
+  its 1.5 in target every time.
+- A turn in place drifts up to 0.15 in.
 - The slide, and the correction to the drive wheels' travel, arrive one
   tick (10 ms) late. The wheels' own travel does not.
 
 The Override cascade drive (drive encoders only) ends its RAMSETE arcs 0.7 to
-0.9 in off instead of 6.7 in, its point move 0.7 in instead of 1.5 in, and
-its boomerang 2.2 in instead of 4.7 in.
+1.1 in off instead of 6.7 in, its point move 0.8 in instead of 1.5 in, and
+its boomerang 0.8 in instead of 4.7 in.
 
 None of this has run on a robot. To check it on yours, drive a full circle
 back to where you started, with and without the accelerometer, and see which

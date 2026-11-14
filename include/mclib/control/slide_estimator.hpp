@@ -27,12 +27,15 @@
  * more. 40 mg added up for one second is 15 in/s. So this is a small Kalman
  * filter over two numbers, the sideways speed and the accelerometer's zero:
  *
- * - Until the robot first moves, the zero is the average reading. Odometry
- *   should start with the robot still, as calibrating the IMU needs anyway.
+ * - While the robot stands still, the speed is zero and each reading is the
+ *   zero. Standing still is two ticks in a row of wheels under 1 in/s,
+ *   heading under 2 deg/s, and readings near the zeros. A V5 IMU at rest
+ *   drifts a few tenths of a degree a minute. Odometry should start with the
+ *   robot still, as calibrating the IMU needs anyway.
  * - Each tick it adds up the accelerometer, less its zero, into the speed.
  * - Each tick it also assumes the robot is not sliding, as sure of that as
- *   the sideways push is small. Standing still or driving straight, that
- *   holds the speed at zero and teaches the filter the zero. In a fast turn,
+ *   the sideways push is small. Driving straight, that holds the speed at
+ *   zero and teaches the filter the zero. In a fast turn,
  *   or when something shoves the robot, the assumption is weak and the
  *   accelerometer decides.
  * - An IMU off the tracking centre also feels the turn itself. That is taken
@@ -128,6 +131,11 @@ class SlideEstimator {
   /// @brief Forget the speeds and the zeros.
   void reset();
 
+  /// @brief Forget the last tick and the speeds, and keep the zeros: the
+  ///        next tick does not follow on from the last, as after an odometry
+  ///        reset. The forward speed starts again from the wheels.
+  void restart();
+
   /// @brief How far the tracking centre went in one tick, inches.
   struct Travel {
     double forward_in;
@@ -170,7 +178,8 @@ class SlideEstimator {
     Mat2 cov = Mat2::Zero();
 
     void reset(double zero_sigma);
-    void averageStillReading(double reading, int count, double accel_sigma);
+    void forgetSpeed();
+    void holdStill(double speed_now, double reading, double accel_sigma);
     void predict(double accel, double dt_s, double speed_var, double zero_var);
     void measureSpeed(double measured, double sigma);
   };
@@ -184,11 +193,17 @@ class SlideEstimator {
     double accel_forward;
   };
 
-  /// @brief Until the robot first moves, the zeros are the average readings.
-  ///        A reading far off that average is the robot starting to move
-  ///        before its wheels and heading show it. True while still.
-  bool standingStill(double forward_in, double turn_rad, double accel_right_ips2,
-                     double accel_forward_ips2);
+  /// @brief Wheels and heading not moving, and readings near the zeros. A
+  ///        reading far off is the robot starting to move, or being pushed,
+  ///        before its wheels and heading show it.
+  bool looksStill(const Tick& tick) const;
+
+  /// @brief Holds the speeds still and learns the zeros from @p tick, when
+  ///        it and the tick after it look still. One tick is not enough: in
+  ///        a spin, a heading that misses an update reads no turn for a
+  ///        tick, and as the robot starts the accelerometer feels it a tick
+  ///        before the wheels.
+  void holdStill(const Tick& tick);
 
   /// @brief Runs the filters over @p last, with @p next for the turn rate at
   ///        its end. Returns what to add to the wheels' forward travel over
@@ -201,8 +216,7 @@ class SlideEstimator {
   Axis m_forward;
   Tick m_last{};
   bool m_has_last = false;
-  int m_still_readings = 0;
-  bool m_moved = false;
+  bool m_last_looked_still = false;
 };
 
 }  // namespace control

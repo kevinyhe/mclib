@@ -14,8 +14,12 @@ namespace {
 // How many standard deviations of the IMU position error a reading may be
 // off before it counts as a push.
 constexpr double kPositionErrorBound = 3.0;
-// A reading this many accel_sigma off the average while the wheels are
-// still is the robot starting to move.
+// Standing still: wheels slower than this.
+constexpr double kStillWheelIps = 1.0;
+// And turning slower than this, 2 deg/s. A V5 IMU at rest drifts a few
+// tenths of a degree a minute.
+constexpr double kStillTurnRadPerS = 2.0 * kPi / 180.0;
+// And readings within this many standard deviations of the zeros.
 constexpr double kStillReadingBound = 4.0;
 // How many standard deviations the wheels' speed may be off the filter's
 // before the rest counts as slip.
@@ -39,9 +43,21 @@ void SlideEstimator::Axis::reset(double zero_sigma) {
   cov(1, 1) = zero_sigma * zero_sigma;
 }
 
-void SlideEstimator::Axis::averageStillReading(double reading, int count, double accel_sigma) {
-  zero += (reading - zero) / count;
-  cov(1, 1) = accel_sigma * accel_sigma / count;
+void SlideEstimator::Axis::forgetSpeed() {
+  speed = 0.0;
+  cov(0, 0) = 0.0;
+  cov(0, 1) = 0.0;
+  cov(1, 0) = 0.0;
+}
+
+void SlideEstimator::Axis::holdStill(double speed_now, double reading, double accel_sigma) {
+  speed = speed_now;
+  cov(0, 0) = 0.0;
+  cov(0, 1) = 0.0;
+  cov(1, 0) = 0.0;
+  const double gain = cov(1, 1) / (cov(1, 1) + accel_sigma * accel_sigma);
+  zero += gain * (reading - zero);
+  cov(1, 1) *= 1.0 - gain;
 }
 
 void SlideEstimator::Axis::predict(double accel, double dt_s, double speed_var, double zero_var) {
@@ -79,31 +95,38 @@ void SlideEstimator::reset() {
   m_right.reset(m_config.zero_sigma_ips2);
   m_forward.reset(m_config.zero_sigma_ips2);
   m_has_last = false;
-  m_still_readings = 0;
-  m_moved = false;
+  m_last_looked_still = false;
 }
 
-bool SlideEstimator::standingStill(double forward_in, double turn_rad, double accel_right_ips2,
-                                   double accel_forward_ips2) {
-  if (m_moved) return false;
-  const bool uses_forward_axis = m_forward_travel == ForwardTravel::FromDriveWheels;
-  const double bound = kStillReadingBound * m_config.accel_sigma_ips2;
-  const bool wheels_still = forward_in == 0.0 && turn_rad == 0.0;
-  const bool readings_still =
-      m_still_readings == 0 ||
-      (std::fabs(accel_right_ips2 - m_right.zero) < bound &&
-       (!uses_forward_axis || std::fabs(accel_forward_ips2 - m_forward.zero) < bound));
-  if (!(wheels_still && readings_still)) {
-    m_moved = true;
+void SlideEstimator::restart() {
+  m_right.forgetSpeed();
+  m_forward.forgetSpeed();
+  m_has_last = false;
+  m_last_looked_still = false;
+}
+
+bool SlideEstimator::looksStill(const Tick& tick) const {
+  if (std::fabs(tick.wheel_speed) > kStillWheelIps ||
+      std::fabs(tick.rate) > kStillTurnRadPerS) {
     return false;
   }
-  ++m_still_readings;
-  m_right.averageStillReading(accel_right_ips2, m_still_readings, m_config.accel_sigma_ips2);
-  if (uses_forward_axis) {
-    m_forward.averageStillReading(accel_forward_ips2, m_still_readings,
-                                  m_config.accel_sigma_ips2);
+  const auto near_zero = [this](double reading, const Axis& axis) {
+    const double spread =
+        std::sqrt(m_config.accel_sigma_ips2 * m_config.accel_sigma_ips2 + axis.cov(1, 1));
+    return std::fabs(reading - axis.zero) <= kStillReadingBound * spread;
+  };
+  return near_zero(tick.accel_right, m_right) &&
+         (m_forward_travel == ForwardTravel::FromTrackingWheel ||
+          near_zero(tick.accel_forward, m_forward));
+}
+
+void SlideEstimator::holdStill(const Tick& tick) {
+  m_right.holdStill(0.0, tick.accel_right, m_config.accel_sigma_ips2);
+  if (m_forward_travel == ForwardTravel::FromDriveWheels) {
+    m_forward.holdStill(tick.wheel_speed, tick.accel_forward, m_config.accel_sigma_ips2);
+  } else {
+    m_forward.speed = tick.wheel_speed;
   }
-  return true;
 }
 
 SlideEstimator::Travel SlideEstimator::update(double dt_s, double forward_in, double turn_rad,
@@ -111,13 +134,21 @@ SlideEstimator::Travel SlideEstimator::update(double dt_s, double forward_in, do
                                               double accel_forward_ips2) {
   if (!(dt_s > 0.0)) return {forward_in, 0.0};
   const Tick tick{dt_s, forward_in / dt_s, turn_rad / dt_s, accel_right_ips2, accel_forward_ips2};
-  // Calibrating the IMU needs the robot still, so odometry starts still.
-  const bool still = standingStill(forward_in, turn_rad, accel_right_ips2, accel_forward_ips2);
+  const bool looks_still = looksStill(tick);
   const bool has_last = m_has_last;
+  const bool still_throughout = looks_still && m_last_looked_still;
   const Tick last = m_last;
   m_last = tick;
   m_has_last = true;
-  if (still || !has_last) return {forward_in, 0.0};
+  m_last_looked_still = looks_still;
+  if (!has_last) {
+    m_forward.speed = tick.wheel_speed;
+    return {forward_in, 0.0};
+  }
+  if (still_throughout) {
+    holdStill(last);
+    return {forward_in, 0.0};
+  }
   const Travel last_tick = filter(last, tick);
   return {forward_in + last_tick.forward_in, last_tick.right_in};
 }

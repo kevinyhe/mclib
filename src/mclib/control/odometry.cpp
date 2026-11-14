@@ -137,10 +137,13 @@ Pose2D Odometry::update(const OdometrySample& sample) {
   }
 
   // Bug 2: the old code assumed a zero starting heading instead of reading
-  // one. The first sample here only records where the sensors are.
+  // one. The first sample here only records where the sensors are. The
+  // slide estimator's last tick may be one a reset undoes: a tare or a new
+  // heading seen as a jump.
   if (!m_has_baseline) {
     m_previous = sample;
     m_has_baseline = true;
+    m_slide.restart();
     return m_pose;
   }
 

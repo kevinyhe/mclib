@@ -11,10 +11,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   robots with no sideways tracking wheel. Give `OdometrySetup::accelerometer`
   readers, `accelerationReader(imu, axis)`, and where the IMU is. With
   drive encoders alone it also reads the IMU's forward axis, so drive wheels
-  spinning faster than the robot moves are not counted as travel. Off
+  spinning faster than the robot moves are not counted as travel. It learns
+  the accelerometer's zero whenever the robot stands still, and starts over,
+  keeping the zero, after `setPose()`, a tare or `startOdometry()`. Off
   unless set. In the physics simulator, with a real IMU's errors added,
-  odometry error at the end of a curve falls from 4.24 to 0.98 in on
-  average with drive encoders alone, and from 4.53 to 1.13 in with a
+  odometry error at the end of a curve falls from 4.24 to 1.03 in on
+  average with drive encoders alone, and from 4.53 to 1.19 in with a
   vertical tracker. S-curves can end worse. See getting-started.md. Not yet
   run on a robot.
 - `device::Inertial::accelerationG(ImuAxis)`: the accelerometer's raw
