@@ -35,6 +35,9 @@
  *   holds the speed at zero and teaches the filter the zero. In a fast turn,
  *   or when something shoves the robot, the assumption is weak and the
  *   accelerometer decides.
+ * - An IMU off the tracking centre also feels the turn itself. That is taken
+ *   away using where the IMU is. What an error of `imu_position_sigma_in` in
+ *   that position could read doesn't count as a shove.
  *
  * Host-only: no PROS headers.
  */

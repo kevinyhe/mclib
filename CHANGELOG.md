@@ -3,6 +3,41 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Odometry can estimate the sideways slide from the IMU's accelerometer, for
+  robots with no sideways tracking wheel. Give `OdometrySetup::accelerometer`
+  a reader, `sidewaysAccelReader(imu, axis)`, and where the IMU is. Off
+  unless set. In the physics simulator, with a real IMU's errors added,
+  odometry error at the end of a curve falls from 4.24 to 1.52 in on
+  average with drive encoders alone, and from 4.53 to 1.14 in with a
+  vertical tracker. A hard turn then a drive can end worse with drive
+  encoders alone. See getting-started.md. Not yet run on a robot.
+- `device::Inertial::accelerationG(ImuAxis)`: the accelerometer's raw
+  reading along one of the sensor's axes, in g.
+- `PoseFilter` and `PoseFusion` apply a late reading at the time it was
+  taken. `GpsInput::latency_ms` and `DistanceSensorInput::latency_ms` say how
+  late; the default, 0, applies it when it is read, as before. A
+  `PoseFilter` stepped by hand takes the time through the new
+  `predict(previous, current, now_ms)`, `updateGps(..., taken_ms)` and
+  `updateDistance(..., taken_ms)`. In the physics simulator, with GPS
+  readings 100 ms late, odometry ends 0.21 in off on average instead of
+  1.20 in.
+- `tests/vexsim/run.py --accelerometer ideal|realistic`, and the `imu/*` and
+  `gps_late/*` scenarios. `ci_baseline.json` adds the ones that pass.
+
+### Changed
+
+- `Odometry::setConfig()` and `setOdometryConfig()` return false, changing
+  nothing, for a configuration `odometryConfigIsValid()` rejects: the
+  accelerometer together with a sideways tracking wheel.
+- `PoseFusion::setGps()` returns false, changing nothing, for a
+  `latency_ms` longer than the filter remembers. A `PoseFusion` given such a
+  distance sensor has a configuration error, does nothing, and
+  `startOdometry()` refuses it.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes

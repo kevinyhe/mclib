@@ -108,6 +108,7 @@ Any sensor whose `position()` returns `std::optional<QAngle>` works with
 | Vertical tracker | tracker | not measured |
 | Horizontal tracker | drive encoders | tracker |
 | Vertical and horizontal trackers | tracker | tracker |
+| Accelerometer, with either of the first two | as without it | estimated from the IMU |
 
 Which wheel to fit first, from the physics simulator. All three simulated
 drives have omni wheels on every corner, which slide sideways in turns; a
@@ -125,6 +126,75 @@ On curves the drive-encoder error is almost all sideways sliding, which only
 a horizontal tracker sees. Forward slip is small on these drives. With
 `PoseFusion`, set `odom_along_var_per_in` and `odom_side_var_per_in` apart
 for one tracker: low in the direction it measures, about 0.09 in the other.
+
+### No sideways wheel: the accelerometer
+
+Without a horizontal tracker the odometry assumes the robot never moves
+sideways. In a fast curve an omni drive slides outward, and the odometry
+misses all of it. `OdometrySetup::accelerometer` estimates that slide from
+the IMU's accelerometer:
+
+```cpp
+void initialize() {
+  imu->reset(true);
+  auto setup = mclib::control::odometrySetupFrom(chassis);
+  mclib::control::AccelerometerSensor accelerometer{
+      .right_ips2 = mclib::control::sidewaysAccelReader(
+          *imu, mclib::device::ImuAxis::MinusY)};
+  accelerometer.slide.imu_forward_in = 3.0;   // IMU ahead of the tracking centre
+  accelerometer.slide.imu_right_in = -2.0;    // and to its right: 2 in left
+  setup.accelerometer = accelerometer;
+  mclib::control::startOdometry(setup);
+}
+```
+
+- The axis is the IMU's own axis that points to the robot's right. Show
+  `imu->accelerationG(PlusX)`, `PlusY` and `PlusZ` on the screen, push the
+  robot to its right by hand, and see which one jumps and which way.
+- Measure where the IMU sits from the tracking centre. Spinning at 6 rad/s,
+  an IMU 3 in off the centre reads 0.28 g that is the turn, not a slide.
+  `slide.imu_position_sigma_in` says how well you measured it: 0.25 in by
+  default.
+- Keep the robot still from `startOdometry()` until it first moves, as
+  calibrating the IMU needs anyway. The odometry learns the accelerometer's
+  zero then. The chip's zero can be 40 mg off once soldered; added up for one
+  second that is 15 in/s.
+- It works with drive encoders or a vertical tracker, not with a horizontal
+  tracker, which measures the slide itself. `startOdometry()` refuses the
+  pair.
+
+In the physics simulator, every move again with the accelerometer added.
+vexsim's own accelerometer is cleaner than a real one, so the runner adds a
+real IMU's errors: zero, sensitivity, a tilting floor, shaking and a
+misplaced IMU. Some of those numbers are guesses (`tests/vexsim/README.md`
+lists them). Odometry error at the end of a move, mean / worst, over four
+drives (three with a vertical tracker):
+
+| Sensors | Straight moves and turns in place | Curves: arcs, boomerangs, swings, S-curves, point moves | Moves passing |
+| --- | --- | --- | --- |
+| Drive encoders only | 0.24 / 0.78 in | 4.24 / 9.79 in | 42 of 64 |
+| Drive encoders and accelerometer | 0.33 / 0.79 in | 1.52 / 5.50 in | 59 of 64 |
+| Vertical tracker | 0.10 / 0.19 in | 4.53 / 10.72 in | 31 of 48 |
+| Vertical tracker and accelerometer | 0.14 / 0.29 in | 1.14 / 6.52 in | 47 of 48 |
+
+What it costs:
+
+- A move that turns hard and then drives (`moveToPoint()` to a point off
+  to the side) can end up worse with drive encoders alone. The drive wheels
+  slip in the turn, the odometry takes the turn for forward travel, and the
+  accelerometer's turn pull is worked out from that. Two drives failed their
+  point move this way: 2.08 to 5.50 in and 1.45 to 4.21 in off. A vertical
+  tracker removes it.
+- S-curves gain little. The two turns' slides cancel without the
+  accelerometer; with it the errors of the accelerometer add up instead.
+- A turn in place drifts up to 0.4 in.
+
+The Override cascade drive (drive encoders only) ends its RAMSETE arcs 0.9 to
+1.1 in off instead of 6.7 in, and its boomerang 2.6 in instead of 4.7 in.
+
+None of this has run on a robot. To check it on yours, drive a full circle
+back to where you started, with and without the accelerometer, and see which
+pose on the screen ends closer to the start.
 
 Reset the IMU and the pose together. `Chassis::setPose()` sets both. Pass
 units so the heading is in degrees:
@@ -286,6 +356,38 @@ encoders only, 9 of 12 GPS moves pass:
 
 With two tracking wheels 11 of 12 pass; the four_motor_200 plain arc runs
 out its 4 s limit with or without it.
+
+#### Late readings
+
+A reading is already old when the program reads it. At 60 in/s, a GPS pose
+taken 50 ms ago is 3 in behind the robot, and blending it in pulls the pose
+back. `GpsInput::latency_ms` and `DistanceSensorInput::latency_ms` say how
+old a reading is. The filter then goes back to the pose it had when the
+reading was taken, applies the reading there, and steps forward again
+through the odometry since. It remembers `PoseFilterConfig::history_ms` of
+steps, 250 ms by default. `setGps()` refuses a longer latency, and
+`startOdometry()` refuses a fusion with a distance sensor that has one.
+
+The default is 0: each reading is applied where the robot is when it is
+read, as before. mclib has no measured latency for the V5 GPS or distance
+sensor; measure yours before setting it.
+
+In the physics simulator, with drive encoders only and the GPS readings held
+back, odometry error at the end of a move (9 moves, mean / worst):
+
+| GPS readings | `latency_ms` 0 | `latency_ms` set to the delay |
+| --- | --- | --- |
+| on time | 0.19 / 0.30 in | - |
+| 50 ms late | 0.45 / 0.85 in | 0.14 / 0.20 in |
+| 100 ms late | 1.20 / 2.41 in | 0.21 / 0.43 in |
+
+With readings 100 ms late, the robot ends 3.39 in from the target on average
+with `latency_ms` 0 and 1.98 in with it set; on-time readings give 1.50 in.
+
+A `PoseFilter` you step yourself takes the time too: `predict(previous,
+current, now_ms)` and `updateGps(measured, sigma, heading_sigma, taken_ms)`
+or `updateDistance(geometry, measured_in, taken_ms)`. The `predict()`
+without a time forgets the steps.
 
 `fusion.pose()`, `accepted()`, `rejected()` and `positionSigmaIn()` can be read
 from any task. Heading stays with the IMU; only position is corrected.

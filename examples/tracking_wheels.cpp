@@ -134,8 +134,10 @@ bool startWithBothWheels() {
 // PlusY makes it MinusY.
 //
 // imu_forward_in and imu_right_in are where the IMU sits, measured from the
-// tracking centre. In a fast turn an IMU 3 in off the centre reads 0.3 g that
-// is the turn, not a slide, and the odometry takes it away using these.
+// tracking centre. Spinning at 6 rad/s, an IMU 3 in off the centre reads
+// 0.28 g that is the turn, not a slide, and the odometry takes it away using
+// these. imu_position_sigma_in is how well you measured them: 0.25 in by
+// default.
 //
 // The accelerometer's zero is learned while the robot stands still after
 // startOdometry(). Start odometry before the robot moves, as calibrating the
