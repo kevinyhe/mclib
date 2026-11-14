@@ -391,7 +391,6 @@
     "imu/four_motor_200/turn_to_point",
     "imu/six_motor_450/arc",
     "imu/six_motor_450/arc_ramsete_config",
-    "imu/six_motor_450/boomerang",
     "imu/six_motor_450/drive_forward",
     "imu/six_motor_450/drive_reverse",
     "imu/six_motor_450/point_diagonal",
