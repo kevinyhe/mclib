@@ -40,8 +40,8 @@ namespace path {
  * @param lead Length of each control arm over the straight-line distance.
  * @param spacing Distance between samples, about.
  * @return An invalid path (`valid()` false) when @p start and @p end are at
- *         the same point, or a value is not finite, or @p lead is not
- *         positive.
+ *         the same point, a value is not finite, @p lead is not positive,
+ *         or the curve folds back on itself.
  */
 Path planToPose(const Pose2D& start, const Pose2D& end, bool reversed, double lead,
                 units::QLength spacing = 0.5 * units::inch);
