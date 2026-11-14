@@ -34,7 +34,10 @@
  *   `limits.max_deceleration`, and no more than `limits.max_acceleration`
  *   faster than the tick before. It first turns in place until it faces
  *   within 30 degrees of the target, not 60: steering more than that at
- *   speed slid the robot sideways. Inside `distance_exit.small_error` its
+ *   speed slid the robot sideways. It turns in place only below the speed
+ *   it stops from within `distance_exit.small_error`, and brakes at 0 V
+ *   until then. Its `min_speed` floor stops once the plan has to slow down
+ *   or once it turns in place. Inside `distance_exit.small_error` its
  *   distance PID settles as before.
  *
  * `driveTo()` and `moveToPoint()` plan from the robot's forward speed when

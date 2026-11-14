@@ -16,7 +16,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   moves on four drives took a third less time with every odometry setup
   (18.4 s against 29.1 s with two tracking wheels) and mostly ended closer.
   Swings on the faster drives got slower (0.85 s against 0.65 s on
-  `six_motor_450`). See docs/motion.md.
+  `six_motor_450`). A profiled `moveToPoint()` brakes before it turns in
+  place, and its `min_speed` floor stops once the plan has to slow down or
+  once it turns in place. See docs/motion.md.
 - `moveToPose()`: drive a planned curve to a pose with RAMSETE, as an
   alternative to `boomerang()`. The curve comes from the new
   `path::planToPose()`, a cubic Bezier that leaves along the start heading

@@ -531,8 +531,7 @@ class PlannedApproach {
     const std::optional<double> planned_ips = planned_rate_.update(planned_travel_in_, now);
     const std::optional<double> travelled_ips = travelled_rate_.update(travelled_in, now);
     const double accel_ips2 = limits_.max_acceleration.raw() / mclib::units::inch.raw();
-    const double decel_ips2 = limits_.effectiveDeceleration().raw() / mclib::units::inch.raw();
-    const double stop_ips = std::sqrt(2 * decel_ips2 * std::max(0.0, remaining_in));
+    const double stop_ips = std::sqrt(2 * decelIps2() * std::max(0.0, remaining_in));
     const double planned = std::min({limits_.max_velocity.inps(), stop_ips, speed_ips_ + accel_ips2 * dt_s});
     const double acceleration = (planned - speed_ips_) / dt_s;
     speed_ips_ = planned;
@@ -540,6 +539,13 @@ class PlannedApproach {
     return feedforward_.calculate(planned * mclib::units::inps,
                                   acceleration * mclib::control::inps2).volts() +
            kd_volts;
+  }
+  /// @brief How far the plan takes to stop from @p speed_ips, inches.
+  double stoppingDistanceIn(double speed_ips) const {
+    return speed_ips * speed_ips / (2 * decelIps2());
+  }
+  double decelIps2() const {
+    return limits_.effectiveDeceleration().raw() / mclib::units::inch.raw();
   }
  private:
   SimpleMotorFeedforward feedforward_;
@@ -1650,6 +1656,12 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
   std::optional<PlannedApproach> approach;
   if (profiled)
     approach.emplace(*profiled, planStartIps(*profiled, safety.forwardSpeedIps(), dir), max_output);
+  // A profiled stop turns in place only once it is slower than the speed it
+  // stops from within distance_exit.small_error, and brakes at 0 V until
+  // then. In the physics simulator 450 rpm drives that turned in place at
+  // 50 in/s slid sideways at up to 40 in/s and ran out of time.
+  const double pivot_below_ips =
+      approach ? std::sqrt(2 * approach->decelIps2() * cfg().distance_exit.small_error) : 0;
 
   double current_angle = 0;
   // Main PID loop for moving to point
@@ -1695,12 +1707,21 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     const bool floor_would_overrun =
         settle_zone && forward_ips &&
         remaining <= *forward_ips * *forward_ips / (2 * kFloorBrakeIps2);
-    if ((settle_zone && aiming) || reached_along_line || floor_would_overrun) floor_off = true;
+    const double along = cos(bearing_error);
+    const double remaining_along_heading = remaining * along;
+    const double forward_speed_ips = profiled ? safety.forwardSpeedIps() : 0;
+    const double speed_toward_ips = std::max(0.0, forward_speed_ips * dir);
+    // A planned approach drops the floor once it has to slow down, and after
+    // it turns in place, below. Held to 8 in, an 8 V floor carried 450 rpm
+    // drives in the physics simulator past the target.
+    const bool plan_brakes = approach && along > 0 &&
+                             remaining_along_heading <= approach->stoppingDistanceIn(speed_toward_ips);
+    if ((settle_zone && aiming) || reached_along_line || floor_would_overrun || plan_brakes)
+      floor_off = true;
     telemetry.target(pid_heading, safety.normalize(on_line ? line_heading_deg : facing_deg));
     pid_distance.setTarget(remaining);
     telemetry.value.heading_error_deg = telemetry.value.target_heading_deg - current_angle;
     // Calculate drive output based on heading and distance
-    const double along = cos(bearing_error);
     // A planned approach speeds up at once, so it turns in place down to
     // kAimLimitRad first: steering more than that at speed slid the robot
     // sideways, which odometry without a sideways tracking wheel can't see.
@@ -1711,7 +1732,6 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
     // the target. Once not turning in place, it hands over to the distance
     // PID for good inside the small exit band, so the PID's settle timer
     // starts there.
-    const double remaining_along_heading = remaining * along;
     if (approach && !pivot && remaining_along_heading <= cfg().distance_exit.small_error)
       approach.reset();
     const bool planned_approach = approach.has_value();
@@ -1750,6 +1770,15 @@ MotionResult moveToPoint(QLength x, QLength y, int dir, QTime time_limit, bool e
       progress_mark_in = remaining;
       turned_since_progress_rad = 0;
       if (approach) approach->restart();
+      if (profiled) floor_off = true;
+      if (profiled && fabs(forward_speed_ips) > pivot_below_ips) {
+        prev_left_output = 0;
+        prev_right_output = 0;
+        telemetry.publish(MotionPhase::Pivot, 0, 0, false, false);
+        safety.write(0, 0);
+        pros::delay(10);
+        continue;
+      }
       const double requested_yaw = telemetry.heading(pid_heading, current_angle);
       correction_output = clampSymmetric(requested_yaw, max_output);
       prev_left_output = correction_output;

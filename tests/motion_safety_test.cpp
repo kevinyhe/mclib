@@ -1522,6 +1522,62 @@ int main() {
       else pid_point_ms[target_index] = now_ms;
     }
 
+    // An 8 V floor stops once the plan has to slow down: the robot reaches
+    // 8 in from the target at the plan's speed, not the floor's.
+    {
+      const double decel_ips2 = 60;
+      ProfiledMoveConfig gentle_stop = profiled;
+      gentle_stop.limits.max_deceleration = decel_ips2 * inps2;
+      CHECK(useProfiledMoves(gentle_stop));
+      start();
+      std::optional<double> speed_8_in_out_ips;
+      on_tick = [&] {
+        if (!speed_8_in_out_ips && plant_pose.y >= 48 - 8) speed_8_in_out_ips = (left_ips + right_ips) / 2;
+      };
+      const MotionResult result = moveToPoint(0_in, 48_in, 1, 4_s, true, 12_V, true, 8_V);
+      on_tick = {};
+      on_delay = {};
+      const double plan_ips = std::sqrt(2 * decel_ips2 * 8);
+      std::printf("profiled moveToPoint(0, 48) with an 8 V floor: %s, %u ms, %.1f in/s 8 in out, "
+                  "plan %.1f in/s\n", toString(result), static_cast<unsigned>(now_ms),
+                  speed_8_in_out_ips.value_or(-1), plan_ips);
+      CHECK(result == MotionResult::Reached);
+      CHECK(speed_8_in_out_ips.has_value() && *speed_8_in_out_ips <= plan_ips * 1.15);
+    }
+
+    // Moving fast with the target off to the side, a profiled stop brakes
+    // before it turns in place, and the floor is off once it has turned.
+    {
+      CHECK(useProfiledMoves(profiled));
+      start();
+      CHECK(driveTo(24_in, 3_s, false) == MotionResult::Reached);
+      const double entry_ips = (left_ips + right_ips) / 2;
+      const double pivot_below_ips = std::sqrt(2 * 150 * motionConfig().distance_exit.small_error);
+      double fastest_in_place_ips = 0;
+      bool turned_in_place = false;
+      std::optional<double> first_drive_volts_after_turn;
+      on_tick = [&] {
+        if (hw.left * hw.right < 0) {
+          turned_in_place = true;
+          fastest_in_place_ips = std::max(fastest_in_place_ips, std::fabs(left_ips + right_ips) / 2);
+        } else if (turned_in_place && !first_drive_volts_after_turn && hw.left * hw.right > 0) {
+          first_drive_volts_after_turn = (hw.left + hw.right) / 2;
+        }
+      };
+      const MotionResult result = moveToPoint((plant_pose.x + 24) * 1_in, plant_pose.y * 1_in, 1,
+                                              4_s, true, 12_V, true, 8_V);
+      on_tick = {};
+      on_delay = {};
+      std::printf("profiled moveToPoint() 90 deg off at %.1f in/s: %s, turned in place at up to "
+                  "%.1f in/s, first drive after the turn %.2f V\n", entry_ips, toString(result),
+                  fastest_in_place_ips, first_drive_volts_after_turn.value_or(NAN));
+      CHECK(result == MotionResult::Reached);
+      CHECK(entry_ips > 2 * pivot_below_ips);
+      CHECK(turned_in_place);
+      CHECK(fastest_in_place_ips <= pivot_below_ips);
+      CHECK(first_drive_volts_after_turn.has_value() && *first_drive_volts_after_turn < 8);
+    }
+
     // A turn leaves the robot still, whatever voltage the chained drive
     // before it ended on. The next move starts as it would from rest.
     const auto firstTickVolts = [&](bool after_chained_drive_and_turn, bool point_move) {
