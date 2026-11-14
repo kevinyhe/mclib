@@ -19,15 +19,22 @@ RETIRED_PROJECT_FIELDS = {"stop_on_failure"}
 
 PRESETS = {
     "six_motor_450": dict(label="6 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
-                          body_length_in=15.0, body_width_in=12.5, drive_watts=66),
+                          body_length_in=15.0, body_width_in=12.5, drive_watts=66, wheels_per_side=3),
     "four_motor_450": dict(label="4 motors, 450 RPM, 3.25 in wheels", track_width_in=11.5,
-                           body_length_in=15.0, body_width_in=12.5, drive_watts=44),
+                           body_length_in=15.0, body_width_in=12.5, drive_watts=44, wheels_per_side=2),
     "four_motor_200": dict(label="4 motors, 200 RPM, 3.25 in wheels", track_width_in=11.5,
-                           body_length_in=15.0, body_width_in=12.5, drive_watts=44),
+                           body_length_in=15.0, body_width_in=12.5, drive_watts=44, wheels_per_side=2),
     "speed_base": dict(label="4 motors, 450 RPM, 4 in wheels", track_width_in=11.0,
-                       body_length_in=15.0, body_width_in=12.5, drive_watts=44),
+                       body_length_in=15.0, body_width_in=12.5, drive_watts=44, wheels_per_side=2),
     "override_cascade": dict(label="Override cascade robot: 4 motors, 450 RPM, 2.75 in wheels, 14 lb",
-                             track_width_in=11.5, body_length_in=15.0, body_width_in=12.5, drive_watts=44),
+                             track_width_in=11.5, body_length_in=15.0, body_width_in=12.5, drive_watts=44,
+                             wheels_per_side=2),
+}
+#: Which driven wheels are traction wheels; the rest are omnis
+TRACTION = {
+    "none": "None: omni wheels on every corner",
+    "middle": "The middle wheel each side (6-wheel drives)",
+    "all": "Every driven wheel",
 }
 #: The Override robot's drive: four 11 W motors, 44 W. The lift's three 11 W motors make 77 W of the 88 W; the
 #: claw is pneumatic
@@ -42,6 +49,35 @@ HEADING_SOURCES = {
     "imu": "Inertial sensor (IMU)",
     "encoders": "Drive encoders (no IMU)",
 }
+
+#: The partner's and opponents' robots a routine can put on the Override field (vexsim's other_robots)
+OTHER_ROBOT_ROLES = {"partner": "Partner robot", "opponent 1": "Opponent robot 1", "opponent 2": "Opponent robot 2"}
+OTHER_ROBOT_DRIVES = ("four_motor_450", "six_motor_450", "four_motor_200", "speed_base")
+OTHER_ROBOT_FIELDS = {
+    "length_in": dict(label="Length", unit="in", low=6, high=24, step=.5, default=18,
+                      help="Front to back. A robot starts within 18 in (SG1) and may expand to 24 in (SG2)."),
+    "width_in": dict(label="Width", unit="in", low=6, high=24, step=.5, default=18, help="Side to side."),
+    "height_in": dict(label="Height", unit="in", low=6, high=50, step=.5, default=18,
+                      help="A box this tall from 0.4 in off the floor. Pieces held up high can hit it."),
+    "mass_lb": dict(label="Mass", unit="lb", low=2, high=40, step=.5, default=15,
+                    help="Heavier robots are harder to push."),
+    "volts": dict(label="Drive voltage", unit="V", low=.5, high=12, step=.5, default=6,
+                  help="How hard it drives its path. It slows to 3 V over the last 24 in."),
+    "start_ms": dict(label="Starts driving at", unit="ms", low=0, high=120000, step=50, default=0,
+                     help="It holds still, braking, until then, and after the end of its path."),
+}
+OTHER_ROBOTS = dict(
+    label="Other robots", roles=OTHER_ROBOT_ROLES, fields=OTHER_ROBOT_FIELDS,
+    drives={key: PRESETS[key]["label"] for key in OTHER_ROBOT_DRIVES},
+    help="The partner's and opponents' robots, as boxes on drivetrains. Each holds still with its motors braking, "
+         "or drives the path you draw from where it really is. The robot, the pieces and the field hit them, and "
+         "each step says when the robot hits one.")
+
+
+def new_other_robot(role, x, y, heading):
+    return dict(role=role, x=x, y=y, heading=heading, drive="four_motor_450", traction="none", path=[],
+                **{key: info["default"] for key, info in OTHER_ROBOT_FIELDS.items()})
+
 
 GAINS = {f"{loop}_{term}": dict(default=value, label=f"{name} {term[1:].upper()}")
          for loop, name, values in (("drive", "Drive", (.4, 0, 3)), ("heading", "Heading", (.3, 0, 1.5)),
@@ -249,13 +285,14 @@ CONDITIONS = {
                        help="Change it to get different IMU noise. The same seed repeats a run exactly."),
 }
 
-LIMITS = dict(max_steps=40, max_points=30, max_simulated_s=120, max_body_bytes=262144,
+LIMITS = dict(max_steps=40, max_points=30, max_other_robots=3, max_simulated_s=120, max_body_bytes=262144,
               queue_size=4, history_size=40, hold_ms=300, min_point_gap_in=.5, min_handle_in=.5,
               max_handle_in=300, settle_allowance_ms=4000, chain_allowance_ms=500)
 
 DEFAULT_PROJECT = dict(
     format=FORMAT, version=VERSION, name="New routine", field=OLD_FILE_FIELD, preload="none",
-    robot=dict(preset="six_motor_450", tracking="two", heading_source="imu"),
+    robot=dict(preset="six_motor_450", tracking="two", heading_source="imu", traction="none"),
+    other_robots=[],
     conditions={key: item["default"] for key, item in CONDITIONS.items()},
     gains={key: item["default"] for key, item in GAINS.items()},
     slew={key: item["default"] for key, item in SLEW.items()},
@@ -402,9 +439,12 @@ def validate_project(raw):
     if project["preload"] != "none" and project["field"] != "override":
         raise ValueError("A preload needs the Override field: only the Override robot has a claw")
     project["robot"].update(_object(raw.get("robot", {}), project["robot"], "Robot"))
-    for key, choices in (("preset", PRESETS), ("tracking", TRACKING), ("heading_source", HEADING_SOURCES)):
+    for key, choices in (("preset", PRESETS), ("tracking", TRACKING), ("heading_source", HEADING_SOURCES),
+                         ("traction", TRACTION)):
         if project["robot"][key] not in choices:
             raise ValueError(f"Robot {key.replace('_', ' ')} must be one of: {', '.join(choices)}")
+    check_traction(project["robot"]["preset"], project["robot"]["traction"], "Robot")
+    project["other_robots"] = _validate_other_robots(raw.get("other_robots", []), project["field"])
     groups = (("conditions", CONDITIONS, "Conditions"), ("gains", GAINS, "Controller gains"),
               ("slew", SLEW, "Speed-up and slow-down"), ("path_defaults", PATH_DEFAULTS, "Path settings"))
     for group, schema, title in groups:
@@ -427,6 +467,56 @@ def validate_project(raw):
         except ValueError as error:
             raise ProjectError(str(error), index) from error
     return project
+
+
+def check_traction(preset, traction, where):
+    if traction == "middle" and PRESETS[preset]["wheels_per_side"] != 3:
+        raise ValueError(f"{where}: middle traction wheels need a 6-wheel drive; {PRESETS[preset]['label']} has "
+                         f"{PRESETS[preset]['wheels_per_side']} wheels a side")
+
+
+def _validate_other_robots(raw, field):
+    if not isinstance(raw, list) or len(raw) > LIMITS["max_other_robots"]:
+        raise ValueError(f"Other robots: up to {LIMITS['max_other_robots']}, one partner and two opponents")
+    if raw and field != "override":
+        raise ValueError("Other robots need the Override field")
+    robots = []
+    for number, value in enumerate(raw, start=1):
+        where = f"Other robot {number}"
+        _object(value, set(new_other_robot("partner", 0, 0, 0)), where)
+        missing = [key for key in ("role", "x", "y", "heading") if key not in value]
+        if missing:
+            raise ValueError(f"{where} needs {', '.join(missing)}")
+        robot = new_other_robot(value["role"], value["x"], value["y"], value["heading"])
+        robot.update(value)
+        if robot["role"] not in OTHER_ROBOT_ROLES:
+            raise ValueError(f"{where}: role must be one of: {', '.join(OTHER_ROBOT_ROLES)}")
+        where = OTHER_ROBOT_ROLES[robot["role"]]
+        for key in ("x", "y", "heading"):
+            _number(robot[key], FIELDS[key]["low"], FIELDS[key]["high"], f"{where}: {FIELDS[key]['label']}",
+                    FIELDS[key]["unit"])
+        for key, info in OTHER_ROBOT_FIELDS.items():
+            robot[key] = _number(robot[key], info["low"], info["high"], f"{where}: {info['label']}", info["unit"],
+                                 integer=key == "start_ms")
+        if robot["drive"] not in OTHER_ROBOT_DRIVES:
+            raise ValueError(f"{where}: drivetrain must be one of: {', '.join(OTHER_ROBOT_DRIVES)}")
+        if robot["traction"] not in TRACTION:
+            raise ValueError(f"{where}: traction wheels must be one of: {', '.join(TRACTION)}")
+        check_traction(robot["drive"], robot["traction"], where)
+        if not isinstance(robot["path"], list) or len(robot["path"]) > LIMITS["max_points"]:
+            raise ValueError(f"{where}: a path holds up to {LIMITS['max_points']} points")
+        for point_number, point in enumerate(robot["path"], start=1):
+            at = f"{where}, path point {point_number}"
+            _object(point, {"x", "y"}, at)
+            if set(point) != {"x", "y"}:
+                raise ValueError(f"{at}: needs X and Y")
+            for key in ("x", "y"):
+                _number(point[key], FIELDS[key]["low"], FIELDS[key]["high"], f"{at}: {FIELDS[key]['label']}", "in")
+        robots.append(robot)
+    roles = [robot["role"] for robot in robots]
+    if len(set(roles)) != len(roles):
+        raise ValueError("Other robots: each role once, one partner and two opponents")
+    return robots
 
 
 def _validate_actions(raw, where):
@@ -561,6 +651,7 @@ def default_project():
 def config():
     """Everything the page needs to draw its forms."""
     return dict(format=FORMAT, version=VERSION, game_fields=GAME_FIELDS, presets=PRESETS, tracking=TRACKING,
+                traction=TRACTION, other_robots=OTHER_ROBOTS,
                 heading_sources=HEADING_SOURCES, gains=GAINS, slew=SLEW, fields=FIELDS, step_types=STEP_TYPES, chain=CHAIN,
                 actions=ACTIONS, preload=PRELOAD,
                 path_defaults=PATH_DEFAULTS, conditions=CONDITIONS, limits=LIMITS,

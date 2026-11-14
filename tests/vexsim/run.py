@@ -157,14 +157,16 @@ class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
                  start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0,
-                 distance_sensors=None, gps=False, wall_sensor=None):
+                 distance_sensors=None, gps=False, wall_sensor=None, traction="none"):
         from vexsim import Simulator, presets
-        from vexsim.chassis import add_tracking_wheels
+        from vexsim.chassis import add_tracking_wheels, with_traction_wheels
         from vexsim.motor import BrakeMode
         from vexsim.sim import SimConfig
         from vexsim.units import INCH
         self.lib, self.inch = lib, INCH
         chassis = presets.get(preset)
+        if traction != "none":
+            with_traction_wheels(chassis, traction)
         if tracking_mode not in TRACKING_MODES:
             raise ValueError("tracking_mode must be one of " + ", ".join(TRACKING_MODES))
         self.tracking_mode = tracking_mode
@@ -505,30 +507,31 @@ def box_range(truth, sensor, max_range=78.0):
     return best if best <= max_range else None
 
 
-def measure_feedforward(lib, preset, tracking_mode, cache):
-    """kS and kV for one side of @p preset, measured in the simulator.
+def measure_feedforward(lib, preset, tracking_mode, cache, traction="none"):
+    """kS and kV for one side of @p preset with @p traction wheels ("none",
+    "middle" or "all"), measured in the simulator.
 
     Holds 4 V and then 8 V on both sides for 1.5 s each and fits
     V = kS + kV * speed through the two steady speeds - the same measurement
     docs/motion.md asks for on a real robot. Then spins in place at 6 V per
     side for the effective track width, 2 * (V - kS) / kV / turn rate.
     """
-    key = (preset, tracking_mode)
+    key = (preset, tracking_mode, traction)
     if key not in cache:
         speeds = []
         for volts in (4.0, 8.0):
-            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode, traction=traction)
             bridge.run(11, timeout=1500, volts=volts)
             speeds.append(bridge.sim.state.speed / bridge.inch)
         kv = 4.0 / (speeds[1] - speeds[0])
         ks = 4.0 - kv * speeds[0]
         top = (12.0 - ks) / kv
-        bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+        bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode, traction=traction)
         bridge.run(12, timeout=1500, volts=6.0)
         turn_rate = abs(bridge.sim.state.r)
         track = 2 * (6.0 - ks) / kv / turn_rate
         cache[key] = dict(ks=ks, kv=kv, top_ips=top, track_in=track)
-        print(f"{preset}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), top={top:.1f} in/s, "
+        print(f"{preset}{'' if traction == 'none' else f', {traction} traction'}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), top={top:.1f} in/s, "
               f"effective track={track:.2f} in", flush=True)
     return cache[key]
 
@@ -538,8 +541,14 @@ def measure_feedforward(lib, preset, tracking_mode, cache):
 CASCADE_TRACKING_MODES = ("drive", "horizontal")
 
 
+#: The drives the basic moves run on: (name prefix, vexsim preset, traction wheels)
+MOVE_DRIVES = (("four_motor_200", "four_motor_200", "none"), ("six_motor_450", "six_motor_450", "none"),
+               ("speed_base", "speed_base", "none"), ("override_cascade", "override_cascade", "none"),
+               ("six_motor_450_middle_traction", "six_motor_450", "middle"))
+
+
 def scenarios():
-    for preset in ("four_motor_200", "six_motor_450", "speed_base", "override_cascade"):
+    for label, preset, traction in MOVE_DRIVES:
         for name, action, args, target, angle in (
             ("drive_forward", 1, {"a": 24}, (0, 24), 0),
             ("drive_reverse", 1, {"a": -24}, (0, -24), 0),
@@ -560,8 +569,9 @@ def scenarios():
             ("ramsete_s_curve", 13, {"b": 24}, (48, 48), 0),
             ("swing", 4, {"a": 90}, None, 90),
         ):
-            yield dict(name=f"{preset}/{name}", preset=preset, action=action,
+            yield dict(name=f"{label}/{name}", preset=preset, action=action,
                        args=args, target=target, angle=angle,
+                       options={} if traction == "none" else {"traction": traction},
                        tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
                                        else TRACKING_MODES),
                        position_tolerance=(1.5 if action == 7 else
@@ -682,7 +692,7 @@ def main():
         feedforward = None
         if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
             feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
-                                              feedforward_cache)
+                                              feedforward_cache, case.get("options", {}).get("traction", "none"))
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,
                                **case.get("options", {}))
         if feedforward is not None:

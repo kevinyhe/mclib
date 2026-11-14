@@ -5,7 +5,7 @@ server.py starts each job as its own process, so a crash in the C++ never takes
 the server down. Every job reports its stages in progress.json: what it is
 doing, why, and how long each stage took.
 
-    engine.py prepare --preset six_motor_450 --tracking two --cache DIR --progress FILE
+    engine.py prepare --preset six_motor_450 --tracking two --traction none --cache DIR --progress FILE
     engine.py plan --project FILE --cache DIR
     engine.py run --project FILE --output DIR --cache DIR
 """
@@ -27,13 +27,15 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
 from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
+from other_robots import describe_end, end_reports  # noqa: E402
 from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, RuleWatch,  # noqa: E402
                         autonomous_summary, claw_events, declare_cascade, describe_match_load, frame_telemetry,
                         load_match, mechanism_reading, score_summary, start_overlap_error, toggle_events,
                         toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
-from project import (LIMITS, MECHANISM_STEPS, PRESETS, STEP_TYPES, STILL_STEPS, TRACKING, ProjectError,  # noqa: E402
-                     carries_speed, step_name, step_time_limit, strict_json, validate_project)
+from project import (LIMITS, MECHANISM_STEPS, PRESETS, STEP_TYPES, STILL_STEPS, TRACKING, TRACTION,  # noqa: E402
+                     ProjectError, carries_speed, check_traction, step_name, step_time_limit, strict_json,
+                     validate_project)
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
 CASCADE_BRIDGE = HERE / "cascade_bridge.cpp"
@@ -142,15 +144,15 @@ def build_dir_for(vexsim, cache):
     return fingerprint, Path(cache) / fingerprint[:24]
 
 
-def feedforward_path(build_dir, preset, tracking):
-    return Path(build_dir) / f"feedforward-{preset}-{tracking}.json"
+def feedforward_path(build_dir, preset, tracking, traction, suffix=".json"):
+    return Path(build_dir) / f"feedforward-{preset}-{traction}-{tracking}{suffix}"
 
 
-def readiness(vexsim, cache, preset, tracking):
+def readiness(vexsim, cache, preset, tracking, traction):
     """What is already done for planning, without loading any C++."""
     fingerprint, build_dir = build_dir_for(vexsim, cache)
     compiled = (build_dir / "complete.json").is_file()
-    measured = feedforward_path(build_dir, preset, tracking)
+    measured = feedforward_path(build_dir, preset, tracking, traction)
     return dict(fingerprint=fingerprint, compiled=compiled,
                 feedforward=strict_json(measured.read_text()) if compiled and measured.is_file() else None)
 
@@ -204,22 +206,22 @@ def describe_feedforward(value):
             f"effective track width {value['track_in']:.1f} in.")
 
 
-def measure_feedforward(lib, build_dir, preset, tracking, progress):
+def measure_feedforward(lib, build_dir, preset, tracking, traction, progress):
     """measure_feedforward() from run.py, kept next to the library it was
     measured with, so only the first job for a robot waits for it."""
-    path = feedforward_path(build_dir, preset, tracking)
+    path = feedforward_path(build_dir, preset, tracking, traction)
     if path.is_file():
         value = strict_json(path.read_text())
         progress.skip("measure", "Measured earlier: " + describe_feedforward(value))
         return value
-    label = PRESETS[preset]["label"]
+    label = PRESETS[preset]["label"] + ("" if traction == "none" else f", traction wheels: {TRACTION[traction]}")
     progress.begin("measure", f"Measuring kS, kV and track width for {label} in the simulator. "
                               "This takes a few seconds, once per robot.")
-    with (Path(build_dir) / f"feedforward-{preset}-{tracking}.lock").open("a") as lock:
+    with feedforward_path(build_dir, preset, tracking, traction, ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not path.is_file():
             with contextlib.redirect_stdout(sys.stderr):
-                write_json(path, harness.measure_feedforward(lib, preset, tracking, {}))
+                write_json(path, harness.measure_feedforward(lib, preset, tracking, {}, traction))
     value = strict_json(path.read_text())
     progress.finish("measure", describe_feedforward(value))
     return value
@@ -333,7 +335,7 @@ def plan(raw, vexsim, cache):
     project = validate_project(raw)
     poses = designed_poses(project)
     robot = project["robot"]
-    state = readiness(vexsim, cache, robot["preset"], robot["tracking"])
+    state = readiness(vexsim, cache, robot["preset"], robot["tracking"], robot["traction"])
     if not state["compiled"] or state["feedforward"] is None:
         return dict(not_ready=True, error="Speeds are not planned yet: the planner is still compiling mclib "
                                           "or measuring this robot.")
@@ -343,10 +345,11 @@ def plan(raw, vexsim, cache):
     return dict(settings=path_settings(project, state["feedforward"]), plans=plans)
 
 
-def prepare(preset, tracking, vexsim, cache, progress_path):
+def prepare(preset, tracking, traction, vexsim, cache, progress_path):
+    check_traction(preset, traction, "Robot")
     progress = Progress(progress_path, [("compile", "Compile mclib"), ("measure", "Measure the robot")])
     lib, _, build_dir = load_library(vexsim, cache, progress)
-    return measure_feedforward(lib, build_dir, preset, tracking, progress)
+    return measure_feedforward(lib, build_dir, preset, tracking, traction, progress)
 
 
 class Recorder:
@@ -743,6 +746,12 @@ def stopped_by_hit(contacts, entry, end, target):
             "Move the route clear of it, or end the step before it.")
 
 
+def other_robots_at_end(world, project):
+    """Each other robot's end report, with the line that says it."""
+    drives_a_path = {robot["role"]: bool(robot["path"]) for robot in project["other_robots"]}
+    return [dict(report, text=describe_end(report, drives_a_path[report["role"]])) for report in end_reports(world)]
+
+
 def execute(raw, destination, vexsim, cache):
     """Runs the whole routine in vexsim with mclib's C++ and reports what
     each step did. A step that breaks a rule is the last one run."""
@@ -783,7 +792,8 @@ def _execute(raw, destination, vexsim, cache, progress):
     robot = project["robot"]
     feedforward = plans = None
     if paths:
-        feedforward = measure_feedforward(lib, build_dir, robot["preset"], robot["tracking"], progress)
+        feedforward = measure_feedforward(lib, build_dir, robot["preset"], robot["tracking"], robot["traction"],
+                                          progress)
         progress.begin("plan", "Planning speeds along every path with mclib's trajectory planner.")
         plans = plan_paths(lib, project, feedforward, poses)
         total = sum(item["duration_s"] for item in plans if item)
@@ -807,15 +817,16 @@ def _execute(raw, destination, vexsim, cache, progress):
                                    friction=conditions["grip_percent"] / 100,
                                    encoder_heading=robot["heading_source"] == "encoders",
                                    seed=conditions["noise_seed"], tracking_mode=robot["tracking"],
+                                   traction=robot["traction"],
                                    tuning=project["gains"], start_pose=(start["x"], start["y"], start["heading"]),
                                    sim_time_limit=LIMITS["max_simulated_s"])
     bridge.set_slew(project["slew"]["speed_up_v"], project["slew"]["slow_down_v"])
     recorder = Recorder(destination)
     from vexsim.override import StartOverlapError
     try:
-        world = make_world(project["field"], bridge.sim, project["preload"])
+        world = make_world(project["field"], bridge.sim, project["preload"], project["other_robots"])
     except StartOverlapError as error:
-        raise StageError(start_overlap_error(error.overlaps)) from error
+        raise StageError(start_overlap_error(error.overlaps, error.robot)) from error
     rig = CascadeRig(lib, bridge, world) if project["field"] == "override" else None
     rules = RuleWatch(world, PRESETS[robot["preset"]]["drive_watts"]) if rig else None
     rule_breaks = []
@@ -1018,10 +1029,11 @@ def _execute(raw, destination, vexsim, cache, progress):
                   plans=plans or [None] * len(rows), settings=path_settings(project, feedforward) if feedforward else None,
                   designed_poses=poses, project=project, source_fingerprint=fingerprint,
                   stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None,
-                  autonomous=autonomous)
+                  autonomous=autonomous, other_robots=other_robots_at_end(world, project) if rig else [])
     write_json(destination / "result.json", result)
     with (destination / "trace.csv").open("w", newline="") as handle:
-        fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame if key != "pieces"))
+        fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame
+                                    if key not in ("pieces", "others")))
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(recorder.trace)
@@ -1039,6 +1051,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--preset", choices=sorted(PRESETS))
     parser.add_argument("--tracking", choices=sorted(TRACKING))
+    parser.add_argument("--traction", choices=sorted(TRACTION))
     parser.add_argument("--progress", type=Path)
     parser.add_argument("--vexsim", type=Path, default=ROOT.parent / "vexsim")
     parser.add_argument("--cache", type=Path, required=True)
@@ -1046,10 +1059,11 @@ def main():
     if not (args.vexsim / "vexsim/sim.py").is_file():
         parser.error(f"--vexsim {args.vexsim} is not a vexsim checkout")
     if args.command == "prepare":
-        if not args.preset or not args.tracking:
-            parser.error("prepare needs --preset and --tracking")
+        if not args.preset or not args.tracking or not args.traction:
+            parser.error("prepare needs --preset, --tracking and --traction")
         try:
-            print(json.dumps(prepare(args.preset, args.tracking, args.vexsim, args.cache, args.progress)))
+            print(json.dumps(prepare(args.preset, args.tracking, args.traction, args.vexsim, args.cache,
+                                     args.progress)))
             return 0
         except Exception as error:
             print(f"Prepare failed: {error}", file=sys.stderr)

@@ -32,7 +32,8 @@ from engine import ROOT, readiness, write_json  # noqa: E402
 from export_cpp import YOU, export  # noqa: E402
 from fields import drawings  # noqa: E402
 from geometry import designed_poses  # noqa: E402
-from project import LIMITS, PRESETS, TRACKING, ProjectError, config, step_name, strict_json, validate_project  # noqa: E402
+from project import (LIMITS, PRESETS, TRACKING, TRACTION, ProjectError, check_traction, config, step_name,  # noqa: E402
+                     strict_json, validate_project)
 from three_files import ThreeMissing, asset as three_asset  # noqa: E402
 
 FINISHED = {"finished", "broke_rule", "cancelled", "error"}
@@ -189,32 +190,34 @@ class Planner:
             self.jobs[job["id"]] = job
             self.next_number = max(self.next_number, job.get("number", 0) + 1)
 
-    def engine_state(self, preset, tracking):
-        state = readiness(self.vexsim, self.cache, preset, tracking)
+    def engine_state(self, preset, tracking, traction):
+        state = readiness(self.vexsim, self.cache, preset, tracking, traction)
         with self.lock:
-            task = copy.deepcopy(self.preparing.get((preset, tracking)))
+            task = copy.deepcopy(self.preparing.get((preset, tracking, traction)))
         if task and task["status"] == "running":
             task["progress"] = self._read(Path(task["directory"]), "progress.json", task.get("progress"))
-        return dict(preset=preset, tracking=tracking, compiled=state["compiled"],
+        return dict(preset=preset, tracking=tracking, traction=traction, compiled=state["compiled"],
                     feedforward=state["feedforward"], ready=state["feedforward"] is not None, task=task)
 
-    def prepare(self, preset, tracking):
+    def prepare(self, preset, tracking, traction):
         """Compile mclib and measure @p preset in the background, once."""
+        robot = (preset, tracking, traction)
         with self.lock:
-            task = self.preparing.get((preset, tracking))
+            task = self.preparing.get(robot)
             if task and task["status"] == "running":
-                return self.engine_state(preset, tracking)
-            if readiness(self.vexsim, self.cache, preset, tracking)["feedforward"] is not None:
-                return self.engine_state(preset, tracking)
+                return self.engine_state(*robot)
+            if readiness(self.vexsim, self.cache, *robot)["feedforward"] is not None:
+                return self.engine_state(*robot)
             directory = Path(tempfile.mkdtemp(prefix="prepare-", dir=self.output))
             task = dict(status="running", started_at=time.time(), directory=str(directory), error=None)
-            self.preparing[(preset, tracking)] = task
-        thread = threading.Thread(target=self._prepare, args=(preset, tracking, task, directory), daemon=True)
+            self.preparing[robot] = task
+        thread = threading.Thread(target=self._prepare, args=(robot, task, directory), daemon=True)
         thread.start()
-        return self.engine_state(preset, tracking)
+        return self.engine_state(*robot)
 
-    def _prepare(self, preset, tracking, task, directory):
-        command = engine_command("prepare", "--preset", preset, "--tracking", tracking,
+    def _prepare(self, robot, task, directory):
+        preset, tracking, traction = robot
+        command = engine_command("prepare", "--preset", preset, "--tracking", tracking, "--traction", traction,
                                  "--progress", directory / "progress.json", vexsim=self.vexsim, cache=self.cache)
         try:
             done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=self.wall_timeout)
@@ -514,11 +517,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, dict(config(), examples=examples(), vexsim=str(planner.vexsim),
                                 output=str(planner.output), field_drawings=planner.field_drawings))
         elif path == "/api/engine":
-            preset, tracking = query.get("preset", [""])[0], query.get("tracking", [""])[0]
-            if preset not in PRESETS or tracking not in TRACKING:
-                self.send(400, dict(error="Unknown robot or tracking setup."))
+            preset, tracking, traction = (query.get(key, [""])[0] for key in ("preset", "tracking", "traction"))
+            if preset not in PRESETS or tracking not in TRACKING or traction not in TRACTION:
+                self.send(400, dict(error="Unknown robot, tracking or traction wheel setup."))
             else:
-                self.send(200, planner.engine_state(preset, tracking))
+                self.send(200, planner.engine_state(preset, tracking, traction))
         elif re.fullmatch(r"/api/examples/[a-z0-9_]+", path):
             project = example(path.rsplit("/", 1)[1])
             self.send(200 if project else 404, project or dict(error="No such example."))
@@ -589,11 +592,13 @@ class Handler(BaseHTTPRequestHandler):
                 designed_poses(project)
                 self.send(200, project)
             elif path == "/api/prepare":
-                if not isinstance(body, dict) or set(body) != {"preset", "tracking"}:
-                    raise ValueError("Send the preset and tracking to prepare.")
-                if body["preset"] not in PRESETS or body["tracking"] not in TRACKING:
-                    raise ValueError("Unknown robot or tracking setup.")
-                self.send(202, planner.prepare(body["preset"], body["tracking"]))
+                if not isinstance(body, dict) or set(body) != {"preset", "tracking", "traction"}:
+                    raise ValueError("Send the preset, tracking and traction wheels to prepare.")
+                if body["preset"] not in PRESETS or body["tracking"] not in TRACKING or \
+                        body["traction"] not in TRACTION:
+                    raise ValueError("Unknown robot, tracking or traction wheel setup.")
+                check_traction(body["preset"], body["traction"], "Robot")
+                self.send(202, planner.prepare(body["preset"], body["tracking"], body["traction"]))
             elif re.fullmatch(r"/api/runs/[0-9a-f]{32}/cancel", path):
                 if body != {}:
                     raise ValueError("Send an empty object to cancel a run.")
@@ -668,7 +673,7 @@ def main():
           flush=True)
     if not args.no_prepare:
         robot = config()["default_project"]["robot"]
-        planner.prepare(robot["preset"], robot["tracking"])
+        planner.prepare(robot["preset"], robot["tracking"], robot["traction"])
         print("Compiling mclib and measuring the default robot in the background "
               "(1 to 2 minutes the first time).", flush=True)
     try:

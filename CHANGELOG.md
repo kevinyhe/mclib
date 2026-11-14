@@ -3,6 +3,30 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+Update vexsim for the path planner: `git -C ../vexsim pull`. The planner
+and the scenarios need its `with_traction_wheels()` and `OtherRobot`.
+
+### Added
+
+- The path planner puts the partner's robot and up to two opponents' robots
+  on the Override field (**Other robots** on the Robot & settings tab). Each
+  is a box on a drivetrain that holds still braking, or waits and then
+  drives a path drawn on the field. Steps report hits on them as on a wall,
+  and the run says where each one ended up.
+- **Traction wheels** in the planner: none, the middle pair on the 6-motor
+  drive, or every driven wheel. The planner measures the robot again for
+  each choice, and the exported C++ names it.
+- `tests/vexsim/run.py` runs the motion scenarios on the 6-motor drive with
+  traction wheels in the middle (`six_motor_450_middle_traction/...`).
+- Planner examples `traction_wheels.json` and `override_other_robots.json`.
+
+### Changed
+
+- The planner's claw tank leaks, 10 psi an hour (vexsim's
+  `GUESSES["Air leak"]`). A routine never notices.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes

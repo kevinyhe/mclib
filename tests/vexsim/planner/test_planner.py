@@ -23,8 +23,8 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 from export_cpp import export, exported_helpers  # noqa: E402
 from project import (ACTION_TIMES, CLAW_PRESETS, DEFAULT_PROJECT, HEADING_SOURCES, LIFT_PRESETS,  # noqa: E402
-                     PRELOADS, PRESETS, STEP_TYPES, TRACKING, ProjectError, carries_speed, config, default_project,
-                     step_time_limit, strict_json, validate_project)
+                     LIMITS, OTHER_ROBOT_ROLES, PRELOADS, PRESETS, STEP_TYPES, TRACKING, TRACTION, ProjectError,
+                     carries_speed, config, default_project, step_time_limit, strict_json, validate_project)
 
 VEXSIM = Path(os.environ.get("VEXSIM_PATH", ROOT.parent / "vexsim")).resolve()
 
@@ -158,6 +158,9 @@ class ProjectTests(unittest.TestCase):
             "claw position": (CLAW_PRESETS, {step["claw_preset"] for step in steps if step["type"] == "claw"}
                               | {action["preset"] for action in actions if action["mechanism"] == "claw"}),
             "action time": (ACTION_TIMES, {action["when"] for action in actions}),
+            "traction wheels": (TRACTION, {project["robot"]["traction"] for project in projects}
+                                | {other["traction"] for project in projects for other in project["other_robots"]}),
+            "other robot": (OTHER_ROBOT_ROLES, {other["role"] for project in projects for other in project["other_robots"]}),
         }
         for name, (every, used) in choices.items():
             with self.subTest(name):
@@ -178,8 +181,42 @@ class ProjectTests(unittest.TestCase):
             "gains": any(project["gains"] != defaults["gains"] for project in projects),
             "speed-up and slow-down limits": any(project["slew"] != defaults["slew"] for project in projects),
             "path settings": any(project["path_defaults"] != defaults["path_defaults"] for project in projects),
+            "an other robot holding still": any(not other["path"] for project in projects
+                                                for other in project["other_robots"]),
+            "an other robot driving a path after a wait": any(other["path"] and other["start_ms"] > 0
+                                                              for project in projects
+                                                              for other in project["other_robots"]),
         }
         self.assertEqual([name for name, used in options.items() if not used], [])
+
+    def test_traction_wheels_and_other_robots_are_checked(self):
+        partner = dict(role="partner", x=60, y=0, heading=-90)
+        override = dict(field="override")
+        cases = [
+            (dict(robot=dict(preset="four_motor_450", traction="middle")),
+             "Robot: middle traction wheels need a 6-wheel drive; 4 motors, 450 RPM, 3.25 in wheels has 2 wheels a side"),
+            (dict(robot=dict(traction="front")), "Robot traction must be one of: none, middle, all"),
+            (dict(other_robots=[partner]), "Other robots need the Override field"),
+            (dict(override, other_robots=[partner, partner]), "Other robots: each role once"),
+            (dict(override, other_robots=[partner] * 4), "Other robots: up to 3"),
+            (dict(override, other_robots=[dict(partner, role="referee")]), "Other robot 1: role must be one of"),
+            (dict(override, other_robots=[dict(role="partner", x=60, y=0)]), "Other robot 1 needs heading"),
+            (dict(override, other_robots=[dict(partner, speed=3)]), "Other robot 1 has fields the planner does not know: speed"),
+            (dict(override, other_robots=[dict(partner, length_in=30)]), "Partner robot: Length must be between 6 and 24 in"),
+            (dict(override, other_robots=[dict(partner, drive="override_cascade")]), "Partner robot: drivetrain must be one of"),
+            (dict(override, other_robots=[dict(partner, drive="speed_base", traction="middle")]),
+             "Partner robot: middle traction wheels need a 6-wheel drive"),
+            (dict(override, other_robots=[dict(partner, start_ms=10.5)]), "Partner robot: Starts driving at must be a whole number"),
+            (dict(override, other_robots=[dict(partner, path=[dict(x=0)])]), "Partner robot, path point 1: needs X and Y"),
+            (dict(override, other_robots=[dict(partner, path=[dict(x=0, y=0)] * (LIMITS["max_points"] + 1))]),
+             "Partner robot: a path holds up to"),
+        ]
+        for raw, message in cases:
+            with self.subTest(message), self.assertRaisesRegex(ValueError, re.escape(message)):
+                validate_project(raw)
+        robot = validate_project(dict(override, other_robots=[partner]))["other_robots"][0]
+        self.assertEqual(robot, dict(partner, drive="four_motor_450", traction="none", path=[], length_in=18, width_in=18,
+                                     height_in=18, mass_lb=15, volts=6, start_ms=0))
 
     def test_errors_name_the_step_and_the_field(self):
         cases = [
@@ -370,6 +407,14 @@ class ExportTests(unittest.TestCase):
         for file in exported["files"]:
             says_replaced = "The planner replaces this file on every export." in file["code"]
             self.assertEqual(says_replaced, file["owner"] == "planner", file["path"])
+
+    def test_the_header_names_the_traction_wheels_and_the_other_robots(self):
+        traction = self.routine(export(validate_project(example("traction_wheels"))))
+        self.assertIn("; drive motor encoders only; traction wheels: the middle wheel each side (6-wheel drives).\n",
+                      traction)
+        others = self.routine(export(validate_project(example("override_other_robots"))))
+        self.assertIn("// Simulated with the partner robot driving a 1-point path, the opponent 1 robot holding still, "
+                      "the opponent 2 robot holding still. Real ones will be placed and driven differently.\n", others)
 
     def test_a_name_or_note_cannot_break_out_of_its_comment_or_string(self):
         project = validate_project(dict(name='He said "go" \\', steps=[
@@ -1224,6 +1269,60 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(tallest["passed"])
             self.assertGreater(tallest["height"], 49.0)
             self.assertLessEqual(tallest["height"], 50.0)
+
+    def test_17_traction_wheels_and_other_robots(self):
+        traction = example("traction_wheels")
+        others = example("override_other_robots")
+        results = self.run_together(dict(
+            traction_wheels=traction,
+            on_omnis=dict(traction, robot=dict(traction["robot"], traction="none")),
+            override_other_robots=others,
+            into_a_parked_partner=dict(others, other_robots=[dict(role="partner", x=0, y=-42, heading=0, length_in=12,
+                                                                  width_in=12)],
+                                       steps=[dict(type="drive", distance=12)])))
+
+        with self.subTest("middle traction wheels keep drive-encoder odometry on the S-curve; omnis slide"):
+            grip, slide = results["traction_wheels"]["steps"][0], results["on_omnis"]["steps"][0]
+            self.assertEqual((grip["motion_result"], slide["motion_result"]), ("Reached", "Reached"))
+            self.assertLess(grip["odometry_error_in"], 2.0)
+            self.assertGreater(slide["odometry_error_in"], 3.0)
+            self.assertLess(grip["position_error_in"], slide["position_error_in"] / 2)
+
+        with self.subTest("the other robots example runs beside them without touching them"):
+            result = results["override_other_robots"]
+            self.assertTrue(result["legal"])
+            self.assertEqual(result["summary"]["skipped_steps"], 0)
+            touched = {contact["element"] for row in result["steps"] for contact in row["contacts"]}
+            self.assertEqual({element for element in touched if element.endswith(" robot")}, set())
+            ended = {report["role"]: report for report in result["other_robots"]}
+            self.assertEqual(set(ended), {"partner", "opponent 1", "opponent 2"})
+            self.assertTrue(ended["partner"]["finished"])
+            self.assertLess(ended["partner"]["from_end_in"], 7.0)
+            self.assertLess(max(ended[role]["moved_in"] for role in ("opponent 1", "opponent 2")), 0.5)
+            self.assertEqual(set(result["trace"][-1]["others"]), {"partner", "opponent 1", "opponent 2"})
+            self.assertEqual((result["score"]["red"]["total"], result["score"]["blue"]["total"]), (5, 5))
+
+        with self.subTest("driving into a parked partner reports the hit and pushes it"):
+            result = results["into_a_parked_partner"]
+            step = result["steps"][0]
+            self.assertEqual({contact["element"] for contact in step["contacts"]}, {"the partner robot"})
+            self.assertTrue(any(re.fullmatch(r"Hit the partner robot at \(-?\d+, -\d+\) \d\.\d\d s into the step, peak \d+ N, "
+                                             r"drive current up to \d\.\d A\.", line) for line in step["info"]), step["info"])
+            partner = result["other_robots"][0]
+            self.assertGreater(partner["moved_in"], 2.0)
+            self.assertRegex(partner["text"], r"^The partner robot was pushed \d+\.\d in from where it started")
+
+    def test_17b_an_other_robot_that_starts_inside_a_stack_is_refused_by_name(self):
+        project = dict(field="override", preload="none", robot=dict(preset="override_cascade", tracking="horizontal"),
+                       start=dict(x=0, y=-61.7, heading=0), other_robots=[dict(role="partner", x=0, y=-28, heading=0)],
+                       steps=[dict(type="drive", distance=12)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 2, done.stderr[-3000:])
+        error = strict_json((output / "error.json").read_text())["error"]
+        self.assertRegex(error, r"^The partner robot starts inside a blue/red Pin at \(0\.0, -23\.5\), \d\.\d\d in deep; ")
+        self.assertTrue(error.endswith("Move it so the partner robot is clear of them: the simulator would throw the "
+                                       "partner robot out."), error)
+        self.assertFalse((output / "result.json").exists())
 
 
 if __name__ == "__main__":

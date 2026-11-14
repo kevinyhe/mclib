@@ -9,6 +9,7 @@ import ctypes as C
 import math
 
 from fields import piece_pose, to_planner
+from other_robots import planner_frames
 
 LIFT_PRESETS = {
     "down": "Down: claw 6.62 in up, on a Cup standing on the floor",
@@ -205,9 +206,9 @@ def mechanism_reading(world, mechanism):
     return f"the jaws are {gap:.2f} in apart and hold {held}", gap
 
 
-def start_overlap_error(overlaps):
-    """Why the robot cannot start where it stands: the Pins, Cups, walls,
-    Goals and Loaders it is inside."""
+def start_overlap_error(overlaps, robot="the robot"):
+    """Why @p robot (the robot, or another robot by name) cannot start where
+    it stands: the Pins, Cups, walls, Goals, Loaders and robots it is inside."""
     from vexsim.pieces import Piece
     from vexsim.units import INCH
     things = []
@@ -217,8 +218,9 @@ def start_overlap_error(overlaps):
             x, y = to_planner(*overlap.what.center()[:2])
             where = f" at ({x:.1f}, {y:.1f})"
         things.append(f"{overlap.name}{where}, {overlap.depth / INCH:.2f} in deep")
-    return ("The robot starts inside " + "; ".join(things) + ". Move the start pose so the robot is clear of "
-            + ("it" if len(things) == 1 else "them") + ": the simulator would throw the robot out.")
+    mover = "the start pose" if robot == "the robot" else "it"
+    return (f"{robot[:1].upper()}{robot[1:]} starts inside " + "; ".join(things) + f". Move {mover} so {robot} is "
+            "clear of " + ("it" if len(things) == 1 else "them") + f": the simulator would throw {robot} out.")
 
 
 def describe_match_load(step):
@@ -243,6 +245,7 @@ def frame_telemetry(world):
     frame = world.telemetry()
     frame["pieces"] = {str(key): piece_pose(values) for key, values in frame["pieces"].items()}
     frame["holding"] = None if frame["holding"] is None else describe_held(world)
+    frame["others"] = planner_frames(frame["others"])
     score = world.score(autonomous=True)
     frame.update(score_red=score["red"].total, score_blue=score["blue"].total)
     return frame
