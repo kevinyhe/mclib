@@ -279,8 +279,10 @@ cascade drive is held to 150 in/s². On six_motor_450 a point move stops
 `tests/vexsim/chain_audit.py` ends chains of moves with `exit` false in a
 stopping `moveToPoint()`, 27 stops in all. With profiled moves 1 stop timed
 out and the stops took 32.5 s; with the PID moves 6 timed out and they took
-41.1 s. The planned approach takes over only while the target is ahead: a
-stop that starts with it beside or behind the robot runs as the PID move.
+41.1 s. The planned approach hands over to the PID for good once the target
+is within `distance_exit.small_error` ahead along the robot's heading. A stop
+that starts with the target to the side or behind is already past that, so
+it runs as the PID move.
 
 The profiled moves stay opt-in: they need measured gains, and the swings
 above are slower.
