@@ -2,7 +2,7 @@
   "format": "mclib-path-planner",
   "version": 1,
   "name": "Override: the other robots on the field",
-  "description": "PENDING",
+  "description": "The Center Goal routine with the other three robots on the field. The partner waits 0.5 s, then drives 22.5 in from red's right wall toward its own stack and stops 0.0 in from the end of its path. Opponent 1 (6 motors, every wheel a traction wheel, 24 in tall) and opponent 2 hold still at their starts. Nothing touches them: the robot's drives end 0.49, 0.99 and 0.71 in off, as they do alone, and the stack scores 5 for red and 5 for blue. Drag a robot onto the route and run again to see the hit in the step's results.",
   "field": "override",
   "preload": "none",
   "robot": {"preset": "override_cascade", "tracking": "horizontal"},

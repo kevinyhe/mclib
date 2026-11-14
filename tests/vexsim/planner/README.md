@@ -240,8 +240,10 @@ from the front. In vexsim, the Override robot driving at 8 V for 2 s pushed
 a 15 lb robot 35 in head-on and 49 in from the side.
 
 When your robot hits one, the step says so as for a wall: "Hit the partner
-robot at (38, 0) 0.52 s into the step, peak 120 N, drive current up to
-2.4 A." If the hit stopped your robot short, the hint names that robot.
+robot at (6, -48) 0.45 s into the step, peak 72 N, drive current up to
+2.3 A." That was the Override robot driving 12 in into a parked 12 in
+partner, which it pushed 4.8 in. If a hit stopped your robot short, the
+hint names that robot.
 The run's summary says where each other robot ended up and whether it
 finished its path. A robot that starts inside a Goal, a stack, a wall or
 another robot is refused before the run, by name. The exported C++ lists
@@ -662,12 +664,14 @@ field.
 | [path_settings_and_gains.json](examples/path_settings_and_gains.json) | the S-curve with a higher speed limit, acceleration and cornering, and changed turn gains, with what each one bought |
 | [worn_field.json](examples/worn_field.json) | the S-curve at 60% battery and 70% grip: the robot slides 15.7 in off the path and runs into the time limit |
 | [no_inertial_sensor.json](examples/no_inertial_sensor.json) | a square with heading from the drive encoders: every 90° turn really turns about 70°; switch Heading to the inertial sensor and run again to compare |
+| [traction_wheels.json](examples/traction_wheels.json) | the S-curve on drive encoders with traction wheels in the middle pair: it ends 0.86 in off with odometry 1.1 in off, against 5.75 in and 5.2 in on omnis |
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal: red 20, and 2 of the 6 Pin halves the Autonomous Win Point needs. Turning the bottom Toggle as well only starts at 18 s, past the end of the autonomous |
 | [override_five_halves.json](examples/override_five_halves.json) | both Toggles, the red preload and a yellow stack on the red left Goal, and a yellow stack on the neutral bottom Goal, with chained paths and lift and claw actions during them and one turn in place: red 30 at 15 s and 50 (5 Pin halves) at the end, 16.8 s. A start 0.25 in off can lose a stack |
 | [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.1 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
 | [override_roller.json](examples/override_roller.json) | turn the left Toggle two faces with the roller, blue then red, pushing back at 3 V; 10 points, for the top half of the neutral left Goal's yellow Pin, and the Autonomous Bonus |
 | [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall, turn at 6 V and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 26.5 s. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin |
 | [override_center_goal.json](examples/override_center_goal.json) | grip the blue/red stack at (0, -23.5) and set it on the Center Goal, lifting during the drive; 5 points each for red and blue |
+| [override_other_robots.json](examples/override_other_robots.json) | the Center Goal routine with the partner driving a path after 0.5 s and both opponents holding still, one on traction wheels; nothing touches them, and the routine scores as it does alone |
 | [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.94 in tall at Top |
 | [override_wall_reset.json](examples/override_wall_reset.json) | a wall reset on red's wall at 2 V with the stall current lowered to 800 mA; at 6 V the wheels slip and the wall is never found |
 

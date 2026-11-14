@@ -716,6 +716,33 @@ try {
   pass(`The Match Load example waits 15 s, loads at 15.00 s, runs to ${matchLoadScore.match(/Score at (\S+ s)/)[1]} ` +
        "and scores red 5; Export C++ writes the wait as pros::delay(15000)");
 
+  await openExample("override_other_robots");
+  await page.waitForFunction(() => /the other robots on the field/.test(document.querySelector("#routine-name").value));
+  await page.locator("#tab-robot").click();
+  assert.match(await page.locator("#pane-robot").innerText(), /Partner robot[\s\S]*Opponent robot 1[\s\S]*Opponent robot 2/);
+  assert(await page.locator("#add-partner").isDisabled() && await page.locator("#add-opponent").isDisabled());
+  await dragField({ x: 60.5, y: 0 }, { x: 55, y: 6 });
+  project = await draft();
+  assert(near(project.other_robots[0].x, 55) && near(project.other_robots[0].y, 6), JSON.stringify(project.other_robots[0]));
+  const opponentTwo = page.locator('[data-other-robot="opponent 2"]');
+  await opponentTwo.locator("button", { hasText: "Draw path" }).click();
+  await clickField(-40, 10);
+  await clickField(-30, 20);
+  project = await draft();
+  assert.deepEqual(project.other_robots[2].path, [{ x: -40, y: 10 }, { x: -30, y: 20 }]);
+  assert.equal(project.steps[0].type, "drive", "Drawing another robot's path leaves the steps alone");
+  const pathPoint = await fieldPoint(-40, 10);
+  await page.mouse.click(pathPoint.x, pathPoint.y, { button: "right" });
+  project = await draft();
+  assert.deepEqual(project.other_robots[2].path, [{ x: -30, y: 20 }]);
+  await opponentTwo.locator("button", { hasText: "Done drawing" }).click();
+  const partnerTraction = page.locator('[data-other-robot="partner"] label.field-label', { hasText: /^Traction wheels/ }).locator("option");
+  assert.deepEqual(await partnerTraction.evaluateAll((options) => options.map((option) => option.value)), ["none", "all"]);
+  await shot("18-other-robots");
+  await page.locator("#tab-step").click();
+  pass("The other robots example lists the partner and both opponents; dragging moves one, Draw path adds points, " +
+       "right-click deletes one, and a 4-wheel drive offers no middle traction wheels");
+
   const offsite = requests.filter((value) => /^https?:/.test(value) && new URL(value).origin !== url.origin);
   assert.deepEqual(offsite, [], "The page must not load anything from the internet");
   assert.deepEqual(pageErrors, []);

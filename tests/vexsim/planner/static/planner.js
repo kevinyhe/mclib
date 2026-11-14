@@ -1689,7 +1689,7 @@
     return Object.entries(state.config.traction).filter(([key]) => key !== "middle" || wheelsPerSide === 3);
   }
 
-  const OTHER_ROBOT_COLORS = { partner: "#0f766e", "opponent 1": "#c2362f", "opponent 2": "#b45309" };
+  const OTHER_ROBOT_COLORS = { partner: "#0f766e", "opponent 1": "#a21caf", "opponent 2": "#b45309" };
   const otherRobot = (role) => state.project.other_robots.find((robot) => robot.role === role);
   const otherRobotLabel = (role) => state.config.other_robots.roles[role];
 
@@ -2776,8 +2776,9 @@
     status.textContent = message;
     status.hidden = !message;
     if (state.viewer.ready) {
+      const others = (state.shown?.project?.other_robots ?? []).map((robot) => ({ ...robot, color: OTHER_ROBOT_COLORS[robot.role] }));
       $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-frame", frame: state.shown ? frame : null,
-        pieces: piecesNow(), playing: state.playing, live: shownIsRunning() }, location.origin);
+        pieces: piecesNow(), playing: state.playing, live: shownIsRunning(), others }, location.origin);
     }
   }
 

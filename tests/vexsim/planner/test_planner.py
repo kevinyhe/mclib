@@ -1262,6 +1262,60 @@ class EngineTests(unittest.TestCase):
             self.assertGreater(tallest["height"], 49.0)
             self.assertLessEqual(tallest["height"], 50.0)
 
+    def test_17_traction_wheels_and_other_robots(self):
+        traction = example("traction_wheels")
+        others = example("override_other_robots")
+        results = self.run_together(dict(
+            traction_wheels=traction,
+            on_omnis=dict(traction, robot=dict(traction["robot"], traction="none")),
+            override_other_robots=others,
+            into_a_parked_partner=dict(others, other_robots=[dict(role="partner", x=0, y=-42, heading=0, length_in=12,
+                                                                  width_in=12)],
+                                       steps=[dict(type="drive", distance=12)])))
+
+        with self.subTest("middle traction wheels keep drive-encoder odometry on the S-curve; omnis slide"):
+            grip, slide = results["traction_wheels"]["steps"][0], results["on_omnis"]["steps"][0]
+            self.assertEqual((grip["motion_result"], slide["motion_result"]), ("Reached", "Reached"))
+            self.assertLess(grip["odometry_error_in"], 2.0)
+            self.assertGreater(slide["odometry_error_in"], 3.0)
+            self.assertLess(grip["position_error_in"], slide["position_error_in"] / 2)
+
+        with self.subTest("the other robots example runs beside them without touching them"):
+            result = results["override_other_robots"]
+            self.assertTrue(result["legal"])
+            self.assertEqual(result["summary"]["skipped_steps"], 0)
+            touched = {contact["element"] for row in result["steps"] for contact in row["contacts"]}
+            self.assertEqual({element for element in touched if element.endswith(" robot")}, set())
+            ended = {report["role"]: report for report in result["other_robots"]}
+            self.assertEqual(set(ended), {"partner", "opponent 1", "opponent 2"})
+            self.assertTrue(ended["partner"]["finished"])
+            self.assertLess(ended["partner"]["from_end_in"], 7.0)
+            self.assertLess(max(ended[role]["moved_in"] for role in ("opponent 1", "opponent 2")), 0.5)
+            self.assertEqual(set(result["trace"][-1]["others"]), {"partner", "opponent 1", "opponent 2"})
+            self.assertEqual((result["score"]["red"]["total"], result["score"]["blue"]["total"]), (5, 5))
+
+        with self.subTest("driving into a parked partner reports the hit and pushes it"):
+            result = results["into_a_parked_partner"]
+            step = result["steps"][0]
+            self.assertEqual({contact["element"] for contact in step["contacts"]}, {"the partner robot"})
+            self.assertTrue(any(re.fullmatch(r"Hit the partner robot at \(-?\d+, -\d+\) \d\.\d\d s into the step, peak \d+ N, "
+                                             r"drive current up to \d\.\d A\.", line) for line in step["info"]), step["info"])
+            partner = result["other_robots"][0]
+            self.assertGreater(partner["moved_in"], 2.0)
+            self.assertRegex(partner["text"], r"^The partner robot was pushed \d+\.\d in from where it started")
+
+    def test_17b_an_other_robot_that_starts_inside_a_stack_is_refused_by_name(self):
+        project = dict(field="override", preload="none", robot=dict(preset="override_cascade", tracking="horizontal"),
+                       start=dict(x=0, y=-61.7, heading=0), other_robots=[dict(role="partner", x=0, y=-28, heading=0)],
+                       steps=[dict(type="drive", distance=12)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 2, done.stderr[-3000:])
+        error = strict_json((output / "error.json").read_text())["error"]
+        self.assertRegex(error, r"^The partner robot starts inside a blue/red Pin at \(0\.0, -23\.5\), \d\.\d\d in deep; ")
+        self.assertTrue(error.endswith("Move it so the partner robot is clear of them: the simulator would throw the "
+                                       "partner robot out."), error)
+        self.assertFalse((output / "result.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,7 @@ let solids = null;
 let robot = null;
 const toggleMeshes = [];
 const pieceMeshes = new Map();
+const otherRobotMeshes = new Map();
 
 function at(x, y, z) {
   return new THREE.Vector3(x, z, -y);
@@ -458,9 +459,30 @@ function showToggles(frame) {
   }
 }
 
-function showFrame(frame, pieces, playing, live) {
+function showOtherRobots(frame, others) {
+  const shown = new Set();
+  for (const robot of others) {
+    const pose = frame?.others?.[robot.role];
+    if (!pose) continue;
+    const key = `${robot.role} ${robot.length_in} ${robot.width_in} ${robot.height_in}`;
+    if (!otherRobotMeshes.has(key)) {
+      const mesh = box(robot.width_in, robot.height_in, robot.length_in, robot.color);
+      scene.add(mesh);
+      otherRobotMeshes.set(key, mesh);
+    }
+    const mesh = otherRobotMeshes.get(key);
+    mesh.position.copy(at(pose[0], pose[1], robot.height_in / 2));
+    mesh.rotation.y = -pose[2] * Math.PI / 180;
+    mesh.visible = true;
+    shown.add(key);
+  }
+  for (const [key, mesh] of otherRobotMeshes) if (!shown.has(key)) mesh.visible = false;
+}
+
+function showFrame(frame, pieces, playing, live, others) {
   requestRender();
   showPieces(pieces ?? []);
+  showOtherRobots(frame, others);
   showToggles(frame);
   showLoaders(frame);
   if (!frame) {
@@ -519,7 +541,7 @@ addEventListener("error", (event) => tellParent({ type: "mclib-vexsim-error", me
 addEventListener("message", (event) => {
   if (event.origin !== location.origin || event.source !== parent || !drawing) return;
   const data = event.data;
-  if (data?.type === "mclib-vexsim-frame") showFrame(data.frame, data.pieces, data.playing, data.live);
+  if (data?.type === "mclib-vexsim-frame") showFrame(data.frame, data.pieces, data.playing, data.live, data.others);
   if (data?.type === "mclib-vexsim-view" && Object.values(VIEWS).includes(data.view)) setView(data.view);
 });
 

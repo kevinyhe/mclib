@@ -43,11 +43,17 @@ def end_reports(world):
     return reports
 
 
+#: Moved less than this, a robot holding still was not pushed
+PUSHED_IN = 0.1
+
+
 def describe_end(report, drives_a_path):
-    where = f"ended at ({report['x']:.0f}, {report['y']:.0f}) facing {report['heading']:.0f}°"
+    where = f"({report['x'] + 0.0:.0f}, {report['y'] + 0.0:.0f}) facing {report['heading'] + 0.0:.0f}°"
     if drives_a_path:
         done = ("finished its path" if report["finished"] else "had not finished its path") + \
-               f", {report['from_end_in']:.1f} in from its end"
+               f", {report['from_end_in']:.1f} in from its end, and ended at {where}"
+    elif report["moved_in"] < PUSHED_IN:
+        done = f"held still at {where}"
     else:
-        done = f"was pushed {report['moved_in']:.1f} in from where it started"
-    return f"The {report['role']} robot {done}, and {where}." + (" It tipped over." if report["fallen"] else "")
+        done = f"was pushed {report['moved_in']:.1f} in from where it started, and ended at {where}"
+    return f"The {report['role']} robot {done}." + (" It tipped over." if report["fallen"] else "")
