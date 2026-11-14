@@ -1689,12 +1689,16 @@
     return Object.entries(state.config.traction).filter(([key]) => key !== "middle" || wheelsPerSide === 3);
   }
 
+  const OTHER_ROBOT_WALL_GAP_IN = 10;
   const OTHER_ROBOT_COLORS = { partner: "#0f766e", "opponent 1": "#a21caf", "opponent 2": "#b45309" };
   const otherRobot = (role) => state.project.other_robots.find((robot) => robot.role === role);
   const otherRobotLabel = (role) => state.config.other_robots.roles[role];
 
   function addOtherRobot(role) {
-    const opposite = { x: -state.project.start.x, y: -state.project.start.y, heading: wrapDegrees(state.project.start.heading + 180) };
+    const inside = fieldDrawing().half_in - OTHER_ROBOT_WALL_GAP_IN;
+    const clamp = (value) => Math.max(-inside, Math.min(inside, value));
+    const start = state.project.start;
+    const opposite = { x: clamp(-start.x), y: clamp(-start.y), heading: wrapDegrees(start.heading + 180) };
     edit(() => {
       const robot = { role, ...opposite, drive: "four_motor_450", traction: "none", path: [] };
       for (const [key, info] of Object.entries(state.config.other_robots.fields)) robot[key] = info.default;
