@@ -35,8 +35,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   target. In `tests/vexsim/chain_audit.py`, which now passes each step its
   floor (the planner's change to `run()` had dropped it), 6 of 18 stops on
   the 450 rpm drives timed out with 4-8 V floors and 2 still do. Those 18
-  stops took 25.8 s in all, down from 29.2 s, and none took longer. On
-  `four_motor_200` two stops got faster and none slower. Calls without a
+  stops took 25.9 s in all, down from 29.2 s; one took 0.05 s longer. On
+  `four_motor_200` they took 15.25 s, down from 15.74 s. Calls without a
   floor are unchanged.
 
 ## 0.4.3

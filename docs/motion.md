@@ -263,33 +263,33 @@ wheel. Time, then miss.
 | Drive | Move | PID | Profiled |
 | --- | --- | --- | --- |
 | four_motor_200 | `driveTo(24_in)` | 2.61 s, 0.29 in | 1.03 s, 0.29 in |
-| four_motor_200 | `turnToAngle(90_deg)` | 1.07 s, 2.18° | 0.68 s, 0.44° |
-| four_motor_200 | `moveToPoint(24, 24)` | 3.07 s, 0.41 in | 1.41 s, 0.16 in |
+| four_motor_200 | `turnToAngle(90_deg)` | 1.07 s, 2.18° | 0.68 s, 0.41° |
+| four_motor_200 | `moveToPoint(24, 24)` | 3.07 s, 0.41 in | 1.41 s, 0.18 in |
 | four_motor_200 | `swing(90_deg)` | 1.62 s, 2.38° | 1.03 s, 0.49° |
-| six_motor_450 | `driveTo(24_in)` | 1.23 s, 0.07 in | 0.86 s, 0.01 in |
-| six_motor_450 | `turnToAngle(90_deg)` | 0.61 s, 1.26° | 0.61 s, 0.09° |
-| six_motor_450 | `moveToPoint(24, 24)` | 1.52 s, 0.03 in | 1.06 s, 0.30 in |
-| six_motor_450 | `swing(90_deg)` | 0.65 s, 0.45° | 0.85 s, 0.38° |
-| speed_base | `driveTo(24_in)` | 0.96 s, 0.43 in | 0.86 s, 0.14 in |
+| six_motor_450 | `driveTo(24_in)` | 1.23 s, 0.07 in | 0.86 s, 0.00 in |
+| six_motor_450 | `turnToAngle(90_deg)` | 0.61 s, 1.26° | 0.61 s, 0.13° |
+| six_motor_450 | `moveToPoint(24, 24)` | 1.52 s, 0.03 in | 1.06 s, 0.34 in |
+| six_motor_450 | `swing(90_deg)` | 0.65 s, 0.45° | 0.86 s, 0.30° |
+| speed_base | `driveTo(24_in)` | 0.96 s, 0.43 in | 0.86 s, 0.16 in |
 | speed_base | `turnToAngle(90_deg)` | 0.85 s, 2.15° | 0.67 s, 0.12° |
-| speed_base | `moveToPoint(24, 24)` | 1.22 s, 0.50 in | 1.10 s, 0.18 in |
-| speed_base | `swing(90_deg)` | 1.52 s, 2.27° | 1.11 s, 0.81° |
-| override_cascade | `driveTo(24_in)` | 1.47 s, 0.80 in | 0.87 s, 0.10 in |
-| override_cascade | `turnToAngle(90_deg)` | 0.65 s, 1.27° | 0.63 s, 0.34° |
-| override_cascade | `moveToPoint(24, 24)` | 1.77 s, 1.64 in | 1.09 s, 0.41 in |
-| override_cascade | `swing(90_deg)` | 0.78 s, 0.88° | 0.96 s, 0.54° |
+| speed_base | `moveToPoint(24, 24)` | 1.22 s, 0.50 in | 1.09 s, 0.20 in |
+| speed_base | `swing(90_deg)` | 1.52 s, 2.27° | 1.09 s, 0.77° |
+| override_cascade | `driveTo(24_in)` | 1.47 s, 0.80 in | 0.87 s, 0.11 in |
+| override_cascade | `turnToAngle(90_deg)` | 0.65 s, 1.27° | 0.63 s, 0.21° |
+| override_cascade | `moveToPoint(24, 24)` | 1.77 s, 1.64 in | 1.08 s, 0.38 in |
+| override_cascade | `swing(90_deg)` | 0.78 s, 0.88° | 0.96 s, 0.50° |
 
 Over the seven stopping moves on every drive, the profiled moves took a third
 less time in each odometry setup: 18.4 s against 29.1 s with two tracking
 wheels, 24.4 s against 36.6 s with drive encoders only. They are slower
 where the PID move already runs flat out: a swing on six_motor_450 and the
 cascade drive is held to 150 in/s². On six_motor_450 a point move stops
-0.3-0.4 in off, against 0.02-0.03 in for the PID.
+0.34-0.44 in off, against 0.02-0.03 in for the PID.
 
 `tests/vexsim/chain_audit.py` ends chains of moves with `exit` false in a
-stopping `moveToPoint()`, 27 stops in all. With profiled moves 1 stop timed
-out and the stops took 32.5 s; with the PID moves 6 timed out and they took
-41.1 s.
+stopping `moveToPoint()`, 27 stops in all. With profiled moves 3 stops timed
+out and the stops took 33.4 s; with the PID moves 6 timed out and they took
+41.1 s. All three profiled timeouts hold an 8 V floor on a 450 rpm drive.
 
 The profiled moves stay opt-in: they need measured gains, and the swings
 above are slower.
