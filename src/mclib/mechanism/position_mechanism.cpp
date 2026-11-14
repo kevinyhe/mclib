@@ -6,6 +6,7 @@
 #include "mclib/mechanism/position_mechanism.hpp"
 
 #include "mclib/time.hpp"
+#include "mclib/utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -207,7 +208,7 @@ void PositionMechanism::applyState(const double& target) {
   }
 
   m_pid.setTarget(target);
-  m_voltage_sink(clampVoltage(m_pid.update(current)));
+  m_voltage_sink(clampVoltage(m_pid.update(current) + gravityVolts(current)));
 
   if (m_pid.targetArrived()) {
     m_arrived = true;
@@ -231,6 +232,15 @@ void PositionMechanism::beginClosedLoop(double target) {
   m_arrived = false;
   m_pid.reset();
   m_pid.setTarget(target);
+}
+
+double PositionMechanism::gravityVolts(double position) const {
+  if (m_config.gravity_model == PositionMechanismConfig::GravityModel::Lift) {
+    return m_config.gravity_volts;
+  }
+  const double arm_angle_deg =
+      (position - m_config.arm_level_position) / m_config.arm_units_per_degree;
+  return m_config.gravity_volts * std::cos(degToRad(arm_angle_deg));
 }
 
 double PositionMechanism::clampVoltage(double volts) const {

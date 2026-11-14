@@ -4,13 +4,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-// Behaviour of PositionMechanismConfig::hold_output. Everything runs on a
-// mclib::time::ScopedClock so the arrival dwell is exact and reproducible.
+// Behaviour of PositionMechanismConfig::hold_output and gravity_volts.
+// Everything runs on a mclib::time::ScopedClock so the arrival dwell is
+// exact and reproducible.
 
 #include "mclib/mechanism/position_mechanism.hpp"
 #include "mclib/time.hpp"
 #include "test_assert.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -47,10 +49,12 @@ struct Rig {
   double volts = 0.0;
   PositionMechanism mechanism;
 
-  explicit Rig(bool hold_output)
+  explicit Rig(bool hold_output) : Rig(baseConfig(hold_output)) {}
+
+  explicit Rig(const PositionMechanismConfig& config)
       : mechanism([this]() { return position; },
                   [this](double v) { volts = v; },
-                  baseConfig(hold_output)) {}
+                  config) {}
 
   /// Advance the fake clock one tick, then run one scheduler pass.
   void tick() {
@@ -238,6 +242,87 @@ int main() {
       finished = command->isFinished();
     }
     CHECK(finished);
+  }
+
+  // --- Gravity: a lift ------------------------------------------------------
+  CHECK_NEAR(PositionMechanismConfig{}.gravity_volts, 0.0, 1e-12);
+  {
+    PositionMechanismConfig config = baseConfig(true);
+    config.gravity_volts = 1.5;
+    Rig lift(config);
+    lift.position = 10.0;
+    lift.mechanism.moveTo(10.0);
+    CHECK(settle(lift, 50) > 0);
+    std::printf("lift on target with gravity_volts 1.5: %.4f V\n", lift.volts);
+    CHECK_NEAR(lift.volts, 1.5, 1e-12);
+
+    lift.position = 8.5;
+    lift.tick();
+    CHECK_NEAR(lift.volts, 0.5 * 1.5 + 1.5, 1e-12);
+
+    lift.position = -1000.0;
+    lift.tick();
+    CHECK_NEAR(lift.volts, 12.0, 1e-12);
+    lift.position = 1000.0;
+    lift.tick();
+    CHECK_NEAR(lift.volts, -12.0, 1e-12);
+
+    lift.position = 10.0;
+    lift.mechanism.setManualVoltage(0.0);
+    lift.tick();
+    CHECK_NEAR(lift.volts, 0.0, 1e-12);
+
+    lift.mechanism.moveTo(10.0);
+    lift.position = std::nan("");
+    lift.tick();
+    CHECK(lift.mechanism.hasSensorFault());
+    CHECK_NEAR(lift.volts, 0.0, 1e-12);
+
+    lift.position = 10.0;
+    lift.mechanism.moveTo(10.0);
+    lift.tick();
+    CHECK_NEAR(lift.volts, 1.5, 1e-12);
+    lift.mechanism.onDisabled();
+    CHECK_NEAR(lift.volts, 0.0, 1e-12);
+    lift.tick();
+    CHECK_NEAR(lift.volts, 0.0, 1e-12);
+  }
+
+  // Settle-then-release still holds the load up: PID::update() goes to 0 on
+  // arrival, the gravity voltage does not.
+  {
+    PositionMechanismConfig config = baseConfig(false);
+    config.gravity_volts = 1.5;
+    Rig lift(config);
+    lift.position = 10.0;
+    lift.mechanism.moveTo(10.0);
+    CHECK(settle(lift, 50) > 0);
+    lift.tick();
+    CHECK_NEAR(lift.volts, 1.5, 1e-12);
+  }
+
+  // --- Gravity: an arm -------------------------------------------------------
+  // Level at a reading of 30, two units per arm degree. Sitting on the target
+  // leaves only the gravity voltage.
+  {
+    PositionMechanismConfig config = baseConfig(true);
+    config.gravity_volts = 2.0;
+    config.gravity_model = PositionMechanismConfig::GravityModel::Arm;
+    config.arm_level_position = 30.0;
+    config.arm_units_per_degree = 2.0;
+    struct Angle {
+      double arm_deg;
+      double volts;
+    };
+    for (const Angle angle : {Angle{0.0, 2.0}, Angle{60.0, 1.0}, Angle{90.0, 0.0},
+                              Angle{-60.0, 1.0}, Angle{180.0, -2.0}}) {
+      Rig arm(config);
+      arm.position = 30.0 + 2.0 * angle.arm_deg;
+      arm.mechanism.moveTo(arm.position);
+      arm.tick();
+      std::printf("arm at %+.0f deg: %.4f V\n", angle.arm_deg, arm.volts);
+      CHECK_NEAR(arm.volts, angle.volts, 1e-9);
+    }
   }
 
   return mclib::test::summary("position_mechanism");
