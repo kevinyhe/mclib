@@ -313,7 +313,7 @@ Four ways to use them:
 To score a stack, drive the bite up to it with the lift down, close the
 claw, lift, drive the bite onto the Goal, lower the lift onto it and open
 the claw. [override_stack_to_goal.json](examples/override_stack_to_goal.json)
-does this. Four things make it work:
+does this. Five things make it work:
 
 - Arrive with the stack within 0.1 in of the claw's middle side to side.
   Further off, the front end of a jaw pushes the stack ahead and tips it.
@@ -326,12 +326,14 @@ does this. Four things make it work:
   front to back, because the rubber pads grip too well for the V to slide
   it back. A stack held 0.4 in or more ahead of the middle lands on the
   side of the Goal's Pin.
+- Lift the stack Off the floor before turning with it. At Down its Cup
+  stands on the foam, and turning drags it.
 - Carry it high, at Over a stack on a Neutral Goal (22.66 in), until the
   bite has taken the Goal. Carried at Over a Neutral Goal, 0.25 in over the
   Pin's tip, the Pin knocks the stack out of the jaws as the robot stops
   on the Goal, even at 10 in/s.
 - Give the drive onto the Goal a short time limit. The Goal stops the robot
-  about 1.1 s in, and the drive then pushes on it until the limit runs out.
+  about 1.3 s in, and the drive then pushes on it until the limit runs out.
 
 To turn a Toggle, back up to 2 in or less off the wall in the middle of
 the Toggle and add a **Turn a Toggle with the roller** step. It turns the
@@ -454,7 +456,7 @@ and `vexsim/foam.py`. The planner adds these:
 | What | Guess | Why |
 | --- | --- | --- |
 | Lift presets | the claw heights in the table above | worked out from the Goal and Pin heights: "on" sets the held Cup's rim on the Pin's flange, "over" carries the Cup's bottom 0.25 in over the Pin's tip; vexsim's `LIFT_HEIGHTS` |
-| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V; `gravity_volts` 0.9 V to hold the stages up with the rubber bands' help; `hold_ki` 0.3 V per inch per 10 ms after arrival, capped at 1 V | tuned in the simulator. A lift step ends up to 0.19 in off the preset. 0.5 s later the claw is 0.00 to 0.05 in over it holding nothing and within 0.03 in holding a stack. Top ends 0.09 in low: the stages are on their stops at 46.63 in |
+| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V; `gravity_volts` 0.9 V to hold the stages up with the rubber bands' help; `hold_ki` 0.3 V per inch per 10 ms after arrival, capped at 1 V | tuned in the simulator. A lift step ends up to 0.19 in off the preset. 0.5 s later the claw is 0.01 to 0.05 in over it holding nothing and within 0.03 in holding a stack. Top ends 0.08 in low: the stages are on their stops at 46.63 in. Setting a stack on a Neutral Goal's Pin, the Pin stops the claw 0.15 to 0.19 in over On a Neutral Goal |
 | String stretch | 0.185 in | measured in the simulator 0.5 s after a move: 0.15 to 0.18 in holding nothing, 0.18 to 0.23 in holding a stack, less after a move down than after a move up. 0.185 in is the middle |
 | Claw step | 170 ms | the 160 ms opening stroke from vexsim's valve and 12 mm piston, guesses in its `GUESSES`, and a margin |
 | Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
@@ -612,11 +614,11 @@ field.
 | [no_inertial_sensor.json](examples/no_inertial_sensor.json) | a square with heading from the drive encoders: every 90° turn really turns about 70°; switch Heading to the inertial sensor and run again to compare |
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal: red 20, and 2 of the 6 Pin halves the Autonomous Win Point needs. Turning the bottom Toggle as well only starts at 18 s, past the end of the autonomous |
 | [override_five_halves.json](examples/override_five_halves.json) | both Toggles, the red preload and a yellow stack on the red left Goal, and a yellow stack on the neutral bottom Goal, with chained paths and lift and claw actions during them and one turn in place: red 30 at 15 s and 50 (5 Pin halves) at the end, 16.8 s. A start 0.25 in off can lose a stack |
-| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.1 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
+| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.3 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
 | [override_roller.json](examples/override_roller.json) | turn the left Toggle two faces with the roller, blue then red, pushing back at 3 V; 10 points, for the top half of the neutral left Goal's yellow Pin, and the Autonomous Bonus |
 | [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall, turn at 6 V and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 26.5 s. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin |
 | [override_center_goal.json](examples/override_center_goal.json) | grip the blue/red stack at (0, -23.5) and set it on the Center Goal, lifting during the drive; 5 points each for red and blue |
-| [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.94 in tall at Top |
+| [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.92 in tall at Top |
 | [override_wall_reset.json](examples/override_wall_reset.json) | a wall reset on red's wall at 2 V with the stall current lowered to 800 mA; at 6 V the wheels slip and the wall is never found |
 
 ## Files

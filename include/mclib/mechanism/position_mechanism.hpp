@@ -79,10 +79,13 @@ struct PositionMechanismConfig {
    *
    * The PID zeroes its own integral inside small_error, so the hold above is
    * P only and can sit anywhere in that band. hold_ki takes that error out:
-   * from the tick after arrival, hold_ki * error is added up every tick and
-   * the sum is added to the output. The sum is capped at integral_max_volts
-   * (0 means no cap) and cleared by moveTo(), a manual voltage, a sensor
-   * fault and onDisabled(). Volts per unit of error per tick.
+   * from the tick after arrival, on every tick with the error inside
+   * small_error, hold_ki * error is added to a sum, and the sum is added to
+   * the output. Outside the band the sum stays as it is, so a mechanism
+   * held off its target by something in the way is not pushed harder and
+   * harder. The sum is capped at integral_max_volts (0 means no cap) and
+   * cleared by moveTo(), a manual voltage, a sensor fault and onDisabled().
+   * Volts per unit of error per tick.
    */
   double hold_ki = 0.0;
 

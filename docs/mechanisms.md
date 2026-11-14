@@ -73,9 +73,11 @@ soon as the target is reached either way.
 
 The PID zeroes its integral within `small_error` of the target, so a loaded
 arm can droop by up to `small_error`. `hold_ki` takes that out: from the tick
-after arrival it adds up `hold_ki * error` every tick and adds the sum to the
-output, capped at `integral_max_volts`. Every `moveTo()`, manual voltage,
-sensor fault and disable clears the sum. It defaults to 0. Lowering
+after arrival, on every tick with the error inside `small_error`, it adds
+`hold_ki * error` to a sum and adds the sum to the output, capped at
+`integral_max_volts`. Outside that band the sum stays as it is, so a lift
+held up by something in the way is not pushed harder and harder. Every
+`moveTo()`, manual voltage, sensor fault and disable clears the sum. It defaults to 0. Lowering
 `small_error` also reduces the droop, but tightens the arrival test.
 
 With `hold_output = false`, output drops to 0 V on arrival and the loop restarts

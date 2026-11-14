@@ -17,8 +17,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - `PositionMechanismConfig::hold_ki`: an integral for the hold after
   arrival. The PID zeroes its own integral inside `small_error`, so the hold
   was P only and could sit anywhere in that band. From the tick after
-  arrival `hold_ki * error` is summed every tick and added to the output,
-  capped at `integral_max_volts`. `moveTo()`, a manual voltage, a sensor
+  arrival `hold_ki * error` is summed on every tick with the error inside
+  `small_error` and added to the output, capped at `integral_max_volts`. `moveTo()`, a manual voltage, a sensor
   fault and `onDisabled()` clear it. It defaults to 0.
 
 ### Changed

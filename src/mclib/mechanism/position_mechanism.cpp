@@ -250,7 +250,9 @@ double PositionMechanism::gravityVolts(double position) const {
 
 double PositionMechanism::holdVolts(double error) {
   if (!m_arrived) return 0.0;
-  m_hold_volts += m_config.hold_ki * error;
+  if (std::fabs(error) <= m_config.small_error) {
+    m_hold_volts += m_config.hold_ki * error;
+  }
   if (m_config.integral_max_volts > 0.0) {
     m_hold_volts = std::clamp(m_hold_volts, -m_config.integral_max_volts,
                               m_config.integral_max_volts);

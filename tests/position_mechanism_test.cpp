@@ -305,6 +305,7 @@ int main() {
   CHECK_NEAR(PositionMechanismConfig{}.hold_ki, 0.0, 1e-12);
   {
     PositionMechanismConfig config = baseConfig(true);
+    config.ki = 0.0;
     config.hold_ki = 0.05;
     config.integral_max_volts = 1.0;
     Rig held(config);
@@ -331,7 +332,15 @@ int main() {
     held.tick();
     CHECK_NEAR(held.volts, -0.25 + 1.0 - 0.025, 1e-12);
 
+    // Held off the target past small_error, the sum stays where it was.
+    held.position = 13.0;
+    held.tick();
+    CHECK_NEAR(held.volts, -1.5 + 0.975, 1e-12);
+    held.tick();
+    CHECK_NEAR(held.volts, -1.5 + 0.975, 1e-12);
+
     held.mechanism.moveTo(10.0);
+    held.position = 10.5;
     held.tick();
     CHECK_NEAR(held.volts, -0.25, 1e-12);
 
