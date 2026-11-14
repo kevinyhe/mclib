@@ -408,6 +408,14 @@ class ExportTests(unittest.TestCase):
             says_replaced = "The planner replaces this file on every export." in file["code"]
             self.assertEqual(says_replaced, file["owner"] == "planner", file["path"])
 
+    def test_the_header_names_the_traction_wheels_and_the_other_robots(self):
+        traction = self.routine(export(validate_project(example("traction_wheels"))))
+        self.assertIn("; drive motor encoders only; traction wheels: the middle wheel each side (6-wheel drives).\n",
+                      traction)
+        others = self.routine(export(validate_project(example("override_other_robots"))))
+        self.assertIn("// Simulated with the partner robot driving a 1-point path, the opponent 1 robot holding still, "
+                      "the opponent 2 robot holding still. Real ones will be placed and driven differently.\n", others)
+
     def test_a_name_or_note_cannot_break_out_of_its_comment_or_string(self):
         project = validate_project(dict(name='He said "go" \\', steps=[
             dict(type="drive", distance=5, note="ends in a backslash \\"), dict(type="turn", heading=90)]))
