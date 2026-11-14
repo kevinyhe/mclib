@@ -224,8 +224,11 @@ What each move does:
   the robot's forward speed as `driveTo()` does. It first turns in place
   until it faces within 30° of the target, not 60°: steering more than that
   at speed slid the robot sideways, and odometry without a sideways tracking
-  wheel can't see a slide. Inside `distance_exit.small_error` its distance
-  PID settles.
+  wheel can't see a slide. It turns in place only below the speed it stops
+  from within `distance_exit.small_error` (17 in/s at 150 in/s² and 1 in),
+  and brakes at 0 V until then. A `min_speed` floor stops once the plan has
+  to slow down, or once it turns in place. Inside
+  `distance_exit.small_error` its distance PID settles.
 
 The speed `kd` compares is taken over 50 ms, not one 10 ms tick. A V5 motor
 or IMU reading refreshes every 10 ms, out of step with the loop, so now and
@@ -287,9 +290,11 @@ cascade drive is held to 150 in/s². On six_motor_450 a point move stops
 0.34-0.44 in off, against 0.02-0.03 in for the PID.
 
 `tests/vexsim/chain_audit.py` ends chains of moves with `exit` false in a
-stopping `moveToPoint()`, 27 stops in all. With profiled moves 3 stops timed
-out and the stops took 33.4 s; with the PID moves 6 timed out and they took
-41.1 s. All three profiled timeouts hold an 8 V floor on a 450 rpm drive.
+stopping `moveToPoint()`, 27 stops in all. With profiled moves none timed
+out and the stops took 30.5 s; with the PID moves 6 timed out and they took
+41.1 s. Before the profiled stop braked first and dropped its floor early,
+three 8 V stops on the 450 rpm drives timed out. They turned in place at
+50 in/s and slid sideways at up to 40 in/s.
 
 The profiled moves stay opt-in: they need measured gains, and the swings
 above are slower.
