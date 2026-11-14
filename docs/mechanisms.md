@@ -71,12 +71,57 @@ With `hold_output = true` (the default), the PID keeps driving after it reaches
 the target, so a loaded arm holds its position. `atTarget()` becomes true as
 soon as the target is reached either way.
 
-The hold uses P and D only. Within `small_error` of the target the integral is
-zeroed, so a loaded arm can droop by up to `small_error`. Lower `small_error`
-to reduce the droop.
+The PID zeroes its integral within `small_error` of the target, so a loaded
+arm can droop by up to `small_error`. `hold_ki` takes that out: from the tick
+after arrival, on every tick with the error inside `small_error`, it adds
+`hold_ki * error` to a sum and adds the sum to the output, capped at
+`integral_max_volts`. Outside that band the sum stays as it is, so a lift
+held up by something in the way is not pushed harder and harder. Every
+`moveTo()`, manual voltage, sensor fault and disable clears the sum. It defaults to 0. Lowering
+`small_error` also reduces the droop, but tightens the arrival test.
 
 With `hold_output = false`, output drops to 0 V on arrival and the loop restarts
 only after the position drifts outside `small_error`.
+
+### Gravity
+
+`gravity_volts` is the voltage that holds the load still. It is added to the
+PID's output on every closed-loop tick, before the `max_voltage` clamp, so the
+PID only fixes what is left and the droop shrinks. It stays on after arrival,
+also with `hold_output = false`. It is off under a manual voltage, on a sensor
+fault and after the robot is disabled. It defaults to 0.
+
+A lift, elevator or cascade needs the same voltage at every height:
+
+```cpp
+mclib::mechanism::PositionMechanismConfig lift_cfg{
+    .kp = 0.09,
+    .max_voltage = 12.0,
+    .small_error = 1.5,
+    .gravity_volts = 0.9,
+};
+```
+
+An arm needs less the further it is from level: `gravity_volts * cos(angle)`.
+Give the reading with the arm level and the reading units per degree of arm
+turn:
+
+```cpp
+mclib::mechanism::PositionMechanismConfig arm_cfg{
+    .kp = 0.08,
+    .gravity_volts = 1.2,
+    .gravity_model = mclib::mechanism::PositionMechanismConfig::GravityModel::Arm,
+    .arm_level_position = 40.0,   // the rotation sensor reads 40° with the arm level
+    .arm_units_per_degree = 1.0,  // the sensor is on the arm's axle
+};
+```
+
+With motor degrees through a 5:1 reduction, `arm_units_per_degree` is 5.
+
+To measure `gravity_volts`, raise the voltage slowly until the mechanism
+starts to rise, then lower it until the mechanism starts to sink. Use the
+average of the two. Half their difference is friction. Measure an arm with
+the arm level.
 
 ## VelocityMechanism
 
