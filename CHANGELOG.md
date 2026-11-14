@@ -3,6 +3,27 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Drives and mechanisms with both 11 W and 5.5 W motors, such as the 55 W
+  drive Override allows (R11): four 11 W motors and two 5.5 W motors.
+  `Chassis` and `MotorGroup` take the 5.5 W ports in their own lists, after
+  the gearset: `Chassis({-1, 2}, {3, -4}, Gearset::Blue, {-5}, {6},
+  geometry, imu)`. Gear every motor to turn the wheels at the same speed at
+  full power. mclib reads the 5.5 W motors on the 11 W motors' shaft and
+  gives them 8/12 of the voltage, so both kinds run at the same fraction of
+  full speed. The 8 V at which a 5.5 W motor reaches full speed is not
+  measured; LemLib uses 7.2 V. `examples/fifty_five_watt_drive.cpp` is a
+  whole program.
+- A 5.5 W motor listed with 11 W motors, or an 11 W motor listed with 5.5 W
+  motors, prints one message on the terminal naming its port. A group of only
+  5.5 W motors in one list reads and drives as before.
+- `device::gearsetRpm()`, `device::voltsFor5_5WMotor()`,
+  `device::readingScaleFor5_5WMotor()`, `device::kMotor5_5WRpm` and
+  `device::kMotor5_5WFullVolts`.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes

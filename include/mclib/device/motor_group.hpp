@@ -9,6 +9,7 @@
 
 #include "mclib/units/units.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -29,6 +30,23 @@ public:
   MotorGroup(std::initializer_list<std::int8_t> ports,
              Gearset gearset = Gearset::Blue);
   MotorGroup(std::vector<std::int8_t> ports, Gearset gearset = Gearset::Blue);
+
+  /**
+   * @brief 11 W and 5.5 W motors geared to turn one shaft at the same top
+   *        speed, such as one side of a 55 W drive: two 11 W motors and one
+   *        5.5 W motor.
+   *
+   * @p ports are 11 W motors with @p gearset, and @p ports_5_5w are 5.5 W
+   * motors. Every reading is on the 11 W motors' shaft: a 5.5 W motor's
+   * position and speed are multiplied by gearsetRpm(@p gearset) / 200. Every
+   * command is the same fraction of each motor's full speed: a 5.5 W motor
+   * gets kMotor5_5WFullVolts / 12 of the voltage, so below full power it does
+   * not run ahead of the 11 W motors and fight them.
+   *
+   * Per-motor readings come in the order @p ports, then @p ports_5_5w.
+   */
+  MotorGroup(std::vector<std::int8_t> ports, Gearset gearset,
+             std::vector<std::int8_t> ports_5_5w);
 
   void setVoltage(double volts);
   void setPercent(double percent);
@@ -87,7 +105,13 @@ private:
   static std::int32_t percentToPower(double percent);
   static double average(const std::vector<double>& values);
 
-  pros::MotorGroup m_motors;
+  std::vector<double> readEach(double (pros::Motor::*read)(std::uint8_t) const) const;
+  void reportMotorsInTheWrongList() const;
+
+  std::vector<pros::Motor> m_motors;
+  std::vector<bool> m_listed_5_5w;
+  double m_5_5w_reading_scale = 1.0;
+  mutable std::atomic<bool> m_types_checked{false};
 };
 
 }  // namespace device

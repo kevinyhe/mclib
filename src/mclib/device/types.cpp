@@ -20,6 +20,26 @@ pros::MotorGears toProsGearset(Gearset gearset) {
   }
 }
 
+double gearsetRpm(Gearset gearset) {
+  switch (gearset) {
+    case Gearset::Red:
+      return 100.0;
+    case Gearset::Green:
+      return 200.0;
+    case Gearset::Blue:
+      break;
+  }
+  return 600.0;
+}
+
+double voltsFor5_5WMotor(double volts_for_11w) {
+  return volts_for_11w * kMotor5_5WFullVolts / 12.0;
+}
+
+double readingScaleFor5_5WMotor(Gearset gearset) {
+  return gearsetRpm(gearset) / kMotor5_5WRpm;
+}
+
 pros::motor_brake_mode_e_t toProsBrakeMode(BrakeMode mode) {
   switch (mode) {
     case BrakeMode::Coast:

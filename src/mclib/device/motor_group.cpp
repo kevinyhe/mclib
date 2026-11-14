@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <utility>
 
 namespace mclib {
@@ -73,49 +75,91 @@ MotorGroup::MotorGroup(std::initializer_list<std::int8_t> ports,
     : MotorGroup(std::vector<std::int8_t>(ports), gearset) {}
 
 MotorGroup::MotorGroup(std::vector<std::int8_t> ports, Gearset gearset)
-    : m_motors(std::move(ports), toProsGearset(gearset), pros::MotorUnits::degrees) {}
+    : MotorGroup(std::move(ports), gearset, {}) {}
+
+MotorGroup::MotorGroup(std::vector<std::int8_t> ports, Gearset gearset,
+                       std::vector<std::int8_t> ports_5_5w)
+    : m_5_5w_reading_scale(readingScaleFor5_5WMotor(gearset)) {
+  m_motors.reserve(ports.size() + ports_5_5w.size());
+  for (const std::int8_t port : ports) {
+    m_motors.emplace_back(port, toProsGearset(gearset), pros::MotorUnits::degrees);
+    m_listed_5_5w.push_back(false);
+  }
+  for (const std::int8_t port : ports_5_5w) {
+    m_motors.emplace_back(port, pros::MotorGears::green, pros::MotorUnits::degrees);
+    m_listed_5_5w.push_back(true);
+  }
+}
 
 void MotorGroup::setVoltage(double volts) {
-  m_motors.move_voltage(voltsToMillivolts(volts));
+  reportMotorsInTheWrongList();
+  const double clamped = std::clamp(volts, -12.0, 12.0);
+  for (std::size_t i = 0; i < m_motors.size(); ++i) {
+    m_motors[i].move_voltage(
+        voltsToMillivolts(m_listed_5_5w[i] ? voltsFor5_5WMotor(clamped) : clamped));
+  }
 }
 
 void MotorGroup::setPercent(double percent) {
-  m_motors.move(percentToPower(percent));
+  reportMotorsInTheWrongList();
+  const std::int32_t power = percentToPower(percent);
+  for (std::size_t i = 0; i < m_motors.size(); ++i) {
+    if (m_listed_5_5w[i]) {
+      m_motors[i].move_voltage(voltsToMillivolts(voltsFor5_5WMotor(power / 127.0 * 12.0)));
+    } else {
+      m_motors[i].move(power);
+    }
+  }
 }
 
 void MotorGroup::stop() {
-  m_motors.brake();
+  brake();
 }
 
 void MotorGroup::brake() {
-  m_motors.brake();
+  for (const pros::Motor& motor : m_motors) motor.brake();
 }
 
 void MotorGroup::setBrakeMode(BrakeMode mode) {
-  m_motors.set_brake_mode_all(toProsBrakeMode(mode));
+  for (const pros::Motor& motor : m_motors) motor.set_brake_mode(toProsBrakeMode(mode));
 }
 
 void MotorGroup::tarePosition() {
-  // tare_position() without _all zeroes a single motor (index 0 by default),
-  // which would leave the rest of the group reading their pre-tare positions.
-  m_motors.tare_position_all();
+  for (const pros::Motor& motor : m_motors) motor.tare_position();
+}
+
+std::vector<double> MotorGroup::readEach(
+    double (pros::Motor::*read)(std::uint8_t) const) const {
+  std::vector<double> values;
+  values.reserve(m_motors.size());
+  for (std::size_t i = 0; i < m_motors.size(); ++i) {
+    const double value = (m_motors[i].*read)(0);
+    values.push_back(m_listed_5_5w[i] && isReading(value) ? value * m_5_5w_reading_scale
+                                                           : value);
+  }
+  return values;
 }
 
 std::vector<double> MotorGroup::getPositionsDeg() const {
-  return m_motors.get_position_all();
+  return readEach(&pros::Motor::get_position);
 }
 
 std::vector<double> MotorGroup::getActualVelocities() const {
-  return m_motors.get_actual_velocity_all();
+  return readEach(&pros::Motor::get_actual_velocity);
 }
 
 std::vector<double> MotorGroup::getCurrentDraws() const {
-  const std::vector<std::int32_t> draws = m_motors.get_current_draw_all();
-  return std::vector<double>(draws.begin(), draws.end());
+  std::vector<double> draws;
+  draws.reserve(m_motors.size());
+  for (const pros::Motor& motor : m_motors) draws.push_back(motor.get_current_draw());
+  return draws;
 }
 
 std::vector<double> MotorGroup::getTemperatures() const {
-  return m_motors.get_temperature_all();
+  std::vector<double> temperatures;
+  temperatures.reserve(m_motors.size());
+  for (const pros::Motor& motor : m_motors) temperatures.push_back(motor.get_temperature());
+  return temperatures;
 }
 
 double MotorGroup::getAveragePositionDeg() const {
@@ -167,6 +211,32 @@ std::int32_t MotorGroup::percentToPower(double percent) {
   if (!std::isfinite(percent)) return 0;
   // Round, don't truncate: 0.999 is 127, not 126.
   return static_cast<std::int32_t>(std::lround(std::clamp(percent, -1.0, 1.0) * 127.0));
+}
+
+void MotorGroup::reportMotorsInTheWrongList() const {
+  if (m_types_checked.load(std::memory_order_relaxed)) return;
+  std::vector<pros::MotorType> types;
+  for (const pros::Motor& motor : m_motors) {
+    types.push_back(motor.get_type());
+    if (types.back() == pros::MotorType::invalid) return;
+  }
+  if (m_types_checked.exchange(true)) return;
+  const bool has_11w = std::find(types.begin(), types.end(), pros::MotorType::v5) != types.end();
+  const bool lists_5_5w = std::find(m_listed_5_5w.begin(), m_listed_5_5w.end(), true) !=
+                          m_listed_5_5w.end();
+  for (std::size_t i = 0; i < m_motors.size(); ++i) {
+    const int port = std::abs(m_motors[i].get_port());
+    if (m_listed_5_5w[i] && types[i] == pros::MotorType::v5) {
+      std::printf("mclib: the motor on port %d is an 11 W motor, listed with the 5.5 W "
+                  "motors. Its voltage is cut to %.0f%%. List it with the 11 W motors.\n",
+                  port, kMotor5_5WFullVolts / 12.0 * 100.0);
+    } else if (!m_listed_5_5w[i] && types[i] == pros::MotorType::exp && (has_11w || lists_5_5w)) {
+      std::printf("mclib: the motor on port %d is a 5.5 W motor, listed with the 11 W motors. "
+                  "Its position and speed are on a different shaft from theirs. List it with "
+                  "the 5.5 W motors.\n",
+                  port);
+    }
+  }
 }
 
 double MotorGroup::average(const std::vector<double>& values) {

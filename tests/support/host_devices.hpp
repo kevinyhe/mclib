@@ -50,6 +50,10 @@ struct Motor {
   double rpm = 0.0;
   /// @brief Current reading, in milliamps.
   std::int32_t current_ma = 0;
+  /// @brief What get_type() reports, as the pros::MotorType value: 0 for an
+  ///        11 W motor, 1 for a 5.5 W motor, INT32_MAX when it is not
+  ///        reporting.
+  std::int32_t type = 0;
 
   /// @brief The last command in volts, before reversal.
   double volts() const { return millivolts / 1000.0; }
