@@ -64,6 +64,12 @@ extern std::map<int, Motor> motors;
 /// @brief IMU rotation in degrees, by port.
 extern std::map<int, double> imu_rotation_deg;
 
+/// @brief IMU accelerometer reading per port, in g along the sensor's x, y, z.
+struct ImuAccel {
+  double x = 0.0, y = 0.0, z = 0.0;
+};
+extern std::map<int, ImuAccel> imu_accel_g;
+
 /// @brief Controller stick values, -127..127, by pros::controller_analog_e_t.
 extern std::map<int, int> analog;
 /// @brief Controller buttons held down, by pros::controller_digital_e_t.

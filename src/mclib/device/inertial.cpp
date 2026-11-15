@@ -69,5 +69,21 @@ void Inertial::setRotation(units::QAngle heading) {
   setRotationDeg(heading.deg());
 }
 
+std::optional<double> Inertial::accelerationG(ImuAxis axis) const {
+  const pros::imu_accel_s_t raw = m_imu.get_accel();
+  if (raw.x == PROS_ERR_F || hasConfigurationError()) {
+    return std::nullopt;
+  }
+  switch (axis) {
+    case ImuAxis::PlusX: return raw.x;
+    case ImuAxis::MinusX: return -raw.x;
+    case ImuAxis::PlusY: return raw.y;
+    case ImuAxis::MinusY: return -raw.y;
+    case ImuAxis::PlusZ: return raw.z;
+    case ImuAxis::MinusZ: return -raw.z;
+  }
+  return std::nullopt;
+}
+
 }  // namespace device
 }  // namespace mclib

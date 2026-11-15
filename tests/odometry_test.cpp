@@ -444,6 +444,89 @@ void testTickPublishesToRobotState() {
               published.y);
 }
 
+/// @brief Feeds odometry with the accelerometer on, 10 ms apart, gripping:
+///        the accelerometer reads only the forward speeding up.
+class AccelerometerDrive {
+ public:
+  AccelerometerDrive() : m_odom(config()) {}
+
+  static OdometryConfig config() {
+    OdometryConfig config = driveConfig();
+    config.use_accelerometer = true;
+    return config;
+  }
+
+  Pose2D tick(double heading_rad, double accel_forward_ips2 = 0.0) {
+    m_time_ms += 10.0;
+    OdometrySample sample;
+    sample.heading_rad = heading_rad;
+    sample.left_deg = sample.right_deg = degForInches(m_wheels_in, kDriveInchesPerRev);
+    sample.time_ms = m_time_ms;
+    sample.accel_right_ips2 = 0.0;
+    sample.accel_forward_ips2 = accel_forward_ips2;
+    return m_odom.update(sample);
+  }
+
+  /// @brief Speeds up or slows to @p speed_ips over @p ticks ticks at the
+  ///        same rate, then holds it for @p hold_ticks.
+  void drive(double speed_ips, int ticks, int hold_ticks, double heading_rad) {
+    const double accel = (speed_ips - m_speed_ips) / (ticks * 0.01);
+    for (int i = 0; i < ticks + hold_ticks; ++i) {
+      const double accel_now = i < ticks ? accel : 0.0;
+      const double speed_before = m_speed_ips;
+      m_speed_ips += accel_now * 0.01;
+      m_wheels_in += 0.5 * (speed_before + m_speed_ips) * 0.01;
+      tick(heading_rad, accel_now);
+    }
+  }
+
+  Odometry& odom() { return m_odom; }
+  void tareWheels() { m_wheels_in = 0.0; }
+
+ private:
+  Odometry m_odom;
+  double m_time_ms = 0.0;
+  double m_wheels_in = 0.0;
+  double m_speed_ips = 0.0;
+};
+
+void testResetForgetsTheSlideEstimatorsLastTick() {
+  std::printf("-- a reset forgets the accelerometer's last tick\n");
+  {
+    // Chassis::tare() tares the encoders, then resets odometry to the pose it
+    // had. A tick between the two sees the wheels run 120 in backward.
+    AccelerometerDrive robot;
+    robot.drive(0.0, 1, 50, 0.0);
+    robot.drive(30.0, 20, 380, 0.0);
+    robot.drive(0.0, 20, 50, 0.0);
+    const Pose2D before = robot.odom().getPose();
+    robot.tareWheels();
+    robot.tick(0.0);
+    robot.odom().reset(before);
+    robot.drive(0.0, 1, 100, 0.0);
+    const Pose2D after = robot.odom().getPose();
+    std::printf("   still robot at y = %.2f in, 1 s after the tare y = %.2f in\n", before.y,
+                after.y);
+    CHECK_NEAR(after.x, before.x, 0.01);
+    CHECK_NEAR(after.y, before.y, 0.01);
+  }
+  {
+    // Chassis::setPose() sets the IMU heading, then resets odometry. A tick
+    // between the two sees the robot turn 90 degrees in 10 ms.
+    AccelerometerDrive robot;
+    robot.drive(0.0, 1, 50, 0.0);
+    robot.drive(20.0, 20, 50, 0.0);
+    robot.tick(kPi / 2.0);
+    robot.odom().reset(Pose2D{0.0, 0.0, kPi / 2.0});
+    robot.drive(20.0, 1, 100, kPi / 2.0);
+    const Pose2D after = robot.odom().getPose();
+    std::printf("   1 s at 20 in/s after setPose: (%.2f, %.2f), sideways speed %.2f in/s\n",
+                after.x, after.y, robot.odom().sidewaysSpeedIps());
+    CHECK_NEAR(after.x, 20.0, 0.25);
+    CHECK_NEAR(after.y, 0.0, 0.05);
+  }
+}
+
 }  // namespace
 
 void testOnlyAResetThatMovesThePoseIsAJump() {
@@ -495,6 +578,7 @@ int main() {
   testHorizontalTrackingWheel();
   testResetIsNotADelta();
   testTickPublishesToRobotState();
+  testResetForgetsTheSlideEstimatorsLastTick();
   testOnlyAResetThatMovesThePoseIsAJump();
   return mclib::test::summary("odometry");
 }
