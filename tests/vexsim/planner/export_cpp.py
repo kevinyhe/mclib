@@ -10,7 +10,8 @@ import re
 
 from mechanisms import ACTION_TIMES, MECHANISM_ENUMS, MECHANISMS, PRELOADS, cpp_preset, describe_match_load
 from geometry import designed_poses, path_layout
-from project import MECHANISM_STEPS, PRESETS, STEP_TYPES, TRACKING, carries_speed, step_time_limit
+from project import (MECHANISM_STEPS, PRESETS, RAMSETE_STEPS, STEP_TYPES, TRACKING, TRACTION, carries_speed,
+                     step_time_limit)
 
 HERE = Path(__file__).resolve().parent
 PLACEHOLDER_FEEDFORWARD = dict(ks=0.7, kv=0.13, top_ips=60.0, track_in=13.5)
@@ -310,6 +311,15 @@ def path_lines(project, index, step, start_pose, plan, top_ips):
     return lines
 
 
+def pose_call(project, step, top_ips):
+    """moveToPose() with the follower and limits the paths use, at the path
+    defaults' speed limit, as the simulator ran it."""
+    speed_ips = project["path_defaults"]["speed_percent"] / 100 * top_ips
+    return (f"moveToPose({inches(step['x'])}, {inches(step['y'])}, {step['direction']}, {degrees(step['heading'])}, "
+            f"{number(step['lead'])}, follow, path_planner::poseLimits({number(speed_ips)}, limits), "
+            f"{millis(step['timeout_ms'])}, {exit_flag(step)}, {volts(step['volts'])})")
+
+
 def step_lines(project, index, step, start_pose, plan, top_ips):
     kind = step["type"]
     if kind == "path":
@@ -324,7 +334,9 @@ def step_lines(project, index, step, start_pose, plan, top_ips):
         return [match_load_comment(step)]
     if kind == "wait":
         return [f"  pros::delay({step['wait_ms']});"]
-    if kind == "wall_reset":
+    if kind == "pose":
+        call = pose_call(project, step, top_ips)
+    elif kind == "wall_reset":
         call = (f"wallReset({inches(step['x'])}, {inches(step['y'])}, {degrees(step['heading'])}, "
                 f"{volts(step['volts'])}, {millis(step['timeout_ms'])}, "
                 f"{number(step['current_ma'])} * mclib::units::milliampere)")
@@ -333,21 +345,33 @@ def step_lines(project, index, step, start_pose, plan, top_ips):
     return with_actions(step, call) if step["actions"] else [f"  {call};"]
 
 
+def simulated_on(project):
+    """The comment lines that say what the routine was simulated with."""
+    robot = project["robot"]
+    wheels = "" if robot["traction"] == "none" else f"; traction wheels: {TRACTION[robot['traction']].lower()}"
+    lines = [f"// Simulated on: {PRESETS[robot['preset']]['label']}; {TRACKING[robot['tracking']].lower()}{wheels}."]
+    others = [f"the {other['role']} robot " + (f"driving a {len(other['path'])}-point path" if other["path"]
+                                                else "holding still") for other in project["other_robots"]]
+    if others:
+        lines.append(f"// Simulated with {', '.join(others)}. Real ones will be placed and driven differently.")
+    return lines
+
+
 def routine_code(project, settings, plans):
     top_ips = (settings["feedforward"] if settings else PLACEHOLDER_FEEDFORWARD)["top_ips"]
     defaults, robot, start = project["path_defaults"], project["robot"], project["start"]
     poses = designed_poses(project)
-    has_path = any(step["type"] == "path" for step in project["steps"])
+    follows_plans = any(step["type"] in RAMSETE_STEPS for step in project["steps"])
     cascade = uses_cascade(project)
     function = function_name(project["name"])
     includes = ["mclib/mclib.hpp"]
     if cascade:
         includes += ["planner/cascade_helpers.hpp", "planner/robot_cascade.hpp"]
-    if has_path:
+    if follows_plans:
         includes += ["planner/path_helpers.hpp", "planner/robot_drive.hpp"]
     lines = [f"// \"{comment_text(project['name'])}\", exported from the mclib path planner.",
              "// The planner replaces this file on every export.",
-             f"// Simulated on: {PRESETS[robot['preset']]['label']}; {TRACKING[robot['tracking']].lower()}.",
+             *simulated_on(project),
              "// Units: inches and degrees. 0 deg faces +Y (forward); clockwise is positive.",
              f"// Place the robot at ({number(start['x'])}, {number(start['y'])}) facing "
              f"{number(start['heading'])} deg before autonomous starts.",
@@ -370,7 +394,7 @@ def routine_code(project, settings, plans):
               "  mclib::control::setMotionConfig(motion);"]
     if cascade:
         lines += cascade_start(project)
-    if has_path:
+    if follows_plans:
         lines += ["", "  // kS, kV and the track width are your robot's, from planner/robot_drive.hpp.",
                   "  mclib::control::RamseteConfig follow = planner_robot::followConfig();",
                   f"  follow.gains.b = {number(defaults['ramsete_b'])};",
@@ -394,19 +418,19 @@ def export(project, settings=None, plans=None):
     files = [dict(path=f"{ROUTINE_FOLDER}/{file_stem(project['name'])}.cpp", owner=PLANNER,
                   about="The routine. Exporting again replaces it.",
                   code=routine_code(project, settings, plans))]
-    has_path = any(step["type"] == "path" for step in project["steps"])
+    follows_plans = any(step["type"] in RAMSETE_STEPS for step in project["steps"])
     cascade = uses_cascade(project)
-    if has_path:
+    if follows_plans:
         files.append(robot_drive_file(project, settings))
     if cascade:
         files.append(robot_cascade_file(project))
-    if has_path:
+    if follows_plans:
         files.append(helper_file("path_helpers.hpp",
                                  "bakes each path, plans its speeds and follows it, as the simulator did."))
     if cascade:
         files.append(helper_file("cascade_helpers.hpp",
                                  "the lift presets, the claw and the actions run during a motion, as the "
                                  "simulator ran them."))
-    drive_numbers = ("measured" if settings else "placeholders") if has_path else None
+    drive_numbers = ("measured" if settings else "placeholders") if follows_plans else None
     return dict(function=function_name(project["name"]), files=files, hookup=hookup(project),
                 drive_numbers=drive_numbers)

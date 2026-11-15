@@ -5,7 +5,7 @@ server.py starts each job as its own process, so a crash in the C++ never takes
 the server down. Every job reports its stages in progress.json: what it is
 doing, why, and how long each stage took.
 
-    engine.py prepare --preset six_motor_450 --tracking two --cache DIR --progress FILE
+    engine.py prepare --preset six_motor_450 --tracking two --traction none --cache DIR --progress FILE
     engine.py plan --project FILE --cache DIR
     engine.py run --project FILE --output DIR --cache DIR
 """
@@ -27,13 +27,15 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import run as harness  # noqa: E402
 from fields import contact_dict, contacts_between, describe_contact, make_world, piece_list  # noqa: E402
+from other_robots import describe_end, end_reports  # noqa: E402
 from mechanisms import (AUTONOMOUS_S, MECHANISMS, MOVE_RESULTS, CascadeRig, RuleWatch,  # noqa: E402
                         autonomous_summary, claw_events, declare_cascade, describe_match_load, frame_telemetry,
                         load_match, mechanism_reading, score_summary, start_overlap_error, toggle_events,
                         toggle_faces)
 from geometry import designed_poses, path_layout, section_values, wrap  # noqa: E402
-from project import (LIMITS, MECHANISM_STEPS, PRESETS, STEP_TYPES, STILL_STEPS, TRACKING, ProjectError,  # noqa: E402
-                     carries_speed, step_name, step_time_limit, strict_json, validate_project)
+from project import (LIMITS, MECHANISM_STEPS, PRESETS, RAMSETE_STEPS, STEP_TYPES, STILL_STEPS, TRACKING, TRACTION,  # noqa: E402
+                     ProjectError, carries_speed, check_traction, step_name, step_time_limit, strict_json,
+                     validate_project)
 
 PATH_BRIDGE = HERE / "path_bridge.cpp"
 CASCADE_BRIDGE = HERE / "cascade_bridge.cpp"
@@ -42,6 +44,7 @@ EXTRA_SOURCES = [PATH_BRIDGE, CASCADE_BRIDGE, ROOT / "src/mclib/command/subsyste
 STATE_VALUES = 8
 MAX_STATES = 40000
 MOTION_RESULTS = ("Reached", "TimedOut", "Cancelled", "Disabled", "InvalidValue", "NoDrive")
+MOTION_RESULT_INVALID_VALUE = MOTION_RESULTS.index("InvalidValue")
 #: The min_speed that makes an mclib motion use its own min_output floor
 MCLIB_DEFAULT_MIN_SPEED = -1.0
 #: curveCircleReverse() backs the other way round for a same-sign heading change this large or larger:
@@ -51,7 +54,7 @@ ACTIONS = dict(turn=0, drive=1, arc=2, reverse_arc=3, swing=4, turn_to_point=5, 
                wall_reset=8)
 #: A step that ends further than this from its target, or further off its
 #: heading, gets a hint on why
-MISS_HINT_IN = dict(boomerang=1.5, arc=5.5, reverse_arc=5.5)
+MISS_HINT_IN = dict(boomerang=1.5, pose=1.5, arc=5.5, reverse_arc=5.5)
 DEFAULT_MISS_HINT_IN = 2.5
 HEADING_HINT_DEG = 5.0
 ODOMETRY_DRIFT_IN = 2.5
@@ -142,15 +145,15 @@ def build_dir_for(vexsim, cache):
     return fingerprint, Path(cache) / fingerprint[:24]
 
 
-def feedforward_path(build_dir, preset, tracking):
-    return Path(build_dir) / f"feedforward-{preset}-{tracking}.json"
+def feedforward_path(build_dir, preset, tracking, traction, suffix=".json"):
+    return Path(build_dir) / f"feedforward-{preset}-{traction}-{tracking}{suffix}"
 
 
-def readiness(vexsim, cache, preset, tracking):
+def readiness(vexsim, cache, preset, tracking, traction):
     """What is already done for planning, without loading any C++."""
     fingerprint, build_dir = build_dir_for(vexsim, cache)
     compiled = (build_dir / "complete.json").is_file()
-    measured = feedforward_path(build_dir, preset, tracking)
+    measured = feedforward_path(build_dir, preset, tracking, traction)
     return dict(fingerprint=fingerprint, compiled=compiled,
                 feedforward=strict_json(measured.read_text()) if compiled and measured.is_file() else None)
 
@@ -164,6 +167,9 @@ def declare_planner(lib):
     lib.planner_follow.restype = C.c_int
     lib.planner_folded_section.argtypes = [doubles, C.c_int]
     lib.planner_folded_section.restype = C.c_int
+    lib.planner_move_to_pose.argtypes = [C.c_double, C.c_double, C.c_int, C.c_double, C.c_double, C.c_double,
+                                         doubles, doubles, C.c_double, C.c_double, C.c_int]
+    lib.planner_move_to_pose.restype = C.c_int
     declare_cascade(lib)
     return lib
 
@@ -204,22 +210,22 @@ def describe_feedforward(value):
             f"effective track width {value['track_in']:.1f} in.")
 
 
-def measure_feedforward(lib, build_dir, preset, tracking, progress):
+def measure_feedforward(lib, build_dir, preset, tracking, traction, progress):
     """measure_feedforward() from run.py, kept next to the library it was
     measured with, so only the first job for a robot waits for it."""
-    path = feedforward_path(build_dir, preset, tracking)
+    path = feedforward_path(build_dir, preset, tracking, traction)
     if path.is_file():
         value = strict_json(path.read_text())
         progress.skip("measure", "Measured earlier: " + describe_feedforward(value))
         return value
-    label = PRESETS[preset]["label"]
+    label = PRESETS[preset]["label"] + ("" if traction == "none" else f", traction wheels: {TRACTION[traction]}")
     progress.begin("measure", f"Measuring kS, kV and track width for {label} in the simulator. "
                               "This takes a few seconds, once per robot.")
-    with (Path(build_dir) / f"feedforward-{preset}-{tracking}.lock").open("a") as lock:
+    with feedforward_path(build_dir, preset, tracking, traction, ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not path.is_file():
             with contextlib.redirect_stdout(sys.stderr):
-                write_json(path, harness.measure_feedforward(lib, preset, tracking, {}))
+                write_json(path, harness.measure_feedforward(lib, preset, tracking, {}, traction))
     value = strict_json(path.read_text())
     progress.finish("measure", describe_feedforward(value))
     return value
@@ -333,7 +339,7 @@ def plan(raw, vexsim, cache):
     project = validate_project(raw)
     poses = designed_poses(project)
     robot = project["robot"]
-    state = readiness(vexsim, cache, robot["preset"], robot["tracking"])
+    state = readiness(vexsim, cache, robot["preset"], robot["tracking"], robot["traction"])
     if not state["compiled"] or state["feedforward"] is None:
         return dict(not_ready=True, error="Speeds are not planned yet: the planner is still compiling mclib "
                                           "or measuring this robot.")
@@ -343,10 +349,11 @@ def plan(raw, vexsim, cache):
     return dict(settings=path_settings(project, state["feedforward"]), plans=plans)
 
 
-def prepare(preset, tracking, vexsim, cache, progress_path):
+def prepare(preset, tracking, traction, vexsim, cache, progress_path):
+    check_traction(preset, traction, "Robot")
     progress = Progress(progress_path, [("compile", "Compile mclib"), ("measure", "Measure the robot")])
     lib, _, build_dir = load_library(vexsim, cache, progress)
-    return measure_feedforward(lib, build_dir, preset, tracking, progress)
+    return measure_feedforward(lib, build_dir, preset, tracking, traction, progress)
 
 
 class Recorder:
@@ -395,7 +402,7 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
                     y=entry_pose[1] + step["distance"] * math.cos(radians), heading=commanded_heading)
     if kind in ("point", "wall_reset"):
         return dict(x=step["x"], y=step["y"], heading=step.get("heading"))
-    if kind in ("boomerang", "path"):
+    if kind in ("boomerang", "path", "pose"):
         return dict(x=end_pose[0], y=end_pose[1], heading=end_pose[2])
     if kind == "turn_to_point":
         angle = math.degrees(math.atan2(step["x"] - entry_pose[0], step["y"] - entry_pose[1]))
@@ -410,9 +417,7 @@ def motion_target(step, end_pose, entry_pose, commanded_heading):
 
 def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan):
     layout, values, limits = path_inputs(project, step, start, feedforward)
-    settings = project["path_defaults"]
-    ramsete = [feedforward["ks"], feedforward["kv"], settings["ramsete_b"], settings["ramsete_zeta"],
-               feedforward["track_in"]]
+    ramsete = ramsete_values(project, feedforward)
     result = lib.planner_follow(doubles(values), len(layout["sections"]), doubles(limits), doubles(ramsete),
                                 plan["requested_start_ips"], plan["requested_end_ips"], timeout_ms, step["volts"],
                                 0 if step["chain"] else 1)
@@ -420,6 +425,32 @@ def follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan
         raise RuntimeError("; ".join(bridge.exceptions))
     if result < 0:
         raise ValueError("mclib could not plan this path")
+    return result
+
+
+def ramsete_values(project, feedforward):
+    settings = project["path_defaults"]
+    return [feedforward["ks"], feedforward["kv"], settings["ramsete_b"], settings["ramsete_zeta"],
+            feedforward["track_in"]]
+
+
+def pose_speed_ips(project, feedforward):
+    return project["path_defaults"]["speed_percent"] / 100 * feedforward["top_ips"]
+
+
+def move_to_pose(lib, bridge, project, step, feedforward, timeout_ms):
+    settings = project["path_defaults"]
+    limits = [settings["accel_ips2"], settings["cornering_ips2"], feedforward["track_in"]]
+    result = lib.planner_move_to_pose(step["x"], step["y"], step["direction"], step["heading"], step["lead"],
+                                      pose_speed_ips(project, feedforward), doubles(limits),
+                                      doubles(ramsete_values(project, feedforward)), timeout_ms, step["volts"],
+                                      0 if step["chain"] else 1)
+    if bridge.exceptions:
+        raise RuntimeError("; ".join(bridge.exceptions))
+    if result == MOTION_RESULT_INVALID_VALUE:
+        raise ValueError("mclib could not plan a curve to this pose: the target is behind the robot or "
+                         "arrives against its direction of travel, so the curve folds back on itself. "
+                         "Lower the lead, or turn first")
     return result
 
 
@@ -434,6 +465,8 @@ def invoke(lib, bridge, rig, project, step, start, feedforward, timeout_ms, plan
         return rig.spin_roller(step, timeout_ms)
     if kind == "path":
         return follow_path(lib, bridge, project, step, start, feedforward, timeout_ms, plan)
+    if kind == "pose":
+        return move_to_pose(lib, bridge, project, step, feedforward, timeout_ms)
     if kind == "reverse_arc":
         change = math.remainder(step["heading"] - bridge.pose()[2], 360)
         if change * step["radius"] > 1e-8 and abs(change) < REVERSE_ARC_HALF_CIRCLE_FROM_DEG:
@@ -592,9 +625,8 @@ def start_rules(report):
     start, motors = report["start_in"], report["motors_w"]
     size = f"{start['length']:.2f} in long, {start['width']:.2f} in wide and {start['height']:.2f} in tall"
     lines = [(f"The robot starts {size}. Each must be at most {start['limit']:g} in (SG1).", start["passed"]),
-             (f"The drive motors are rated {motors['drive']:g} W and all the motors {motors['total']:g} W. "
-              f"The limits are {motors['drive_limit']:g} W for the drive (R11) and {motors['total_limit']:g} W "
-              "in all (R10).", motors["passed"])]
+             (f"The drive motors are rated {motors['drive']:g} W. The limit is {motors['drive_limit']:g} W (R11).",
+              motors["passed"])]
     return [line for line, legal in lines if legal], [line for line, legal in lines if not legal]
 
 
@@ -743,6 +775,105 @@ def stopped_by_hit(contacts, entry, end, target):
             "Move the route clear of it, or end the step before it.")
 
 
+PLACEMENT_KEYS = ("placement_x_in", "placement_y_in", "placement_heading_deg")
+TOUCHING_IN = .1
+TOUCHING_DEG = .25
+
+
+def placement_of(conditions, scale=1):
+    return {key: conditions[key] * scale for key in PLACEMENT_KEYS}
+
+
+def placement_words(placement):
+    x, y, heading = (placement[key] for key in PLACEMENT_KEYS)
+    return (f"{abs(x):.2f} in {'right' if x >= 0 else 'left'} and {abs(y):.2f} in {'forward' if y >= 0 else 'back'} "
+            f"of the start pose, turned {abs(heading):.2f}° {'clockwise' if heading >= 0 else 'anticlockwise'}")
+
+
+def placement_lines(asked, used, moved_back_from):
+    lines = []
+    if moved_back_from:
+        lines.append(f"Placed {placement_words(asked)}, the robot would start inside {', '.join(moved_back_from)}, "
+                     "so it was moved back toward the start pose until it touched.")
+    if any(used.values()):
+        lines.append(f"The robot stood {placement_words(used)}. Odometry and the heading started at the start pose.")
+    return lines
+
+
+def physics_bridge(lib, project, placement):
+    """The simulator with the robot standing at the start pose moved by
+    `placement`. Odometry and the inertial sensor are set to the start pose
+    itself, the way a robot set down a little off its mark is told it is on it."""
+    conditions, start, robot = project["conditions"], project["start"], project["robot"]
+    standing = (start["x"] + placement["placement_x_in"], start["y"] + placement["placement_y_in"],
+                start["heading"] + placement["placement_heading_deg"])
+    bridge = harness.PhysicsBridge(lib, robot["preset"], soc=conditions["battery_percent"] / 100,
+                                   friction=conditions["grip_percent"] / 100,
+                                   encoder_heading=robot["heading_source"] == "encoders",
+                                   seed=conditions["noise_seed"], tracking_mode=robot["tracking"],
+                                   traction=robot["traction"],
+                                   tuning=project["gains"], start_pose=standing,
+                                   sim_time_limit=LIMITS["max_simulated_s"])
+    if any(placement.values()):
+        lib.sim_set_pose(start["x"], start["y"], start["heading"])
+    bridge.set_slew(project["slew"]["speed_up_v"], project["slew"]["slow_down_v"])
+    return bridge
+
+
+def close_enough_to_touching(asked, fraction):
+    return (math.hypot(asked["placement_x_in"], asked["placement_y_in"]) * fraction <= TOUCHING_IN
+            and abs(asked["placement_heading_deg"]) * fraction <= TOUCHING_DEG)
+
+
+def placed_world(lib, project):
+    """The simulator and field with the robot where it was placed. A placement
+    that puts the robot inside a field element, a piece or another robot is cut
+    back toward the start pose, halving the gap each try, until the robot is
+    within TOUCHING_IN and TOUCHING_DEG of touching it. Another robot standing
+    inside something is an error whatever the placement. Returns the bridge,
+    the world, the placement used and what the robot was moved back from."""
+    from vexsim.override import StartOverlapError
+
+    def build(scale):
+        placement = placement_of(project["conditions"], scale)
+        bridge = physics_bridge(lib, project, placement)
+        try:
+            world = make_world(project["field"], bridge.sim, project["preload"], project["other_robots"])
+        except StartOverlapError as error:
+            if error.robot != "the robot":
+                raise StageError(start_overlap_error(error.overlaps, error.robot)) from error
+            raise
+        return bridge, world, placement
+
+    asked = placement_of(project["conditions"])
+    try:
+        return (*build(1), None)
+    except StartOverlapError as error:
+        if not any(asked.values()):
+            raise StageError(start_overlap_error(error.overlaps)) from error
+        moved_back_from = sorted({overlap.name for overlap in error.overlaps})
+    clear, inside, built = 0, 1, None
+    while not close_enough_to_touching(asked, inside - clear):
+        middle = (clear + inside) / 2
+        try:
+            built = build(middle)
+            clear = middle
+        except StartOverlapError:
+            inside, built = middle, None
+    if built is None:
+        try:
+            built = build(clear)
+        except StartOverlapError as error:
+            raise StageError(start_overlap_error(error.overlaps)) from error
+    return (*built, moved_back_from)
+
+
+def other_robots_at_end(world, project):
+    """Each other robot's end report, with the line that says it."""
+    drives_a_path = {robot["role"]: bool(robot["path"]) for robot in project["other_robots"]}
+    return [dict(report, text=describe_end(report, drives_a_path[report["role"]])) for report in end_reports(world)]
+
+
 def execute(raw, destination, vexsim, cache):
     """Runs the whole routine in vexsim with mclib's C++ and reports what
     each step did. A step that breaks a rule is the last one run."""
@@ -782,15 +913,18 @@ def _execute(raw, destination, vexsim, cache, progress):
     setup_cache.use(build_dir / "setup")
     robot = project["robot"]
     feedforward = plans = None
+    if any(step["type"] in RAMSETE_STEPS for step in project["steps"]):
+        feedforward = measure_feedforward(lib, build_dir, robot["preset"], robot["tracking"], robot["traction"],
+                                          progress)
+    else:
+        progress.skip("measure", "No path or curve-to-pose steps, so no feedforward is needed.")
     if paths:
-        feedforward = measure_feedforward(lib, build_dir, robot["preset"], robot["tracking"], progress)
         progress.begin("plan", "Planning speeds along every path with mclib's trajectory planner.")
         plans = plan_paths(lib, project, feedforward, poses)
         total = sum(item["duration_s"] for item in plans if item)
         count = len(paths)
         progress.finish("plan", f"Planned {count} path{'s' * (count != 1)}: {total:.2f} s of driving.")
     else:
-        progress.skip("measure", "No path steps, so no feedforward is needed.")
         progress.skip("plan", "No path steps to plan.")
     time_limits = [step_time_limit(step, plans[index] if plans else None)
                    for index, step in enumerate(project["steps"])]
@@ -801,27 +935,14 @@ def _execute(raw, destination, vexsim, cache, progress):
                          "stops. "
                          f"The simulator runs at most {LIMITS['max_simulated_s']} s. Lower some time limits "
                          "or split the routine.")
-    conditions = project["conditions"]
-    start = project["start"]
-    bridge = harness.PhysicsBridge(lib, robot["preset"], soc=conditions["battery_percent"] / 100,
-                                   friction=conditions["grip_percent"] / 100,
-                                   encoder_heading=robot["heading_source"] == "encoders",
-                                   seed=conditions["noise_seed"], tracking_mode=robot["tracking"],
-                                   tuning=project["gains"], start_pose=(start["x"], start["y"], start["heading"]),
-                                   sim_time_limit=LIMITS["max_simulated_s"])
-    bridge.set_slew(project["slew"]["speed_up_v"], project["slew"]["slow_down_v"])
+    bridge, world, placement, moved_back_from = placed_world(lib, project)
     recorder = Recorder(destination)
-    from vexsim.override import StartOverlapError
-    try:
-        world = make_world(project["field"], bridge.sim, project["preload"])
-    except StartOverlapError as error:
-        raise StageError(start_overlap_error(error.overlaps)) from error
     rig = CascadeRig(lib, bridge, world) if project["field"] == "override" else None
     rules = RuleWatch(world, PRESETS[robot["preset"]]["drive_watts"]) if rig else None
     rule_breaks = []
     pieces = piece_list(world.pieces) if rig else None
     if world is not None:
-        bridge.step_world = world.step
+        bridge.step_world = rig.step_world if rig else world.step
 
     autonomous = None
     tips = TipWatch(bridge.sim)
@@ -920,7 +1041,7 @@ def _execute(raw, destination, vexsim, cache, progress):
             if not step["chain"]:
                 hold = [frame for frame in recorder.trace if frame["step"] == index and frame["phase"] == "hold"]
                 readings += stopping_readings(hold, index == total - 1)
-        info = []
+        info = placement_lines(placement_of(project["conditions"]), placement, moved_back_from) if index == 0 else []
         if rig and index == 0:
             legal_lines, broken_lines = start_rules(rules.report())
             info += legal_lines
@@ -974,6 +1095,8 @@ def _execute(raw, destination, vexsim, cache, progress):
                     notes.append(settle_hint)
             if motion_result is not None:
                 info.append(f"followTrajectory() returned {MOTION_RESULTS[motion_result]}.")
+        if step["type"] == "pose" and motion_result is not None:
+            info.append(f"moveToPose() returned {MOTION_RESULTS[motion_result]}.")
         if late_actions:
             info.append(f"{late_actions} mechanism action{'s' * (late_actions != 1)} had not run when the "
                         "motion ended, so " + ("they" if late_actions != 1 else "it") + " ran then.")
@@ -981,7 +1104,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         if rig:
             info.extend(claw_events(world, started, bridge.sim.t))
             info.extend(toggle_events(world, faces_before))
-        rows.append(dict(index=index, type=step["type"], executed=True,
+        rows.append(dict(index=index, type=step["type"], executed=True, configuration_error=configuration_error,
                          contacts=[contact_dict(contact, started) for contact in contacts],
                          readings=readings, rule_breaks=step_breaks, notes=notes, info=info, target=target,
                          timeout_ms=timeout_ms,
@@ -993,7 +1116,7 @@ def _execute(raw, destination, vexsim, cache, progress):
                          score=score_summary(world) if rig else None,
                          move_result=MOVE_RESULTS[motion_result] if step["type"] in MECHANISM_STEPS and
                          motion_result is not None else None,
-                         motion_result=MOTION_RESULTS[motion_result] if step["type"] == "path" and
+                         motion_result=MOTION_RESULTS[motion_result] if step["type"] in RAMSETE_STEPS and
                          motion_result is not None else None))
         odometry_at_rest.watch(rows[-1], handoff_speed_ips)
         odometry_at_rest.report()
@@ -1018,10 +1141,12 @@ def _execute(raw, destination, vexsim, cache, progress):
                   plans=plans or [None] * len(rows), settings=path_settings(project, feedforward) if feedforward else None,
                   designed_poses=poses, project=project, source_fingerprint=fingerprint,
                   stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None,
-                  autonomous=autonomous)
+                  autonomous=autonomous, placement=dict(placement, moved_back_from=moved_back_from),
+                  other_robots=other_robots_at_end(world, project) if rig else [])
     write_json(destination / "result.json", result)
     with (destination / "trace.csv").open("w", newline="") as handle:
-        fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame if key != "pieces"))
+        fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame
+                                    if key not in ("pieces", "others")))
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(recorder.trace)
@@ -1039,6 +1164,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--preset", choices=sorted(PRESETS))
     parser.add_argument("--tracking", choices=sorted(TRACKING))
+    parser.add_argument("--traction", choices=sorted(TRACTION))
     parser.add_argument("--progress", type=Path)
     parser.add_argument("--vexsim", type=Path, default=ROOT.parent / "vexsim")
     parser.add_argument("--cache", type=Path, required=True)
@@ -1046,10 +1172,11 @@ def main():
     if not (args.vexsim / "vexsim/sim.py").is_file():
         parser.error(f"--vexsim {args.vexsim} is not a vexsim checkout")
     if args.command == "prepare":
-        if not args.preset or not args.tracking:
-            parser.error("prepare needs --preset and --tracking")
+        if not args.preset or not args.tracking or not args.traction:
+            parser.error("prepare needs --preset, --tracking and --traction")
         try:
-            print(json.dumps(prepare(args.preset, args.tracking, args.vexsim, args.cache, args.progress)))
+            print(json.dumps(prepare(args.preset, args.tracking, args.traction, args.vexsim, args.cache,
+                                     args.progress)))
             return 0
         except Exception as error:
             print(f"Prepare failed: {error}", file=sys.stderr)

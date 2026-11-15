@@ -31,7 +31,7 @@ EXCLUDE_COLD_LIBRARIES:=
 # Set this to 1 to add additional rules to compile your project as a PROS library template
 IS_LIBRARY:=1
 LIBNAME:=mclib
-VERSION:=0.4.3
+VERSION:=0.4.4
 # EXCLUDE_SRC_FROM_LIB= $(SRCDIR)/unpublishedfile.c
 # this line excludes opcontrol.c and similar files
 EXCLUDE_SRC_FROM_LIB+=$(foreach file, $(SRCDIR)/main,$(foreach cext,$(CEXTS),$(file).$(cext)) $(foreach cxxext,$(CXXEXTS),$(file).$(cxxext)))
@@ -97,6 +97,7 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/control/feedforward.cpp \
 	$(SRCDIR)/mclib/control/ramsete.cpp \
 	$(SRCDIR)/mclib/control/pose_filter.cpp \
+	$(SRCDIR)/mclib/control/slide_estimator.cpp \
 	$(SRCDIR)/mclib/control/holonomic_follower.cpp \
 	$(SRCDIR)/mclib/pid.cpp \
 	$(SRCDIR)/mclib/path/path.cpp \
@@ -104,6 +105,7 @@ HOST_TEST_SRC:=$(SRCDIR)/mclib/auton/time_budget.cpp \
 	$(SRCDIR)/mclib/path/pure_pursuit.cpp \
 	$(SRCDIR)/mclib/path/trajectory.cpp \
 	$(SRCDIR)/mclib/path/arc.cpp \
+	$(SRCDIR)/mclib/path/pose_path.cpp \
 	$(SRCDIR)/mclib/snapshot/raycast.cpp \
 	$(SRCDIR)/mclib/snapshot/snapshot_pose.cpp \
 	$(SRCDIR)/mclib/command/subsystem.cpp \

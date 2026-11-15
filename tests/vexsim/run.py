@@ -29,12 +29,13 @@ CONTROLLER_FIELDS = ("target_heading_deg", "heading_error_deg", "remaining_in",
 
 class Sample(C.Structure):
     _fields_ = [(name, C.c_double) for name in
-                ("heading", "left", "right", "current_ma", "velocity_rpm")]
+                ("heading", "left", "right", "current_ma", "left_rpm", "right_rpm")]
     _fields_ += [("millis", C.c_uint32), ("disabled", C.c_int), ("cancel", C.c_int)]
     _fields_ += [("vertical", C.c_double), ("horizontal", C.c_double)]
     _fields_ += [("gps_x", C.c_double), ("gps_y", C.c_double), ("gps_heading", C.c_double),
                  ("gps_valid", C.c_int)]
     _fields_ += [("battery_mv", C.c_double)]
+    _fields_ += [("accel_right_ips2", C.c_double), ("accel_forward_ips2", C.c_double)]
 
 
 ADVANCE = C.CFUNCTYPE(None, C.c_uint32, C.POINTER(Sample))
@@ -42,13 +43,13 @@ OUTPUT = C.CFUNCTYPE(None, C.c_int, C.c_int, C.c_double)
 
 
 def build(destination, extra_sources=()):
-    sources = ["control/motion", "control/chassis_io", "control/motion_config",
+    sources = ["control/motion", "control/chassis_io", "control/motion_config", "device/types",
                "control/motion_math", "control/scaling", "control/robot_state",
-               "control/odometry", "chassis/chassis_math", "pid", "math", "utils",
+               "control/odometry", "control/slide_estimator", "chassis/chassis_math", "pid", "math", "utils",
                "control/ramsete", "path/trajectory", "path/path", "path/spline",
                "control/pose_filter", "snapshot/raycast", "snapshot/snapshot_pose",
-               "path/arc", "control/characterize", "control/async_motion",
-               "telemetry/file_sink"]
+               "path/arc", "path/pose_path", "control/characterize", "control/async_motion",
+               "telemetry/file_sink", "control/profile", "control/feedforward"]
     library = destination / "libmclib_vexsim.so"
     command = ["g++", "-std=gnu++20", "-O1", "-g", "-shared", "-fPIC",
                "-DMCLIB_HOST_BUILD", "-Wno-deprecated-declarations", "-Iinclude",
@@ -68,6 +69,10 @@ def load_library(library):
     lib = C.CDLL(str(library))
     lib.sim_init.argtypes = [ADVANCE, OUTPUT, C.c_double, C.c_double, C.c_double, C.c_int]
     lib.sim_init.restype = None
+    lib.sim_volts_for_5_5w_motor.argtypes = [C.c_double]
+    lib.sim_volts_for_5_5w_motor.restype = C.c_double
+    lib.sim_reading_scale_for_5_5w_motor.argtypes = [C.c_int]
+    lib.sim_reading_scale_for_5_5w_motor.restype = C.c_double
     lib.sim_run.argtypes = [C.c_int] + [C.c_double] * 4 + [C.c_int] * 2 + [C.c_double] * 2
     lib.sim_run.restype = C.c_int
     lib.sim_pose.argtypes = [C.POINTER(C.c_double)]
@@ -99,6 +104,12 @@ def load_library(library):
     if hasattr(lib, "sim_gps_enable"):
         lib.sim_gps_enable.argtypes = [C.c_double, C.c_double, C.c_double]
         lib.sim_gps_enable.restype = None
+    if hasattr(lib, "sim_set_gps_latency"):
+        lib.sim_set_gps_latency.argtypes = [C.c_double]
+        lib.sim_set_gps_latency.restype = C.c_int
+    if hasattr(lib, "sim_use_accelerometer"):
+        lib.sim_use_accelerometer.argtypes = [C.c_double, C.c_double]
+        lib.sim_use_accelerometer.restype = C.c_int
     if hasattr(lib, "sim_use_trackers"):
         lib.sim_use_trackers.argtypes = [C.c_int, C.c_int]
         lib.sim_use_trackers.restype = None
@@ -108,6 +119,9 @@ def load_library(library):
     if hasattr(lib, "sim_characterize_grip"):
         lib.sim_characterize_grip.argtypes = [C.c_char_p, C.c_int, C.c_double]
         lib.sim_characterize_grip.restype = C.c_int
+    if hasattr(lib, "sim_use_profiled_moves"):
+        lib.sim_use_profiled_moves.argtypes = [C.c_double] * 10
+        lib.sim_use_profiled_moves.restype = C.c_int
     if hasattr(lib, "sim_arcs_use_ramsete"):
         lib.sim_arcs_use_ramsete.argtypes = [C.c_int]
         lib.sim_arcs_use_ramsete.restype = None
@@ -143,6 +157,8 @@ def load_library(library):
 # drive: drive encoders only. two: forward and sideways tracking wheels.
 # vertical / horizontal: one tracking wheel, drive encoders for the rest.
 TRACKING_MODES = ("drive", "two", "vertical", "horizontal")
+#: vexsim cartridge names in the order of mclib::device::Gearset
+MCLIB_GEARSETS = ("red", "green", "blue")
 # PoseFusion's odometry variance per inch, (forward, sideways), for each mode.
 # A tracking wheel drifts far less than the drive encoders, but only in the
 # direction it rolls: with one wheel, the other direction is as unsure as
@@ -153,18 +169,111 @@ TRACKERS_READ = dict(drive=set(), two={"track_parallel", "track_perp"}, vertical
                      horizontal={"track_perp"})
 
 
+# How long a robot with the accelerometer stands still before its motion.
+ACCELEROMETER_STILL_MS = 500
+# Where the IMU sits on every simulated robot, inches ahead of and right of
+# the tracking centre: off the centre, so the accelerometer feels the spin.
+IMU_MOUNT_IN = (3.0, -2.0)
+# The accelerometer errors vexsim leaves out. vexsim reads the true
+# acceleration at the tracking centre plus 0.03 m/s^2 (3 mg) of noise: no
+# zero error, no tilt, no shaking. A real V5 IMU has all three. The chip is
+# reportedly an ICM-20602 (not confirmed by VEX); its datasheet gives the
+# zero, sensitivity and cross-axis numbers. The rest are guesses.
+IMU_REALISM = dict(
+    zero_sd_g=0.02,          # zero off by up to 40 mg once soldered (datasheet), as 2 sd
+    scale_sd=0.01,           # sensitivity within 1% (datasheet)
+    cross_axis_sd=0.01,      # 1% of the forward reading leaks in (datasheet)
+    floor_tilt_deg=0.2,      # how far the floor tilts, peak, across a 48 in wave (guess)
+    floor_wavelength_in=48.0,
+    roll_per_accel=0.01,     # the chassis rolls and pitches on the foam: 1% of the push reads as tilt (guess)
+    shake_g=0.025,           # the drive shaking the IMU at top speed (guess)
+    mount_error_in=0.25,     # how far off the measured IMU position is (guess)
+)
+
+
+class SimulatedAccelerometer:
+    """What the accelerometer reads toward the robot's right and front, in/s^2.
+
+    "ideal" is vexsim's reading moved to where the IMU is mounted.
+    "realistic" adds IMU_REALISM's errors, drawn from @p seed, each axis its own.
+    """
+
+    def __init__(self, kind, seed, top_ips):
+        if kind not in ("ideal", "realistic"):
+            raise ValueError("accelerometer must be ideal or realistic")
+        rng = random.Random(seed + 307)
+        self.realistic = kind == "realistic"
+        self.top_ips = top_ips
+        self.rng = rng
+        r = IMU_REALISM
+        self.zero_g = rng.gauss(0.0, r["zero_sd_g"]) if self.realistic else 0.0
+        self.scale = rng.gauss(0.0, r["scale_sd"]) if self.realistic else 0.0
+        self.cross_axis = rng.gauss(0.0, r["cross_axis_sd"]) if self.realistic else 0.0
+        self.waves = [(rng.uniform(0, 2 * math.pi), rng.uniform(0, 2 * math.pi)) for _ in range(2)]
+        error = IMU_REALISM["mount_error_in"] if self.realistic else 0.0
+        angle = rng.uniform(0, 2 * math.pi)
+        self.told_mount = (IMU_MOUNT_IN[0] + error * math.cos(angle),
+                           IMU_MOUNT_IN[1] + error * math.sin(angle))
+        self.forward_zero_g = rng.gauss(0.0, r["zero_sd_g"]) if self.realistic else 0.0
+        self.forward_scale = rng.gauss(0.0, r["scale_sd"]) if self.realistic else 0.0
+        self.forward_cross_axis = rng.gauss(0.0, r["cross_axis_sd"]) if self.realistic else 0.0
+
+    def floor_tilt(self, x, y):
+        """The floor's slope at (x, y), radians, as a field-frame vector."""
+        amplitude = math.radians(IMU_REALISM["floor_tilt_deg"])
+        k = 2 * math.pi / IMU_REALISM["floor_wavelength_in"]
+        slope = [0.0, 0.0]
+        for axis, (direction, phase) in enumerate(self.waves):
+            along = x * math.cos(direction) + y * math.sin(direction)
+            slope[axis] = amplitude * math.sin(k * along + phase)
+        return slope
+
+    def read(self, sim, inch, truth):
+        """(toward the right, toward the front), in/s^2."""
+        st = sim.state
+        rate = -st.r
+        spin_up = -st.alpha
+        forward, right = IMU_MOUNT_IN
+        accel_right = -sim.imu.accel_y / inch + spin_up * forward - rate * rate * right
+        accel_forward = sim.imu.accel_x / inch - spin_up * right - rate * rate * forward
+        if not self.realistic:
+            return accel_right, accel_forward
+        g = 386.08858
+        x, y, heading = truth
+        theta = math.radians(heading)
+        slope = self.floor_tilt(x, y)
+        tilt_right = slope[0] * math.cos(theta) - slope[1] * math.sin(theta)
+        tilt_forward = slope[0] * math.sin(theta) + slope[1] * math.cos(theta)
+        shake = IMU_REALISM["shake_g"] * g * min(1.0, abs(st.u / inch) / self.top_ips)
+        tilt_per_accel = IMU_REALISM["roll_per_accel"]
+        right_reading = (accel_right * (1 + self.scale + tilt_per_accel)
+                         + self.cross_axis * accel_forward + self.zero_g * g + g * tilt_right
+                         + self.rng.gauss(0.0, shake))
+        forward_reading = (accel_forward * (1 + self.forward_scale + tilt_per_accel)
+                           + self.forward_cross_axis * accel_right + self.forward_zero_g * g
+                           + g * tilt_forward + self.rng.gauss(0.0, shake))
+        return right_reading, forward_reading
+# useProfiledMoves() in the profiled/ scenarios: plan at 80% of the measured
+# top speed and 150 in/s^2, 1 V per inch behind the plan and 0.05 V per in/s.
+PROFILED_KP, PROFILED_KD, PROFILED_TOP_FRACTION, PROFILED_ACCEL = 2.0, 0.1, 0.8, 150.0
+PROFILED_DECEL, PROFILED_JERK = 0.0, 0.0
+
+
 class PhysicsBridge:
     def __init__(self, lib, preset, soc=1.0, friction=1.0, fault=None, locked=False, constrained=False,
                  encoder_heading=False, seed=1, tracking_mode="drive", tuning=None,
                  start_pose=(0.0, 0.0, 0.0), sim_time_limit=120.0,
-                 distance_sensors=None, gps=False, wall_sensor=None):
+                 distance_sensors=None, gps=False, wall_sensor=None, accelerometer=None,
+                 gps_latency_ms=0, gps_latency_known=False, traction="none"):
         from vexsim import Simulator, presets
-        from vexsim.chassis import add_tracking_wheels
-        from vexsim.motor import BrakeMode
+        from vexsim.chassis import add_tracking_wheels, with_traction_wheels
+        from vexsim.motor import BrakeMode, v5_5_5w
         from vexsim.sim import SimConfig
         from vexsim.units import INCH
         self.lib, self.inch = lib, INCH
         chassis = presets.get(preset)
+        if traction != "none":
+            with_traction_wheels(chassis, traction)
         if tracking_mode not in TRACKING_MODES:
             raise ValueError("tracking_mode must be one of " + ", ".join(TRACKING_MODES))
         self.tracking_mode = tracking_mode
@@ -188,6 +297,19 @@ class PhysicsBridge:
         self.sim.dynamics.constrained = constrained
         self.sides = [[m for unit in units for m in unit.motors] for units in
                       (chassis.left_units(), chassis.right_units())]
+        # A side with both kinds is a three-list MotorGroup: its 5.5 W motors
+        # are read on the 11 W motors' shaft and get less voltage. A side of
+        # one kind is a one-list group and reads and drives as it is.
+        five_five_watt = v5_5_5w().name
+        self.listed_5_5w = []
+        self.reading_scales = []
+        for side in self.sides:
+            mixed = len({motor.spec.name for motor in side}) > 1
+            listed = [mixed and motor.spec.name == five_five_watt for motor in side]
+            gearset = next(motor.cartridge for motor, flag in zip(side, listed) if not flag)
+            scale = lib.sim_reading_scale_for_5_5w_motor(MCLIB_GEARSETS.index(gearset)) if mixed else 1.0
+            self.listed_5_5w.append(listed)
+            self.reading_scales.append([scale if flag else 1.0 for flag in listed])
         self.modes = [BrakeMode.COAST, BrakeMode.BRAKE, BrakeMode.HOLD]
         self.fault = fault
         self.fault_injected = False
@@ -198,6 +320,10 @@ class PhysicsBridge:
         # map's perimeter, shifted), 2% noise, 78 in range, every 20 ms.
         self.distance_sensors = list(distance_sensors or [])
         self.gps = gps
+        # Each GPS pose reaches the brain gps_latency_ms after it was taken;
+        # gps_latency_known tells PoseFusion so.
+        self.gps_latency_ms = int(gps_latency_ms)
+        self.gps_taken = []
         # wallReset()'s distance check: a sensor (x_right_in, y_fwd_in,
         # rel_deg) reading the true range to the box walls, with no noise.
         self.wall_sensor = wall_sensor
@@ -210,9 +336,12 @@ class PhysicsBridge:
         self.commands = [(1, 0), (1, 0)]
         self.peak_command = 0
         self.last_heading = self.unwrapped_heading = 0.0
+        self.accelerometer = None
         self.step_callback = ADVANCE(self.advance)
         self.output_callback = OUTPUT(self.write)
-        wheel = chassis.left_units()[0]
+        listed_names = {motor.name for side, flags in zip(self.sides, self.listed_5_5w)
+                        for motor, flag in zip(side, flags) if flag}
+        wheel = next(unit for unit in chassis.left_units() if unit.driven and unit.motors[0].name not in listed_names)
         lib.sim_init(self.step_callback, self.output_callback, 2 * wheel.radius / INCH,
                      chassis.track_width / INCH, 1.0 / wheel.gear_ratio, encoder_heading)
         trackers = {u.name: u for u in chassis.wheel_units if u.name.startswith("track_")}
@@ -247,6 +376,21 @@ class PhysicsBridge:
         # 1 in per reading, PoseFusion's default.
         if gps:
             lib.sim_gps_enable(*ODOM_VAR[tracking_mode], 1.0)
+            if gps_latency_known and not lib.sim_set_gps_latency(self.gps_latency_ms):
+                raise ValueError("the filter refused the GPS latency")
+        if accelerometer:
+            if tracking_mode in ("two", "horizontal"):
+                raise ValueError("the accelerometer stands in for a horizontal tracking wheel; "
+                                 f"tracking mode {tracking_mode} has one")
+            top_ips = chassis.theoretical_free_speed() / INCH
+            self.accelerometer = SimulatedAccelerometer(accelerometer, seed, top_ips)
+            if not lib.sim_use_accelerometer(*self.accelerometer.told_mount):
+                raise ValueError("odometry refused the accelerometer")
+            # Standing still before the motion, as a robot does after
+            # calibrating its IMU: odometry learns the accelerometer's zero.
+            self.advance_idle(ACCELEROMETER_STILL_MS)
+        # When the motion starts; elapsed times count from here.
+        self.motion_start_t = self.sim.t
         if wall_sensor:
             lib.sim_set_wall_check(wall_sensor["expected_in"], wall_sensor["tolerance_in"])
 
@@ -296,10 +440,10 @@ class PhysicsBridge:
         for label, units in (("left", self.sim.chassis.left_units()),
                              ("right", self.sim.chassis.right_units())):
             frame[f"{label}_wheel_angle_rad"] = sum(u.angle for u in units) / len(units)
-        for label, motors in zip(("left", "right"), self.sides):
-            encoders = [self.sim.encoders[m.name] for m in motors]
-            frame.update({f"{label}_encoder_deg": sum(math.degrees(e.position) for e in encoders) / len(encoders),
-                          f"{label}_encoder_rpm": sum(e.velocity for e in encoders) * 30 / math.pi / len(encoders),
+        for side, (label, motors) in enumerate(zip(("left", "right"), self.sides)):
+            encoder_deg, encoder_rpm = self.side_encoders(side)
+            frame.update({f"{label}_encoder_deg": encoder_deg,
+                          f"{label}_encoder_rpm": encoder_rpm,
                           f"{label}_current_amps": sum(abs(m.current) for m in motors),
                           f"{label}_temp_c": max(m.temperature for m in motors)})
         for label, name, sign in (("parallel", "track_parallel", 1),
@@ -327,19 +471,31 @@ class PhysicsBridge:
         if self.exceptions:
             raise RuntimeError("; ".join(self.exceptions))
 
+    def side_encoders(self, side):
+        """Mean encoder position (deg) and speed (rpm) of one drive side, as
+        mclib's MotorGroup reads them."""
+        motors, scales = self.sides[side], self.reading_scales[side]
+        encoders = [self.sim.encoders[m.name] for m in motors]
+        degrees = sum(math.degrees(e.position) * scale for e, scale in zip(encoders, scales)) / len(motors)
+        rpm = sum(e.velocity * scale for e, scale in zip(encoders, scales)) * 30 / math.pi / len(motors)
+        return degrees, rpm
+
     def write(self, side, mode, volts):
         try:
             if not math.isfinite(volts):
                 raise ValueError(f"invalid motor voltage {volts}")
             # Match MotorGroup::setVoltage: clamp to the rail, then integer mV.
-            volts = math.trunc(max(-12.0, min(12.0, volts)) * 1000) / 1000
+            clamped = max(-12.0, min(12.0, volts))
+            volts = math.trunc(clamped * 1000) / 1000
             self.commands[side] = (mode, volts)
             self.peak_command = max(self.peak_command, abs(volts))
-            for motor in self.sides[side]:
-                if mode == 0:
-                    motor.set_voltage(volts)
-                else:
+            for motor, listed in zip(self.sides[side], self.listed_5_5w[side]):
+                if mode != 0:
                     motor.stop(self.modes[mode - 1])
+                elif listed:
+                    motor.set_voltage(math.trunc(self.lib.sim_volts_for_5_5w_motor(clamped) * 1000) / 1000)
+                else:
+                    motor.set_voltage(volts)
         except Exception as error:
             self.exceptions.append(str(error))
             self.sim.stop_all(self.modes[1])
@@ -358,9 +514,10 @@ class PhysicsBridge:
             reading = sample.contents
             reading.millis = round(self.sim.t * 1000)
             reading.heading = -math.degrees(self.unwrapped_heading)
-            for side, name in zip(self.sides, ("left", "right")):
-                setattr(reading, name, sum(math.degrees(self.sim.encoders[m.name].position)
-                                          for m in side) / len(side))
+            for side, name in enumerate(("left", "right")):
+                degrees, rpm = self.side_encoders(side)
+                setattr(reading, name, degrees)
+                setattr(reading, name + "_rpm", rpm)
             if self.tracking_mode != "drive" and "track_parallel" in self.sim.tracking:
                 reading.vertical = math.degrees(self.sim.tracking["track_parallel"].position)
             if self.tracking_mode != "drive":
@@ -369,8 +526,9 @@ class PhysicsBridge:
                 reading.horizontal = -math.degrees(self.sim.tracking["track_perp"].position)
             reading.current_ma = sum(abs(m.current) for m in self.sim.motors) * 1000 / len(self.sim.motors)
             reading.battery_mv = self.sim.battery.voltage * 1000
-            reading.velocity_rpm = sum(abs(self.sim.encoders[m.name].velocity)
-                                       for m in self.sim.motors) * 30 / math.pi / len(self.sim.motors)
+            reading.accel_right_ips2, reading.accel_forward_ips2 = (
+                self.accelerometer.read(self.sim, self.inch, self.truth()) if self.accelerometer
+                else (math.nan, math.nan))
             if self.distance_sensors and reading.millis - self.last_distance_ms >= 20:
                 self.last_distance_ms = reading.millis
                 truth = self.truth()
@@ -384,11 +542,16 @@ class PhysicsBridge:
                 self.lib.sim_wall_reading(-1.0 if wall_range is None else wall_range)
             if self.gps:
                 gps = self.sim.gps
-                reading.gps_valid = int(gps.valid)
                 # vexsim: x forward from the start, y left, theta CCW.
-                reading.gps_x = -gps.y / self.inch
-                reading.gps_y = gps.x / self.inch
-                reading.gps_heading = -math.degrees(gps.heading)
+                self.gps_taken.append((reading.millis, int(gps.valid), -gps.y / self.inch,
+                                       gps.x / self.inch, -math.degrees(gps.heading)))
+                arrived = [taken for taken in self.gps_taken
+                           if taken[0] <= reading.millis - self.gps_latency_ms]
+                if arrived:
+                    _, reading.gps_valid, reading.gps_x, reading.gps_y, reading.gps_heading = arrived[-1]
+                    self.gps_taken = self.gps_taken[len(arrived) - 1:]
+                else:
+                    reading.gps_valid = 0
             triggered = self.sim.t >= 0.25
             self.fault_injected |= triggered and self.fault is not None
             reading.disabled = triggered and self.fault == "disabled"
@@ -424,6 +587,18 @@ class PhysicsBridge:
         self.lib.sim_set_ramsete(feedforward["ks"], feedforward["kv"], b, zeta,
                                  0.7 * feedforward["top_ips"], accel, lateral,
                                  feedforward["track_in"])
+
+    def use_profiled_moves(self, feedforward, kp=PROFILED_KP, kd=PROFILED_KD,
+                           top_fraction=PROFILED_TOP_FRACTION, accel=PROFILED_ACCEL,
+                           decel=PROFILED_DECEL, jerk=PROFILED_JERK):
+        """driveTo(), turnToAngle(), swing() and moveToPoint() on a planned
+        speed, from a measure_feedforward() result. Call set_ramsete() first:
+        the bridge takes the feedforward and track width from it."""
+        if self.lib.sim_use_profiled_moves(feedforward["ka"], feedforward["turn_ks"],
+                                           feedforward["turn_kv"], feedforward["turn_ka"], kp, kd,
+                                           top_fraction * feedforward["top_ips"], accel,
+                                           decel, jerk):
+            raise ValueError("useProfiledMoves() refused the config")
 
     def follow(self, points, reversed=False, timeout=4000, volts=12):
         """followTrajectory() along a spline from the current pose through
@@ -505,32 +680,71 @@ def box_range(truth, sensor, max_range=78.0):
     return best if best <= max_range else None
 
 
-def measure_feedforward(lib, preset, tracking_mode, cache):
-    """kS and kV for one side of @p preset, measured in the simulator.
+def measure_feedforward(lib, preset, tracking_mode, cache, traction="none"):
+    """kS, kV and kA for one side of @p preset with @p traction wheels ("none",
+    "middle" or "all"), measured in the simulator.
 
     Holds 4 V and then 8 V on both sides for 1.5 s each and fits
     V = kS + kV * speed through the two steady speeds - the same measurement
-    docs/motion.md asks for on a real robot. Then spins in place at 6 V per
-    side for the effective track width, 2 * (V - kS) / kV / turn rate.
+    docs/motion.md asks for on a real robot. kA is the least-squares fit of
+    the voltage left over, V - kS - kV * speed, against the acceleration while
+    the 4 V hold speeds up: from 8 V the drive speeds up at its grip or
+    current limit, about 210 in/s^2 on six_motor_450, not at what the
+    voltage asks for. Then spins in place at 6 V per side for the effective
+    track width, 2 * (V - kS) / kV / turn rate, and at 4 V and 8 V for the
+    turning kS, kV and kA (from 4 V), with the wheel speed taken as the turn
+    rate times half the effective track width.
     """
-    key = (preset, tracking_mode)
+    key = (preset, tracking_mode, traction)
     if key not in cache:
-        speeds = []
+        speeds, traces = [], []
         for volts in (4.0, 8.0):
-            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode, traction=traction)
             bridge.run(11, timeout=1500, volts=volts)
             speeds.append(bridge.sim.state.speed / bridge.inch)
+            traces.append(bridge.control_trace)
         kv = 4.0 / (speeds[1] - speeds[0])
         ks = 4.0 - kv * speeds[0]
         top = (12.0 - ks) / kv
-        bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode)
+        ka = fit_acceleration_gain(traces[0], ks, kv)
+        bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode, traction=traction)
         bridge.run(12, timeout=1500, volts=6.0)
         turn_rate = abs(bridge.sim.state.r)
         track = 2 * (6.0 - ks) / kv / turn_rate
-        cache[key] = dict(ks=ks, kv=kv, top_ips=top, track_in=track)
-        print(f"{preset}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), top={top:.1f} in/s, "
-              f"effective track={track:.2f} in", flush=True)
+        spin_speeds, spin_traces = [], []
+        for volts in (4.0, 8.0):
+            bridge = PhysicsBridge(lib, preset, tracking_mode=tracking_mode, traction=traction)
+            bridge.run(12, timeout=1500, volts=volts)
+            spin_speeds.append(abs(bridge.sim.state.r) * track / 2)
+            spin_traces.append([dict(t=frame["t"], left_volts=abs(frame["left_volts"]),
+                                     forward_speed_ips=math.radians(abs(frame["yaw_rate_dps"])) * track / 2)
+                                for frame in bridge.control_trace])
+        turn_kv = 4.0 / (spin_speeds[1] - spin_speeds[0])
+        turn_ks = 4.0 - turn_kv * spin_speeds[0]
+        turn_ka = fit_acceleration_gain(spin_traces[0], turn_ks, turn_kv)
+        cache[key] = dict(ks=ks, kv=kv, ka=ka, top_ips=top, track_in=track,
+                          turn_ks=turn_ks, turn_kv=turn_kv, turn_ka=turn_ka)
+        print(f"{preset}{'' if traction == 'none' else f', {traction} traction'}: kS={ks:.3f} V, kV={kv:.4f} V/(in/s), kA={ka:.4f} V/(in/s^2), "
+              f"top={top:.1f} in/s, effective track={track:.2f} in; turning kS={turn_ks:.3f} V, "
+              f"kV={turn_kv:.4f} V/(in/s), kA={turn_ka:.4f} V/(in/s^2)", flush=True)
     return cache[key]
+
+
+def fit_acceleration_gain(trace, ks, kv, min_speed_ips=2.0, min_accel_ips2=20.0):
+    """kA from a constant-voltage run's control trace, with central-difference
+    accelerations, over the ticks where the robot is moving and speeding up."""
+    leftover_times_accel = accel_squared = 0.0
+    for before, frame, after in zip(trace, trace[1:], trace[2:]):
+        accel = ((after["forward_speed_ips"] - before["forward_speed_ips"]) /
+                 (after["t"] - before["t"]))
+        if frame["forward_speed_ips"] < min_speed_ips or accel < min_accel_ips2:
+            continue
+        leftover = frame["left_volts"] - ks - kv * frame["forward_speed_ips"]
+        leftover_times_accel += leftover * accel
+        accel_squared += accel * accel
+    if not accel_squared:
+        raise RuntimeError("the hold never sped up fast enough to fit kA")
+    return leftover_times_accel / accel_squared
 
 
 # The robot's owner's Override cascade drive has one sideways tracking wheel
@@ -538,35 +752,70 @@ def measure_feedforward(lib, preset, tracking_mode, cache):
 CASCADE_TRACKING_MODES = ("drive", "horizontal")
 
 
+MOVES = (
+    ("drive_forward", 1, {"a": 24}, (0, 24), 0),
+    ("drive_reverse", 1, {"a": -24}, (0, -24), 0),
+    ("turn_right", 0, {"a": 90}, None, 90),
+    ("turn_left", 0, {"a": -90}, None, -90),
+    ("turn_to_point", 5, {"a": 24, "b": 24}, None, 45),
+    ("point_forward", 6, {"b": 24}, (0, 24), 0),
+    ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
+    ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
+    # moveToPose(): the boomerang's target on a planned curve (RAMSETE).
+    ("pose", 14, {"a": 24, "b": 24, "heading": 90, "lead": 0.4}, (24, 24), 90),
+    ("pose_reverse", 14, {"a": 24, "b": -24, "heading": -90, "direction": -1,
+                          "lead": 0.4}, (24, -24), -90),
+    ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
+    ("reverse_arc", 3, {"a": -90, "b": 24}, (24, -24), -90),
+    # curveCircle() / curveCircleReverse() after useRamseteForArcs().
+    ("arc_ramsete_config", 2, {"a": 90, "b": 24}, (24, 24), 90),
+    ("reverse_arc_ramsete_config", 3, {"a": -90, "b": 24}, (24, -24), -90),
+    # The same two arcs through followTrajectory() (RAMSETE).
+    ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
+    ("ramsete_reverse_arc", 10, {"a": -90, "b": 24}, (24, -24), -90),
+    ("ramsete_s_curve", 13, {"b": 24}, (48, 48), 0),
+    ("swing", 4, {"a": 90}, None, 90),
+)
+
+
+def move_tolerance(name, action):
+    return (1.5 if action in (7, 14) else
+            2.5 if name.endswith("_ramsete_config") else
+            5.5 if action in (2, 3) else 2.5)
+
+
+#: The drives the basic moves run on: (name prefix, vexsim preset, traction wheels)
+MOVE_DRIVES = (("four_motor_200", "four_motor_200", "none"), ("six_motor_450", "six_motor_450", "none"),
+               ("speed_base", "speed_base", "none"), ("override_cascade", "override_cascade", "none"),
+               ("six_motor_450_middle_traction", "six_motor_450", "middle"), ("six_motor_55w", "six_motor_55w", "none"))
+
+
 def scenarios():
+    for label, preset, traction in MOVE_DRIVES:
+        for name, action, args, target, angle in MOVES:
+            yield dict(name=f"{label}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle,
+                       options={} if traction == "none" else {"traction": traction},
+                       tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
+                                       else TRACKING_MODES),
+                       position_tolerance=move_tolerance(name, action))
+    # The stopping moves on a planned speed (useProfiledMoves()), on every
+    # drive, against the same targets and tolerances.
     for preset in ("four_motor_200", "six_motor_450", "speed_base", "override_cascade"):
         for name, action, args, target, angle in (
             ("drive_forward", 1, {"a": 24}, (0, 24), 0),
             ("drive_reverse", 1, {"a": -24}, (0, -24), 0),
             ("turn_right", 0, {"a": 90}, None, 90),
             ("turn_left", 0, {"a": -90}, None, -90),
-            ("turn_to_point", 5, {"a": 24, "b": 24}, None, 45),
             ("point_forward", 6, {"b": 24}, (0, 24), 0),
             ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
-            ("boomerang", 7, {"a": 24, "b": 24, "heading": 90}, (24, 24), 90),
-            ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
-            ("reverse_arc", 3, {"a": -90, "b": 24}, (24, -24), -90),
-            # curveCircle() / curveCircleReverse() after useRamseteForArcs().
-            ("arc_ramsete_config", 2, {"a": 90, "b": 24}, (24, 24), 90),
-            ("reverse_arc_ramsete_config", 3, {"a": -90, "b": 24}, (24, -24), -90),
-            # The same two arcs through followTrajectory() (RAMSETE).
-            ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
-            ("ramsete_reverse_arc", 10, {"a": -90, "b": 24}, (24, -24), -90),
-            ("ramsete_s_curve", 13, {"b": 24}, (48, 48), 0),
             ("swing", 4, {"a": 90}, None, 90),
         ):
-            yield dict(name=f"{preset}/{name}", preset=preset, action=action,
-                       args=args, target=target, angle=angle,
+            yield dict(name=f"profiled/{preset}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle, profiled=True,
                        tracking_modes=(CASCADE_TRACKING_MODES if preset == "override_cascade"
                                        else TRACKING_MODES),
-                       position_tolerance=(1.5 if action == 7 else
-                                           2.5 if name.endswith("_ramsete_config") else
-                                           5.5 if action in (2, 3) else 2.5))
+                       position_tolerance=2.5)
     # The same moves with a PoseFilter correcting odometry from four wall
     # distance sensors. Mostly matters with drive encoders only, whose
     # odometry drifts 4-10 in on these moves.
@@ -595,6 +844,28 @@ def scenarios():
                        args=dict(args), target=target, angle=angle, options={"gps": True},
                        position_tolerance=(1.5 if action == 7 else
                                            5.5 if action in (2, 3) else 2.5))
+    # Every move again with no sideways wheel: odometry adds the slide the
+    # accelerometer works out, through the accelerometer errors in
+    # IMU_REALISM.
+    for preset in ("four_motor_200", "six_motor_450", "speed_base", "override_cascade"):
+        for name, action, args, target, angle in MOVES:
+            yield dict(name=f"imu/{preset}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle,
+                       options={"accelerometer": "realistic"},
+                       tracking_modes=(("drive",) if preset == "override_cascade" else ("drive", "vertical")),
+                       position_tolerance=move_tolerance(name, action))
+    # The GPS readings arriving 50 ms after they were taken, and PoseFusion
+    # told so. How late the real GPS is, VEX doesn't say; 50 ms is a guess.
+    for preset in ("four_motor_200", "six_motor_450", "speed_base"):
+        for name, action, args, target, angle in (
+            ("point_diagonal", 6, {"a": 24, "b": 24}, (24, 24), None),
+            ("arc", 2, {"a": 90, "b": 24}, (24, 24), 90),
+            ("ramsete_arc", 9, {"a": 90, "b": 24}, (24, 24), 90),
+        ):
+            yield dict(name=f"gps_late/{preset}/{name}", preset=preset, action=action,
+                       args=dict(args), target=target, angle=angle,
+                       options={"gps": True, "gps_latency_ms": 50, "gps_latency_known": True},
+                       position_tolerance=(5.5 if action in (2, 3) else 2.5))
     for name, options in (("low_battery", {"soc": 0.08}),
                           ("low_grip", {"friction": 0.65}),
                           ("encoder_heading", {"encoder_heading": True})):
@@ -656,11 +927,21 @@ def main():
                         help="RAMSETE zeta for the ramsete_* scenarios (default: 0.7)")
     parser.add_argument("--ramsete-accel", type=float, default=60.0,
                         help="Planned acceleration for the ramsete_* scenarios, in/s^2 (default: 60)")
+    parser.add_argument("--accelerometer", choices=("ideal", "realistic"),
+                        help="Give every scenario's odometry the accelerometer: vexsim's reading, "
+                             "or with IMU_REALISM's errors. Not with a horizontal tracking wheel.")
     args = parser.parse_args()
+    if args.accelerometer and args.tracking_mode in ("two", "horizontal"):
+        parser.error("--accelerometer stands in for a horizontal tracking wheel; "
+                     f"tracking mode {args.tracking_mode} has one")
     cases = [case for case in scenarios() if args.filter in case["name"] and
              args.tracking_mode in case.get("tracking_modes", TRACKING_MODES)]
     if not cases:
         parser.error("no scenarios matched --filter")
+    if args.accelerometer:
+        for case in cases:
+            if not (case.get("safety") or case.get("timeout_safety") or "wall_expected" in case):
+                case["options"] = dict(case.get("options", {}), accelerometer=args.accelerometer)
     if not 0 < args.motion_timeout_ms <= 20000:
         parser.error("--motion-timeout-ms must be between 1 and 20000")
     for case in cases:
@@ -669,7 +950,7 @@ def main():
             # followTrajectory() settles after the plan: a turn, then either a
             # straight correction or a back-off and re-approach. Give it twice
             # the single-motion limit.
-            if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
+            if case["action"] in (9, 10, 13, 14) or case["name"].endswith("_ramsete_config"):
                 case["args"]["timeout"] = 2 * args.motion_timeout_ms
     sys.path.insert(0, str(args.vexsim.resolve()))
     destination = (args.output or Path(tempfile.mkdtemp(prefix="mclib-vexsim-"))).resolve()
@@ -680,9 +961,10 @@ def main():
     feedforward_cache = {}
     for case in cases:
         feedforward = None
-        if case["action"] in (9, 10, 13) or case["name"].endswith("_ramsete_config"):
+        if (case["action"] in (9, 10, 13, 14) or case["name"].endswith("_ramsete_config")
+                or case.get("profiled")):
             feedforward = measure_feedforward(lib, case["preset"], args.tracking_mode,
-                                              feedforward_cache)
+                                              feedforward_cache, case.get("options", {}).get("traction", "none"))
         bridge = PhysicsBridge(lib, case["preset"], tracking_mode=args.tracking_mode,
                                **case.get("options", {}))
         if feedforward is not None:
@@ -690,13 +972,15 @@ def main():
                                accel=args.ramsete_accel)
             if case["name"].endswith("_ramsete_config"):
                 lib.sim_arcs_use_ramsete(1)
+            if case.get("profiled"):
+                bridge.use_profiled_moves(feedforward)
         error = None
         try:
             wall_result = bridge.run(case["action"], **case["args"])
         except RuntimeError as failure:
             error = str(failure)
             wall_result = 0
-        elapsed = bridge.sim.t
+        elapsed = bridge.sim.t - bridge.motion_start_t
         estimated_at_exit = bridge.pose()
         truth_at_exit = bridge.truth()
         # Include actual coast/hold drift after the control routine returns.

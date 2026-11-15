@@ -103,7 +103,7 @@ def step_end_pose(step, pose, track_width_in):
     if kind == "point":
         facing = wrap(bearing((x, y), (step["x"], step["y"])) + (180 if step["direction"] == -1 else 0))
         return (step["x"], step["y"], facing)
-    if kind in ("boomerang", "wall_reset"):
+    if kind in ("boomerang", "pose", "wall_reset"):
         return (step["x"], step["y"], step["heading"])
     if kind in ("arc", "reverse_arc", "swing"):
         if kind == "swing":

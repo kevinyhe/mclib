@@ -176,6 +176,129 @@ time step.
 position, error, and the feedforward and feedback parts of the output. If
 feedback is large compared to feedforward, re-measure the gains.
 
+## Profiled moves
+
+`mclib/control/profiled_moves.hpp`. By default `driveTo()`, `turnToAngle()`,
+`swing()` and `moveToPoint()` set their voltage from a PID on the distance or
+angle left, with a slew limit. The voltage shrinks with the error, so the
+robot slows for the whole last part of every move. After
+`useProfiledMoves()`, each of them with `exit` true plans its speed instead:
+speed up at `max_acceleration`, cruise, slow down to stop on the target. The
+voltage is the feedforward for the planned speed and acceleration, plus `kp`
+on how far the wheels are behind the plan and `kd` on how much slower than
+the plan they went over the last 50 ms. Once the plan ends, the move's own
+PID settles as before, with the `settle_min_voltage` floor.
+
+```cpp
+#include "mclib/control/profiled_moves.hpp"
+
+control::ProfiledMoveConfig moves;
+moves.follower.gains = {0.48_V, 0.131_V / units::inps, 0.0176_V / control::inps2};
+moves.follower.kp = 2_V / 1_in;
+moves.follower.kd = 0.1_V / 1_in;   // volts per in/s
+moves.turn_gains = {1.28_V, 0.112_V / units::inps, 0.0149_V / control::inps2};
+moves.limits.max_velocity = 70 * units::inps;          // 80% of top speed
+moves.limits.max_acceleration = 150 * control::inps2;  // 70% of what the wheels grip
+moves.track_width = 14_in;                             // effective, measured
+control::useProfiledMoves(moves);  // false, with the reason printed, if a value is bad
+
+driveTo(24_in, 2_s);  // now on a planned speed
+```
+
+`usePidMoves()` goes back. Chained moves (`exit` false), `curveCircle()`,
+`turnToPoint()`, `boomerang()` and `followTrajectory()` run as before.
+
+What each move does:
+
+- `driveTo()` plans the distance, from the robot's forward speed when it
+  starts: the mean of the drive motors' reported speeds, no faster than
+  `max_velocity`. Chained onto a moving robot it starts at that speed; after
+  a turn, from rest.
+- `turnToAngle()` plans the arc each wheel rolls: the turn times half of
+  `track_width`, with `turn_gains`.
+- `swing()` plans the arc the moving side rolls: the turn times
+  `track_width`, with `turn_gains`.
+- `moveToPoint()` sets its speed each tick from the distance left along its
+  heading: no faster than it can stop from at `max_deceleration`, and no
+  more than `max_acceleration` faster than the tick before, starting from
+  the robot's forward speed as `driveTo()` does. It first turns in place
+  until it faces within 30° of the target, not 60°: steering more than that
+  at speed slid the robot sideways, and odometry without a sideways tracking
+  wheel can't see a slide. It turns in place only below the speed it stops
+  from within `distance_exit.small_error` (17 in/s at 150 in/s² and 1 in),
+  and brakes at 0 V until then. A `min_speed` floor stops once the plan has
+  to slow down, or once it turns in place. Inside
+  `distance_exit.small_error` its distance PID settles.
+
+The speed `kd` compares is taken over 50 ms, not one 10 ms tick. A V5 motor
+or IMU reading refreshes every 10 ms, out of step with the loop, so now and
+then a tick reads the last value again and the next one jumps two. Over one
+tick that read as no speed and then twice the speed, and moved the voltage
+5 V either way at 50 in/s; over 50 ms it moves it 1 V.
+
+The plan skips the slew limit: it already limits the acceleration.
+
+### Measuring the numbers
+
+- `follower.gains`: kS and kV as in [Measuring kS and kV](#measuring-ks-and-kv).
+  Measure kA from a low-voltage start. From a high voltage the drive speeds
+  up at its grip or current limit, not at what the voltage asks for, and kA
+  comes out too high. In the simulator a 4 V start gave 0.0176 V per in/s²
+  on six_motor_450 and an 8 V start 0.0235. With the high value the robot
+  ran ahead of the plan speeding up and stopped short of it slowing down.
+- `turn_gains`: the same fit from spins in place at two voltages, with the
+  wheel speed taken as the turn rate in rad/s times half of `track_width`.
+  Turning scrubs the wheels sideways, so its kS is higher: 1.28 V against
+  0.48 V driving straight on six_motor_450. With the straight-line gains,
+  turns stopped 4° short and crept the rest.
+- `max_acceleration`: about 70% of the fastest the drive speeds up at
+  12 V. six_motor_450 speeds up at 210 in/s² at most.
+
+### In the simulator
+
+Every move of the stopping scenarios, on each drive, with the moves'
+default PID gains against `useProfiledMoves()` tuned as in
+`tests/vexsim/run.py` (kS, kV, kA and the turning gains measured in the
+simulator, 80% of top speed, 150 in/s², `kp` 2 V per in, `kd` 0.1 V per
+in/s). Two tracking wheels; the Override cascade drive has its one sideways
+wheel. Time, then miss.
+
+| Drive | Move | PID | Profiled |
+| --- | --- | --- | --- |
+| four_motor_200 | `driveTo(24_in)` | 2.61 s, 0.29 in | 1.03 s, 0.29 in |
+| four_motor_200 | `turnToAngle(90_deg)` | 1.07 s, 2.18° | 0.68 s, 0.41° |
+| four_motor_200 | `moveToPoint(24, 24)` | 3.07 s, 0.41 in | 1.41 s, 0.18 in |
+| four_motor_200 | `swing(90_deg)` | 1.62 s, 2.38° | 1.03 s, 0.49° |
+| six_motor_450 | `driveTo(24_in)` | 1.23 s, 0.07 in | 0.86 s, 0.00 in |
+| six_motor_450 | `turnToAngle(90_deg)` | 0.61 s, 1.26° | 0.61 s, 0.13° |
+| six_motor_450 | `moveToPoint(24, 24)` | 1.52 s, 0.03 in | 1.06 s, 0.34 in |
+| six_motor_450 | `swing(90_deg)` | 0.65 s, 0.45° | 0.86 s, 0.30° |
+| speed_base | `driveTo(24_in)` | 0.96 s, 0.43 in | 0.86 s, 0.16 in |
+| speed_base | `turnToAngle(90_deg)` | 0.85 s, 2.15° | 0.67 s, 0.12° |
+| speed_base | `moveToPoint(24, 24)` | 1.22 s, 0.50 in | 1.09 s, 0.20 in |
+| speed_base | `swing(90_deg)` | 1.52 s, 2.27° | 1.09 s, 0.77° |
+| override_cascade | `driveTo(24_in)` | 1.47 s, 0.80 in | 0.87 s, 0.11 in |
+| override_cascade | `turnToAngle(90_deg)` | 0.65 s, 1.27° | 0.63 s, 0.21° |
+| override_cascade | `moveToPoint(24, 24)` | 1.77 s, 1.64 in | 1.08 s, 0.38 in |
+| override_cascade | `swing(90_deg)` | 0.78 s, 0.88° | 0.96 s, 0.50° |
+
+Over the seven stopping moves on every drive, the profiled moves took a third
+less time in each odometry setup: 18.4 s against 29.1 s with two tracking
+wheels, 24.4 s against 36.6 s with drive encoders only. They are slower
+where the PID move already runs flat out: a swing on six_motor_450 and the
+cascade drive is held to 150 in/s². On six_motor_450 a point move stops
+0.34-0.44 in off, against 0.02-0.03 in for the PID.
+
+`tests/vexsim/chain_audit.py` ends chains of moves with `exit` false in a
+stopping `moveToPoint()`, 27 stops in all. With profiled moves none timed
+out and the stops took 30.5 s; with the PID moves 6 timed out and they took
+41.1 s. Before the profiled stop braked first and dropped its floor early,
+three 8 V stops on the 450 rpm drives timed out. They turned in place at
+50 in/s and slid sideways at up to 40 in/s.
+
+The profiled moves stay opt-in: they need measured gains, and the swings
+above are slower.
+
 ## Paths and pure pursuit
 
 `mclib/path/`. Pure pursuit follows a path by steering toward a point a fixed
@@ -491,6 +614,55 @@ same slipping wheels: odometry was 4.3-4.9 in off at the end.
 
 `generate()` returns an empty trajectory when the path is not `valid()` or a
 required limit is zero, negative or not finite.
+
+### Driving to a pose (moveToPose)
+
+`moveToPose()` arrives at a point facing a chosen way, as `boomerang()` does.
+It plans a curve from the odometry pose with `path::planToPose()`, plans a
+trajectory along it with your limits, and runs `followTrajectory()`, settle
+included. `boomerang()` chases a moving carrot with two PIDs. This plans the
+speed along the whole curve and corrects on the pose.
+
+```cpp
+moveToPose(24_in, 24_in, 1, 90_deg, 0.4, follow, limits, 5_s);
+moveToPose(0_in, 0_in, -1, 0_deg, 0.4, follow, limits, 5_s);  // backward
+```
+
+The curve is a cubic Bezier. It leaves along the start heading and comes in
+along the target heading, each control arm `lead` times the straight-line
+distance. 0.39 makes a 90° corner nearly a circle; larger swings wider. A
+curve that folds back on itself, where the robot would have to stop and
+reverse, returns `InvalidValue` without moving: a target behind the start
+heading, one to arrive at against the start heading, or a target straight
+ahead with a lead of 1 or more. Drive those in two moves.
+
+`limits.reversed` is set from `dir`. `Routine::moveToPose()` and
+`ChassisController::makeMoveToPoseCommand()` plan the curve when the step
+starts, from wherever the robot is.
+
+In the physics simulator, to (24, 24) arriving at 90° from the origin, lead
+0.4, with the RAMSETE scenarios' tuning in `tests/vexsim/run.py` (b = 50,
+measured kS and kV, 70% of top speed, 60 in/s²). Time, then miss:
+
+| Drive | Odometry | `boomerang()` lead 0.5 | `moveToPose()` |
+| --- | --- | --- | --- |
+| four_motor_200 | two tracking wheels | 3.61 s, 0.72 in | 2.14 s, 0.28 in |
+| six_motor_450 | two tracking wheels | 3.32 s, 0.47 in | 2.50 s, 0.17 in |
+| speed_base | two tracking wheels | 2.55 s, 0.41 in | 2.45 s, 0.33 in |
+| four_motor_200 | sideways wheel, drive encoders | 3.56 s, 1.62 in | 2.14 s, 0.13 in |
+| six_motor_450 | sideways wheel, drive encoders | 2.61 s, 1.24 in | 2.53 s, 0.15 in |
+| speed_base | sideways wheel, drive encoders | 2.72 s, 2.97 in | 2.41 s, 0.60 in |
+| override_cascade | sideways wheel, drive encoders | 1.93 s, 0.40 in | 2.88 s, 0.33 in |
+
+It ended closer every time and was faster on all but the cascade drive,
+where the plan's 60 in/s² holds it back: at 120 in/s² it took 1.75 s and
+missed by 0.27 in. Backing to (24, -24) arriving at -90° came within
+0.14 s and 0.08 in of the forward drive.
+
+With drive encoders only, or one forward tracking wheel, both miss by 3 to
+11 in: the odometry is that far off after a curve. With b = 2 (the library
+default) and two tracking wheels it still arrived within 0.6 in, but took
+5.3-7.5 s.
 
 ### Logging
 

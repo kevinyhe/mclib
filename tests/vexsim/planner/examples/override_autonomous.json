@@ -14,8 +14,8 @@
     {"type": "turn_to_point", "note": "aim 0.53 in right of the stack; the robot's middle slides as it turns", "x": 24.0, "y": -23.83},
     {"type": "drive", "note": "the bite until the stack is under the claw's middle", "distance": 37.3},
     {"type": "claw", "note": "close on the Cup and the Pin", "claw_preset": "closed"},
-    {"type": "turn_to_point", "note": "toward the Goal, the lift still down", "x": -23.55, "y": -47.09},
-    {"type": "drive", "note": "the bite onto the Goal, the stack well over its Pin; the Goal stops it 1.1 s in", "distance": 43.53, "timeout_ms": 2000, "actions": [{"when": "distance", "value": 3, "mechanism": "lift", "preset": "over_stack_on_neutral_goal"}]},
+    {"type": "turn_to_point", "note": "toward the Goal, with the stack off the foam so its Cup does not drag", "x": -23.55, "y": -47.09, "actions": [{"when": "start", "mechanism": "lift", "preset": "off_the_floor"}]},
+    {"type": "drive", "note": "the bite onto the Goal, the stack well over its Pin; the Goal stops it 1.3 s in", "distance": 43.53, "timeout_ms": 2000, "actions": [{"when": "distance", "value": 3, "mechanism": "lift", "preset": "over_stack_on_neutral_goal"}]},
     {"type": "lift", "note": "set the Cup's rim on the Goal's Pin", "lift_preset": "on_neutral_goal"},
     {"type": "claw", "claw_preset": "open"},
     {"type": "drive", "note": "back away, then lower the lift", "distance": -8, "actions": [{"when": "time", "value": 300, "mechanism": "lift", "preset": "down"}]}

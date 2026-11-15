@@ -3,6 +3,166 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
+## 0.4.4
+
+Update vexsim for the path planner: `git -C ../vexsim pull`. The planner
+and the scenarios need its `with_traction_wheels()`, `OtherRobot` and
+`six_motor_55w`.
+
+### Added
+
+- `PositionMechanismConfig::gravity_volts`: volts that hold the load still,
+  added to the PID output before the `max_voltage` clamp. `gravity_model`
+  `Lift` adds the same voltage at every height. `Arm` scales it by the cosine
+  of the arm's angle from level, set with `arm_level_position` and
+  `arm_units_per_degree`. It stays on after arrival, including with
+  `hold_output = false`, and is off under a manual voltage, on a sensor fault
+  and after `onDisabled()`. It defaults to 0, so existing code is unchanged.
+- `PositionMechanismConfig::hold_ki`: an integral for the hold after
+  arrival. The PID zeroes its own integral inside `small_error`, so the hold
+  was P only and could sit anywhere in that band. From the tick after
+  arrival `hold_ki * error` is summed on every tick with the error inside
+  `small_error` and added to the output, capped at `integral_max_volts`. `moveTo()`, a manual voltage, a sensor
+  fault and `onDisabled()` clear it. It defaults to 0.
+- Path planner: **Run many…** runs a routine many times, 20 by default,
+  each with the robot placed up to 0.5 in and 1° off the start pose while
+  odometry starts at the start pose, the grip up to 10% either way, the
+  battery up to 30% lower and its own sensor noise. The **Run many** tab
+  says how many runs finished each step and ended it on target, how red's
+  score at 15 s spread, where the runs ended, and lists every run worst
+  first; **Show** puts one on the field. The field draws every run's path.
+- Path planner: **Placed off the start** X, Y and heading under Simulated
+  conditions, so one such run can be run again. A placement that would put
+  the robot inside a field element or piece is cut back until the robot
+  touches it.
+- Path planner: **Robot log…** draws a CSV logged on the robot with the
+  telemetry `Logger` over the plan and the simulated run, with the playback
+  scrubber, and says per step how far the log was from the simulated
+  odometry, the planned path and the target. `docs/telemetry.md` shows how
+  to log the pose, and a step column, while an exported routine runs.
+- Odometry can estimate the sideways slide from the IMU's accelerometer, for
+  robots with no sideways tracking wheel. Give `OdometrySetup::accelerometer`
+  readers, `accelerationReader(imu, axis)`, and where the IMU is. With
+  drive encoders alone it also reads the IMU's forward axis, so drive wheels
+  spinning faster than the robot moves are not counted as travel. It learns
+  the accelerometer's zero whenever the robot stands still, and starts over,
+  keeping the zero, after `setPose()`, a tare or `startOdometry()`. Off
+  unless set. In the physics simulator, with a real IMU's errors added,
+  odometry error at the end of a curve falls from 4.24 to 1.03 in on
+  average with drive encoders alone, and from 4.53 to 1.19 in with a
+  vertical tracker. S-curves can end worse. See getting-started.md. Not yet
+  run on a robot.
+- `device::Inertial::accelerationG(ImuAxis)`: the accelerometer's raw
+  reading along one of the sensor's axes, in g.
+- `PoseFilter` and `PoseFusion` apply a late reading at the time it was
+  taken. `GpsInput::latency_ms` and `DistanceSensorInput::latency_ms` say how
+  late; the default, 0, applies it when it is read, as before. A
+  `PoseFilter` stepped by hand takes the time through the new
+  `predict(previous, current, now_ms)`, `updateGps(..., taken_ms)` and
+  `updateDistance(..., taken_ms)`. In the physics simulator, with GPS
+  readings 100 ms late, odometry ends 0.21 in off on average instead of
+  1.20 in.
+- `tests/vexsim/run.py --accelerometer ideal|realistic`, and the `imu/*` and
+  `gps_late/*` scenarios. `ci_baseline.json` adds the ones that pass.
+- `useProfiledMoves()` (`mclib/control/profiled_moves.hpp`): `driveTo()`,
+  `turnToAngle()`, `swing()` and `moveToPoint()` with `exit` true follow a
+  planned speed with kS/kV/kA feedforward instead of a distance PID, then
+  settle with their PID. Turns and swings take their own feedforward
+  (`turn_gains`), because turning in place scrubs the wheels. Opt-in;
+  `usePidMoves()` goes back. In the physics simulator the seven stopping
+  moves on four drives took a third less time with every odometry setup
+  (18.4 s against 29.1 s with two tracking wheels) and mostly ended closer.
+  Swings on the faster drives got slower (0.85 s against 0.65 s on
+  `six_motor_450`). A profiled `moveToPoint()` brakes before it turns in
+  place, and its `min_speed` floor stops once the plan has to slow down or
+  once it turns in place. See docs/motion.md.
+- `moveToPose()`: drive a planned curve to a pose with RAMSETE, as an
+  alternative to `boomerang()`. The curve comes from the new
+  `path::planToPose()`, a cubic Bezier that leaves along the start heading
+  and arrives along the target heading. Also as
+  `ChassisController::makeMoveToPoseCommand()` and `Routine::moveToPose()`.
+  In the physics simulator with tracking wheels, to (24, 24) at 90°, it
+  ended closer than `boomerang()` on every drive (0.13-0.60 in against
+  0.40-2.97 in) and was faster on all but the Override cascade drive.
+- The path planner puts the partner's robot and up to two opponents' robots
+  on the Override field (**Other robots** on the Robot & settings tab). Each
+  is a box on a drivetrain that holds still braking, or waits and then
+  drives a path drawn on the field. Steps report hits on them as on a wall,
+  and the run says where each one ended up.
+- **Traction wheels** in the planner: none, the middle pair on the 6-motor
+  drive, or every driven wheel. The planner measures the robot again for
+  each choice, and the exported C++ names it.
+- `tests/vexsim/run.py` runs the motion scenarios on the 6-motor drive with
+  traction wheels in the middle (`six_motor_450_middle_traction/...`).
+- Planner examples `traction_wheels.json` and `override_other_robots.json`.
+- Path planner: a **Drive to a pose on a curve** step that calls
+  `moveToPose()`, with the Path settings' speed limit, acceleration,
+  cornering and RAMSETE gains. The field draws the planned curve, and Export
+  C++ writes the call with the new `path_planner::poseLimits()`. In the
+  example `curve_to_pose.json` it ends 0.07 in and 0.5° off where
+  `boomerang()` ends 0.14 in and 1.7° off, in about the same time.
+- Drives and mechanisms with both 11 W and 5.5 W motors, such as the 55 W
+  drive Override allows (R11): four 11 W motors and two 5.5 W motors.
+  `Chassis` and `MotorGroup` take the 5.5 W ports in their own lists, after
+  the gearset: `Chassis({-1, 2}, {3, -4}, Gearset::Blue, {-5}, {6},
+  geometry, imu)`. Gear every motor to turn the wheels at the same speed at
+  full power. mclib reads the 5.5 W motors on the 11 W motors' shaft and
+  gives them 8/12 of the voltage, so both kinds run at the same fraction of
+  full speed. The 8 V at which a 5.5 W motor reaches full speed is not
+  measured; LemLib uses 7.2 V. `examples/fifty_five_watt_drive.cpp` is a
+  whole program.
+- A 5.5 W motor listed with 11 W motors, or an 11 W motor listed with 5.5 W
+  motors, prints one message on the terminal naming its port. A group of only
+  5.5 W motors in one list reads and drives as before.
+- `device::gearsetRpm()`, `device::voltsFor5_5WMotor()`,
+  `device::readingScaleFor5_5WMotor()`, `device::kMotor5_5WRpm` and
+  `device::kMotor5_5WFullVolts`.
+- The physics scenarios and the path planner have the 55 W drive
+  (`six_motor_55w`): two 11 W motors and one 5.5 W motor a side. The runner
+  drives and reads its 5.5 W motors through `voltsFor5_5WMotor()` and
+  `readingScaleFor5_5WMotor()`. It passes the same moves as `six_motor_450`
+  except the boomerang with two tracking wheels, 1.75 in off against 1.5.
+  Planner example `fifty_five_watt_drive.json`.
+
+### Changed
+
+- The path planner's cascade lift holds itself up with `gravity_volts`
+  instead of adding 0.9 V outside the loop, so the exported C++ uses it too.
+  A robot project needs an mclib with `gravity_volts` to build that export.
+- The path planner reads the lift and the roller through simulated V5 motor
+  encoders: a position held for the smart port's 10 ms and quantised to the
+  cartridge's ticks, as the drive's encoders are. They used to read the
+  exact shaft angle.
+- The planner's lift takes 0.185 in of string stretch off its height
+  reading, measured in the simulator, instead of 0.25 in, and holds with
+  `hold_ki` 0.3 capped at 1 V. 0.5 s after a move the claw is within 0.05 in
+  of every preset but Top, holding nothing or a stack. It was 0.11 to
+  0.22 in high.
+- `Odometry::setConfig()` and `setOdometryConfig()` return false, changing
+  nothing, for a configuration `odometryConfigIsValid()` rejects: the
+  accelerometer together with a sideways tracking wheel.
+- `PoseFusion::setGps()` returns false, changing nothing, for a
+  `latency_ms` longer than the filter remembers. A `PoseFusion` given such a
+  distance sensor has a configuration error, does nothing, and
+  `startOdometry()` refuses it.
+- The planner's claw tank leaks, 10 psi an hour (vexsim's
+  `GUESSES["Air leak"]`). A routine never notices.
+- The path planner checks the drive against R11's 55 W and no longer adds
+  every motor up against R10's 88 W.
+
+### Fixed
+
+- A stopping `moveToPoint()` given a voltage floor (`min_speed`) held it
+  until the target, so a robot that came in fast from a chained move could
+  not brake and slid past. Inside 8 in the floor now also stops once
+  braking at 150 in/s² from the robot's speed would only just stop it at the
+  target. In `tests/vexsim/chain_audit.py`, which now passes each step its
+  floor (the planner's change to `run()` had dropped it), 6 of 18 stops on
+  the 450 rpm drives timed out with 4-8 V floors and 2 still do. Those 18
+  stops took 25.9 s in all, down from 29.2 s; one took 0.05 s longer. On
+  `four_motor_200` they took 15.25 s, down from 15.74 s. Calls without a
+  floor are unchanged.
+
 ## 0.4.3
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. It now comes

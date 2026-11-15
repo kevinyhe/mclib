@@ -17,6 +17,7 @@
   const ACTION_MENU_REACH_PX = 12;
   const AIM_REACH_PX = 14;
   const AUTONOMOUS_S = 15;
+  const ROBOT_LOG_COLOR = "#15803d";
   const SPEED_STOPS = [[0, [44, 95, 214]], [0.35, [20, 163, 163]], [0.7, [230, 180, 0]], [1, [216, 67, 47]]];
   const SHORTCUTS = [
     ["Click the field", "Add a point to the end of the selected path, or place the selected step's target"],
@@ -50,6 +51,7 @@
     selected: 0,
     point: null,
     action: null,
+    drawingPathFor: null,
     draggedStep: null,
     history: [],
     future: [],
@@ -73,7 +75,7 @@
     view: { x: 0, y: 0, scale: 4 },
     viewMovedByUser: false,
     size: { width: 0, height: 0 },
-    layers: { plan: true, truth: true, odometry: true, compare: true },
+    layers: { plan: true, truth: true, odometry: true, compare: true, batch: true, robotLog: true },
     drag: null,
     hover: null,
     probe: null,
@@ -90,6 +92,11 @@
     trackKey: null,
     scrubFrom: null,
     pieceCache: null,
+    batch: null,
+    batches: [],
+    batchTimer: null,
+    repeatSettings: null,
+    robotLog: null,
   };
 
   const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -344,6 +351,7 @@
     const step = selectedStep();
     if (step.type !== "path" || state.point === null || state.point >= step.points.length) state.point = null;
     if (state.action !== null && state.action >= (step.actions ?? []).length) state.action = null;
+    if (state.drawingPathFor && !otherRobot(state.drawingPathFor)) state.drawingPathFor = null;
   }
 
   function replaceProject(project, message) {
@@ -386,7 +394,7 @@
       step.y = round(pose.y + ahead.y, 0.5);
     }
     if (type === "turn") step.heading = wrapDegrees(Math.round(pose.heading + 90));
-    if (type === "boomerang") step.heading = Math.round(pose.heading);
+    if (["boomerang", "pose"].includes(type)) step.heading = Math.round(pose.heading);
     if (type === "wall_reset") Object.assign(step, { x: round(pose.x, 0.5), y: round(pose.y, 0.5), heading: Math.round(pose.heading) });
     if (["arc", "swing"].includes(type)) step.heading = wrapDegrees(Math.round(pose.heading + 90));
     if (type === "reverse_arc") step.heading = wrapDegrees(Math.round(pose.heading - 90));
@@ -577,13 +585,13 @@
     clearTimeout(state.engineTimer);
     const robot = state.project.robot;
     try {
-      let answer = await api(`/api/engine?preset=${robot.preset}&tracking=${robot.tracking}`);
+      let answer = await api(`/api/engine?preset=${robot.preset}&tracking=${robot.tracking}&traction=${robot.traction}`);
       if (answer.ok && !answer.data.ready && answer.data.task?.status !== "running" && answer.data.task?.status !== "error") {
-        answer = await api("/api/prepare", { method: "POST", body: { preset: robot.preset, tracking: robot.tracking } });
+        answer = await api("/api/prepare", { method: "POST", body: { preset: robot.preset, tracking: robot.tracking, traction: robot.traction } });
         if (answer.ok) log(`Preparing to plan for ${preset().label}: compiling mclib and measuring the robot.`);
       }
       if (!answer.ok) throw new Error(answer.data.error);
-      const wasReady = state.engine?.ready && state.engine.preset === robot.preset && state.engine.tracking === robot.tracking;
+      const wasReady = state.engine?.ready && state.engine.preset === robot.preset && state.engine.tracking === robot.tracking && state.engine.traction === robot.traction;
       state.engine = answer.data;
       if (state.engine.ready && !wasReady) {
         const ff = state.engine.feedforward;
@@ -681,6 +689,14 @@
     }
   }
 
+  function runName(job) {
+    return job.batch ? `run ${job.number} of run-many ${job.batch.number}` : `run ${job.number}`;
+  }
+
+  function capitalized(text) {
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
   function ranSteps(summary) {
     if (summary.broke_rule_in_step === null) return `ran all ${summary.steps} steps`;
     return `stopped after step ${summary.broke_rule_in_step + 1}, which broke a rule (ran ${summary.ran_steps} of ${summary.steps})`;
@@ -726,7 +742,9 @@
 
   function timeline() {
     const frames = trace();
-    if (state.shown) return { kind: "run", end: frames.at(-1)?.t ?? 0 };
+    const logEnd = state.robotLog ? state.robotLog.log.duration + state.robotLog.offset : 0;
+    if (state.shown) return { kind: "run", end: Math.max(frames.at(-1)?.t ?? 0, logEnd) };
+    if (state.robotLog) return { kind: "log", end: logEnd };
     const plan = planFor(state.selected);
     if (plan) return { kind: "plan", end: plan.duration_s, plan };
     return { kind: "none", end: 0 };
@@ -783,6 +801,8 @@
     $("routine-name").value = state.project.name;
     $("undo").disabled = !state.history.length;
     $("redo").disabled = !state.future.length;
+    $("layer-batch").hidden = !state.batch;
+    $("layer-robot-log").hidden = !state.robotLog;
     renderSteps();
     renderPane();
     renderPill();
@@ -808,7 +828,7 @@
       case "turn": return `to face ${trim(step.heading)}°`;
       case "turn_to_point": return `${step.direction === -1 ? "back toward" : "face"} ${p(step.x, step.y)}`;
       case "point": return `to ${p(step.x, step.y)}${step.direction === -1 ? ", backward" : ""}`;
-      case "boomerang": return `to ${p(step.x, step.y)} facing ${trim(step.heading)}°`;
+      case "boomerang": case "pose": return `to ${p(step.x, step.y)} facing ${trim(step.heading)}°${step.direction === -1 ? ", backward" : ""}`;
       case "arc": case "reverse_arc": return `to ${trim(step.heading)}°, radius ${trim(Math.abs(step.radius))} in ${step.radius < 0 ? "left" : "right"}`;
       case "swing": return `to ${trim(step.heading)}°${step.direction === -1 ? ", backward" : ""}`;
       case "wall_reset": return `set odometry to ${p(step.x, step.y)}, ${trim(step.heading)}°`;
@@ -1012,6 +1032,7 @@
   }
 
   function renderActivity() {
+    renderRobotLogPanel();
     const job = state.shown;
     const summary = $("run-summary");
     let stages = null;
@@ -1023,19 +1044,20 @@
       if (status === "finished" || status === "broke_rule") {
         summary.className = `run-summary${status === "broke_rule" ? " fail" : ""}`;
         const broken = job.result.steps.flatMap((row) => row.rule_breaks);
-        summary.replaceChildren(`Run ${job.number}: ${ranSteps(result)}`,
+        summary.replaceChildren(`${capitalized(runName(job))}: ${ranSteps(result)}`,
           ...broken.map((text) => element("span", { text })),
           element("span", { text: `${fmt(result.simulated_s, 2)} s of robot time.` }),
-          ...autonomousLines(job.result.autonomous).map((text) => element("span", { class: "auton", text })));
+          ...autonomousLines(job.result.autonomous).map((text) => element("span", { class: "auton", text })),
+          ...(job.result.other_robots ?? []).map((robot) => element("span", { text: robot.text })));
       } else if (status === "error") {
         summary.className = "run-summary error";
-        summary.replaceChildren(`Run ${job.number} stopped with an error`, element("span", { text: job.error }));
+        summary.replaceChildren(`${capitalized(runName(job))} stopped with an error`, element("span", { text: job.error }));
       } else if (status === "cancelled") {
         summary.className = "run-summary";
-        summary.replaceChildren(`Run ${job.number} was cancelled.`);
+        summary.replaceChildren(`${capitalized(runName(job))} was cancelled.`);
       } else {
         summary.className = "run-summary";
-        summary.replaceChildren(status === "queued" ? `Run ${job.number} is waiting to start…` : `Run ${job.number} is running…`);
+        summary.replaceChildren(`${capitalized(runName(job))} ${status === "queued" ? "is waiting to start…" : "is running…"}`);
       }
     } else {
       summary.hidden = true;
@@ -1051,7 +1073,329 @@
         element("span", { class: "time", text: stage.status === "skipped" ? "skipped" : shown }),
         stage.detail ? element("span", { class: "detail", text: stage.detail }) : null);
     }));
-    $("activity-clock").textContent = job ? `Run ${job.number}` : stages ? "Preparing" : "";
+    $("activity-clock").textContent = job ? capitalized(runName(job)) : stages ? "Preparing" : "";
+  }
+
+  const BATCH_GOING = ["queued", "running"];
+  const RUN_DONE = ["finished", "broke_rule", "cancelled", "error"];
+
+  function repeatSettings() {
+    state.repeatSettings ??= Object.fromEntries(Object.entries(state.config.repeat).map(([key, info]) => [key, info.default]));
+    return state.repeatSettings;
+  }
+
+  function batchGoing(batch = state.batch) {
+    return Boolean(batch) && BATCH_GOING.includes(batch.status);
+  }
+
+  async function refreshBatches() {
+    const answer = await api("/api/batches").catch(() => null);
+    if (!answer?.ok) return;
+    state.batches = answer.data.batches;
+    if (!state.batch && state.batches.length) await loadBatch(state.batches[0].id);
+  }
+
+  async function loadBatch(id) {
+    clearTimeout(state.batchTimer);
+    if (!id) {
+      state.batch = null;
+      renderAll();
+      return;
+    }
+    const answer = await api(`/api/batches/${id}`);
+    if (!answer.ok) return log(answer.data.error, "error");
+    state.batch = answer.data;
+    if (batchGoing()) state.batchTimer = setTimeout(() => pollBatch(id), 1000);
+    renderAll();
+  }
+
+  async function startBatch() {
+    const body = { project: clone(state.project), settings: clone(repeatSettings()) };
+    const answer = await api("/api/batches", { method: "POST", body }).catch((error) => ({ ok: false, data: { error: error.message } }));
+    if (!answer.ok) {
+      if (Number.isInteger(answer.data.step)) selectStep(answer.data.step);
+      notify(`Run many not started. ${answer.data.error}`, "error");
+      return;
+    }
+    state.batch = answer.data;
+    state.layers.batch = true;
+    $("layer-batch").querySelector("input").checked = true;
+    log(`Run-many ${state.batch.number} started: ${state.batch.runs.length} runs.`);
+    await refreshBatches();
+    state.batchTimer = setTimeout(() => pollBatch(state.batch.id), 1000);
+    renderAll();
+  }
+
+  async function pollBatch(id) {
+    clearTimeout(state.batchTimer);
+    const answer = await api(`/api/batches/${id}`).catch(() => null);
+    if (state.batch?.id !== id) return;
+    if (answer?.ok) {
+      const wasGoing = batchGoing();
+      state.batch = answer.data;
+      if (wasGoing && !batchGoing()) reportBatch(state.batch);
+      $("layer-batch").hidden = false;
+      renderBatchPane();
+      drawField();
+    }
+    if (batchGoing()) state.batchTimer = setTimeout(() => pollBatch(id), 1000);
+  }
+
+  async function cancelBatch() {
+    if (!batchGoing()) return;
+    const answer = await api(`/api/batches/${state.batch.id}/cancel`, { method: "POST", body: {} });
+    if (answer.ok) state.batch = answer.data;
+    log(`Cancelling run-many ${state.batch.number}.`);
+    renderBatchPane();
+  }
+
+  function reportBatch(batch) {
+    if (batch.status === "cancelled") return log(`Run-many ${batch.number} was cancelled.`);
+    const minutes = (batch.finished_at - batch.started_at) / 60;
+    notify(`Run-many ${batch.number}: ${batch.report?.runs ?? 0} of ${batch.runs.length} runs finished in ${fmt(minutes, 1)} min.`, "ok");
+    refreshBatches();
+  }
+
+  function batchProgress(batch) {
+    const done = batch.runs.filter((run) => RUN_DONE.includes(run.status)).length;
+    const running = batch.runs.filter((run) => run.status === "running").length;
+    const failed = batch.runs.filter((run) => run.status === "error").length;
+    const parts = [`${done} of ${batch.runs.length} runs done`];
+    if (running) parts.push(`${running} running`);
+    if (failed) parts.push(`${failed} stopped with an error`);
+    if (batchGoing(batch) && batch.started_at && done) {
+      const elapsed = Date.now() / 1000 - batch.started_at;
+      parts.push(`about ${fmt((elapsed / done) * (batch.runs.length - done) / 60, 1)} min left`);
+    }
+    return `${capitalized(batch.status === "queued" ? "waiting to start" : parts.join(", "))}.`;
+  }
+
+  function counted(items, unit) {
+    return items.map((item) => `${item.value}${unit} in ${item.runs} run${item.runs === 1 ? "" : "s"}`).join(", ");
+  }
+
+  function batchLines(batch) {
+    const report = batch.report;
+    const lines = [];
+    const failed = batch.runs.filter((run) => run.status === "error").length;
+    if (failed) lines.push(`${failed} run${failed === 1 ? "" : "s"} stopped with an error and ${failed === 1 ? "is" : "are"} left out; each says why below.`);
+    if (report.legal < report.runs) lines.push(`${report.runs - report.legal} of ${report.runs} runs broke a rule.`);
+    if (report.autonomous_red) {
+      lines.push(`Red at the end of the autonomous period: ${counted(report.autonomous_red, " points")}.`);
+      lines.push(`Autonomous Win Point in ${report.win_point} of ${report.runs} runs. Autonomous Bonus in ${report.bonus} of ${report.runs}.`);
+    }
+    if (report.final_red && report.simulated_s.high > AUTONOMOUS_S) lines.push(`Red when the routine ended: ${counted(report.final_red, " points")}.`);
+    const end = report.end;
+    lines.push(`The runs ended within ${fmt(end.furthest_in, 1)} in of (${fmt(end.middle[0], 1)}, ${fmt(end.middle[1], 1)}), facing ${fmt(end.heading_low_deg, 1)}° to ${fmt(end.heading_high_deg, 1)}°.`);
+    if (report.end_error_in) {
+      const miss = report.end_error_in;
+      lines.push(`The last step with a target ended ${fmt(miss.low, 2)} to ${fmt(miss.high, 2)} in from it (median ${fmt(miss.median, 2)}).`);
+    }
+    lines.push(`Each run took ${fmt(report.simulated_s.low, 2)} to ${fmt(report.simulated_s.high, 2)} s of robot time.`);
+    return lines;
+  }
+
+  function stepMiss(step) {
+    if (step.position_error_in) return `${fmt(step.position_error_in.median, 2)} · ${fmt(step.position_error_in.high, 2)} in`;
+    if (step.heading_error_deg) return `${fmt(step.heading_error_deg.median, 1)} · ${fmt(step.heading_error_deg.high, 1)}°`;
+    return "—";
+  }
+
+  function batchStepTable(batch) {
+    const steps = batch.project.steps;
+    const rows = batch.report.steps.map((step) => {
+      const info = steps[step.index];
+      const label = info.note || state.config.step_types[info.type].label;
+      const ran = step.ran < step.runs ? ` (ran in ${step.ran})` : "";
+      return element("tr", { class: step.on_target < step.ran || step.ran < step.runs ? "short" : null },
+        element("td", { text: `${step.index + 1} ${label}` }),
+        element("td", { class: "num", text: `${step.finished}/${step.runs}${ran}` }),
+        element("td", { class: "num", text: `${step.on_target}/${step.runs}` }),
+        element("td", { class: "num", text: stepMiss(step) }));
+    });
+    return element("table", { class: "batch-table" },
+      element("thead", {}, element("tr", {},
+        element("th", { text: "Step" }),
+        element("th", { text: "Finished", title: "Ended before its time limit: a motion on its own, the lift or roller at its preset, the wall found" }),
+        element("th", { text: "On target", title: "Finished, and within the distance and heading set above" }),
+        element("th", { text: "Miss", title: "How far from its target the step ended: median · worst" }))),
+      element("tbody", {}, ...rows));
+  }
+
+  function runSummary(run, stepCount) {
+    const c = run.conditions;
+    const p = run.outcome?.placement ?? c;
+    const movedBack = p.moved_back_from ? ` (moved back to touch ${p.moved_back_from.join(", ")})` : "";
+    const placed = `placed ${fmt(p.placement_x_in, 2)}, ${fmt(p.placement_y_in, 2)} in, ${fmt(p.placement_heading_deg, 1)}°${movedBack} · grip ${fmt(c.grip_percent, 0)}% · battery ${fmt(c.battery_percent, 0)}%`;
+    if (!run.outcome) return [`${capitalized(run.status === "error" ? `stopped with an error: ${run.error}` : run.status)}`, placed];
+    const o = run.outcome;
+    const onTarget = o.steps.filter((step) => step.on_target).length;
+    const parts = [];
+    if (!o.legal) parts.push("broke a rule");
+    if (o.autonomous) parts.push(`red ${o.autonomous.red} at 15 s`);
+    parts.push(`${onTarget} of ${stepCount} steps on target`);
+    if (Number.isFinite(o.end_error_in)) parts.push(`last miss ${fmt(o.end_error_in, 2)} in`);
+    return [parts.join(" · "), placed];
+  }
+
+  function batchRunList(batch) {
+    const byNumber = new Map(batch.runs.map((run) => [run.number, run]));
+    const ordered = [...batch.report?.worst_first ?? [], ...batch.runs.filter((run) => !run.outcome).map((run) => run.number)];
+    const worst = batch.report?.worst_first?.[0];
+    return element("ol", { class: "batch-runs" }, ...ordered.map((number) => {
+      const run = byNumber.get(number);
+      const [what, placed] = runSummary(run, batch.project.steps.length);
+      const shown = state.shown?.id === run.id;
+      return element("li", { class: `${number === worst ? "worst" : ""}${shown ? " shown" : ""}` },
+        element("div", { class: "batch-run-top" },
+          element("b", { text: `Run ${number}${number === worst ? " (worst)" : ""}` }),
+          element("button", { class: "small", disabled: !RUN_DONE.includes(run.status) || run.status === "cancelled",
+            onclick: () => showBatchRun(run), title: "Show this run on the field, with its steps and playback" }, shown ? "Shown" : "Show")),
+        element("div", { text: what }), element("div", { class: "muted small", text: placed }));
+    }));
+  }
+
+  async function showBatchRun(run) {
+    await loadRun(run.id, "shown");
+    log(`Showing ${runName(state.shown)}. Open its routine to run it again on its own.`);
+  }
+
+  function renderBatchPane() {
+    if (state.tab !== "batch") return;
+    const settings = repeatSettings();
+    const going = batchGoing();
+    const form = element("div", { class: "form two" }, ...Object.entries(state.config.repeat).map(([key, info]) =>
+      numberInput({ label: info.label, unit: info.unit, value: settings[key], min: info.low, max: info.high, step: info.step, help: info.help, disabled: going,
+        onCommit: (value) => { settings[key] = key === "count" ? Math.round(value) : value; renderBatchPane(); } })));
+    const buttons = element("div", { class: "batch-buttons" },
+      element("button", { id: "batch-start", class: "primary", disabled: going, onclick: startBatch, title: "Run the routine in the editor this many times" }, `Run ${settings.count} times`),
+      going ? element("button", { id: "batch-cancel", class: "danger", onclick: cancelBatch }, "Cancel") : null);
+    const children = [
+      element("h3", { text: "Run many" }),
+      element("p", { class: "muted small", text: "Runs the routine many times. Each run stands the robot a little off the start pose, with odometry still set to the start pose, and changes the floor grip, the battery and the sensor noise. It shows how often each step lands and how the score spreads." }),
+      form, buttons,
+    ];
+    if (state.batches.length) {
+      const picker = element("select", { id: "batch-picker", onchange: (event) => loadBatch(event.target.value) },
+        ...state.batches.map((item) => element("option", { value: item.id, text: `Run-many ${item.number} · ${item.name} · ${item.status}` })));
+      picker.value = state.batch?.id ?? "";
+      children.push(element("label", { class: "inline batch-picker", title: "Earlier run-manys, newest first" }, "Showing ", picker));
+    }
+    const batch = state.batch;
+    if (batch) {
+      children.push(element("p", { id: "batch-status", class: "batch-status", role: "status", text: `Run-many ${batch.number}, ${batch.runs.length} runs of “${batch.name}”: ${batchProgress(batch)}` }));
+      if (projectKey(batch.project) !== projectKey()) children.push(element("p", { class: "muted small", text: "The routine changed after this run-many started." }));
+      if (batch.report) {
+        children.push(element("ul", { id: "batch-summary", class: "batch-summary" }, ...batchLines(batch).map((text) => element("li", { text }))));
+        children.push(element("h3", { text: "Each step" }), batchStepTable(batch));
+      }
+      children.push(element("h3", { text: "Each run, worst first" }),
+        element("p", { class: "muted small", text: "Worst is a broken rule, then the lowest red score at 15 s, then the fewest steps on target, then the furthest last miss. The thin blue lines on the field are every run; the red one is the worst." }),
+        batchRunList(batch));
+    }
+    $("pane-batch").replaceChildren(...children);
+  }
+
+  function drawBatchOverlay(ctx) {
+    if (!state.batch || !state.layers.batch) return;
+    const worst = state.batch.report?.worst_first?.[0];
+    const runs = state.batch.runs.filter((run) => run.outcome);
+    for (const run of [...runs.filter((item) => item.number !== worst), ...runs.filter((item) => item.number === worst)]) {
+      const points = run.outcome.path.map(([x, y]) => ({ x, y }));
+      const color = run.number === worst ? "rgba(194, 54, 47, .9)" : "rgba(37, 99, 235, .32)";
+      polyline(ctx, points, color, run.number === worst ? 1.8 : 1.1);
+      disc(ctx, points.at(-1), 0.7, color, color);
+    }
+  }
+
+  // A robot log is drawn in routine time: its first row at the offset.
+  function openRobotLog(name, text) {
+    let log;
+    try {
+      log = parseRobotLog(text);
+    } catch (error) {
+      notify(`${name} was not opened. ${error.message}`, "error");
+      return;
+    }
+    state.robotLog = { name, log, offset: 0, comparison: null, comparedWith: null };
+    state.layers.robotLog = true;
+    $("layer-robot-log").querySelector("input").checked = true;
+    if (!state.shown) state.time = log.duration;
+    const dropped = log.dropped ? ` The logger dropped ${log.dropped} rows; the path has gaps there.` : "";
+    notify(`Opened ${name}: ${log.samples.length} rows over ${fmt(log.duration, 2)} s.${dropped}`, log.dropped ? "error" : "ok");
+    renderAll();
+  }
+
+  function robotLogComparison() {
+    const robot = state.robotLog;
+    const result = state.shown?.result;
+    if (!robot || !result) return null;
+    const key = `${state.shown.id} ${robot.offset}`;
+    if (robot.comparedWith !== key) {
+      robot.comparison = compareRobotLog(robot.log, robot.offset, result);
+      robot.comparedWith = key;
+    }
+    return robot.comparison;
+  }
+
+  function renderRobotLogPanel() {
+    const panel = $("robot-log-panel");
+    const robot = state.robotLog;
+    panel.hidden = !robot;
+    if (!robot) return;
+    const offset = numberControl({ label: "Log starts at", unit: "s", value: robot.offset, min: -120, max: 120, step: 0.05,
+      onCommit: (value) => { robot.offset = value; renderAll(); } });
+    const compared = robotLogComparison();
+    const lines = [`${robot.log.samples.length} rows over ${fmt(robot.log.duration, 2)} s${robot.log.dropped ? `, ${robot.log.dropped} dropped` : ""}.`];
+    if (!state.shown?.result) lines.push("Show a finished run to compare the log with it step by step.");
+    else {
+      const steps = compared.filter((item) => item.samples);
+      const worst = steps.reduce((best, item) => (!best || item.simulated_largest_in > best.simulated_largest_in ? item : best), null);
+      if (worst) lines.push(`Furthest from the simulated odometry: ${fmt(worst.simulated_largest_in, 2)} in, in step ${worst.index + 1} at ${fmt(worst.simulated_largest_at_s, 2)} s.`);
+      lines.push(robot.log.hasStep ? "Steps are split by the log's step column." : "Steps are split by the simulated run's step times; add a step column to split by the robot's own.");
+      if (!steps.length) lines.push("No logged rows fall inside any step. Check the start time.");
+    }
+    panel.replaceChildren(
+      element("div", { class: "robot-log-head" }, element("b", { text: robot.name }),
+        element("button", { class: "small quiet", onclick: () => { state.robotLog = null; renderAll(); }, title: "Stop drawing this log" }, "Close")),
+      element("label", { class: "field-label robot-log-offset", title: "Seconds into the routine when the log's first row was written. Move the log later or earlier to line it up with the run." },
+        propName("Log starts at", "s"), offset),
+      ...lines.map((text) => element("p", { class: "muted small", text })));
+  }
+
+  function robotLogCard(index) {
+    const compared = robotLogComparison()?.find((item) => item.index === index);
+    if (!compared) return null;
+    if (!compared.samples) return element("div", { class: "card robot-log" }, element("h3", { text: "Robot log" }), element("p", { text: "The log has no rows in this step." }));
+    const lines = [`${compared.samples} rows from ${fmt(compared.from, 2)} to ${fmt(compared.to, 2)} s.`,
+      `Furthest from the simulated odometry: ${fmt(compared.simulated_largest_in, 2)} in${Number.isFinite(compared.simulated_largest_at_s) ? ` at ${fmt(compared.simulated_largest_at_s, 2)} s` : ""}.`];
+    if (Number.isFinite(compared.simulated_end_in)) {
+      const turned = Number.isFinite(compared.simulated_end_heading_deg) ? ` and ${fmt(compared.simulated_end_heading_deg, 1)}°` : "";
+      lines.push(`At the end of the step: ${fmt(compared.simulated_end_in, 2)} in${turned} from the simulated odometry.`);
+    }
+    if (Number.isFinite(compared.target_in)) {
+      const turned = Number.isFinite(compared.target_heading_deg) ? ` and ${fmt(compared.target_heading_deg, 1)}°` : "";
+      lines.push(`Ended ${fmt(compared.target_in, 2)} in${turned} from the step's target, by the robot's odometry.`);
+    }
+    if (Number.isFinite(compared.plan_largest_in)) lines.push(`Furthest from the planned path: ${fmt(compared.plan_largest_in, 2)} in.`);
+    return element("div", { class: "card robot-log" }, element("h3", { text: `Robot log: ${state.robotLog.name}` }),
+      element("ul", { class: "readings" }, ...lines.map((text) => element("li", { text }))));
+  }
+
+  function drawRobotLog(ctx) {
+    const robot = state.robotLog;
+    if (!robot || !state.layers.robotLog) return;
+    const shown = robot.log.samples.filter((sample) => sample.t + robot.offset <= state.time + 1e-9);
+    let run = [];
+    for (const sample of shown) {
+      if (Number.isFinite(sample.x) && Number.isFinite(sample.y)) run.push(sample);
+      else if (run.length) { polyline(ctx, run, ROBOT_LOG_COLOR, 2.2); run = []; }
+    }
+    polyline(ctx, run, ROBOT_LOG_COLOR, 2.2);
+    const pose = robotLogPoseAt(robot.log, robot.offset, state.time);
+    if (pose && Number.isFinite(pose.x) && Number.isFinite(pose.y)) {
+      drawRobot(ctx, { x: pose.x, y: pose.y, heading: Number.isFinite(pose.heading) ? pose.heading : 0 }, { stroke: ROBOT_LOG_COLOR, width: 2, dash: [2, 2] });
+    }
   }
 
   function renderLog() {
@@ -1070,7 +1414,7 @@
       const options = [element("option", { value: "", text: empty })];
       for (const run of state.runs) options.push(element("option", { value: run.id, text: runLabel(run) }));
       if (current && !state.runs.some((run) => run.id === current.id)) {
-        options.splice(1, 0, element("option", { value: current.id, text: `Run ${current.number} · ${current.status}` }));
+        options.splice(1, 0, element("option", { value: current.id, text: `${capitalized(runName(current))} · ${current.status}` }));
       }
       select.replaceChildren(...options);
       select.value = current?.id ?? "";
@@ -1157,7 +1501,7 @@
     else if (step.type === "path" && !step.points.length) hint = `Click on the field to add points to step ${state.selected + 1}. The path starts where the robot is.`;
     else if (step.type === "path") hint = `Click to add a point to the end of step ${state.selected + 1}. Click its line to insert one. Drag points and handles to shape it.`;
     else if (step.type === "turn_to_point") hint = `Click or drag to place what step ${state.selected + 1} faces. Near a Goal, Loader or stack it aims at the centre; hold Shift for the grid.`;
-    else if (["point", "boomerang", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
+    else if (["point", "boomerang", "pose", "wall_reset"].includes(step.type)) hint = `Click or drag to place the target of step ${state.selected + 1} (${stepInfo(step).label}).`;
     else if (["turn", "arc", "reverse_arc", "swing"].includes(step.type)) hint = `Drag the round knob to set the heading of step ${state.selected + 1}.`;
     else if (step.type === "drive") hint = `Drag the round knob to set how far step ${state.selected + 1} drives.`;
     const takesActions = state.project.field === "override" && !stepInfo(step).still && !(step.type === "path" && !step.points.length);
@@ -1209,7 +1553,7 @@
         (value) => edit(() => { step[key] = key === "direction" ? Number(value) : value; }));
     }
     return numberInput({ label: info.label, unit: info.unit, value: step[key], min: info.low, max: info.high, step: info.step,
-      help: info.help, onCommit: (value) => edit(() => {
+      help: info.help_by_step ? info.help_by_step[step.type] : info.help, onCommit: (value) => edit(() => {
         step[key] = ["timeout_ms", "wait_ms"].includes(key) ? Math.round(value) : value;
         if (stepInfo(step).timed_by === key) step.timeout_ms = step[key];
       }) });
@@ -1289,13 +1633,14 @@
   }
 
   function renderPane() {
-    for (const tab of ["step", "robot", "telemetry"]) {
+    for (const tab of ["step", "robot", "telemetry", "batch"]) {
       $(`tab-${tab}`).setAttribute("aria-selected", String(state.tab === tab));
       $(`pane-${tab}`).hidden = state.tab !== tab;
     }
     if (state.tab === "step") renderStepPane();
     if (state.tab === "robot") renderRobotPane();
     if (state.tab === "telemetry") renderTelemetry();
+    if (state.tab === "batch") renderBatchPane();
   }
 
   function foldedList(title, items) {
@@ -1309,7 +1654,7 @@
     const row = stepRows().find((item) => item.index === index);
     if (!row || !Array.isArray(row.rule_breaks)) return null;
     const broke = row.rule_breaks.length > 0;
-    const title = row.executed === false ? "Skipped in this run" : broke ? `Broke a rule in run ${state.shown.number}` : `In run ${state.shown.number}`;
+    const title = row.executed === false ? "Skipped in this run" : broke ? `Broke a rule in ${runName(state.shown)}` : `In ${runName(state.shown)}`;
     return element("div", { class: `card result${broke ? " fail" : ""}` },
       element("h3", { text: title }),
       row.executed === false ? element("p", { text: row.skipped_because }) : null,
@@ -1364,6 +1709,8 @@
     children.push(element("div", { class: "form" }, element("label", { class: "field-label", title: noteHelp }, propName("Label"), note, helpTip(noteHelp))));
     const result = resultCard(index);
     if (result) children.push(result);
+    const logged = robotLogCard(index);
+    if (logged) children.push(logged);
     if (step.type === "path") children.push(...pathPane(step, index));
     else {
       const fields = info.fields.map((key) => fieldInput(step, key));
@@ -1579,7 +1926,7 @@
     keepSelectionValid();
     changed();
     checkEngine();
-    notify(`Opened the routine run ${run.number} used. Ctrl+Z goes back to yours.`, "ok");
+    notify(`Opened the routine ${runName(run)} used. Ctrl+Z goes back to yours.`, "ok");
   }
 
   function pointBody(step, i, layout, top) {
@@ -1637,14 +1984,27 @@
           "What the robot drives on. On a game field it hits the walls, Goals and Loaders, and the results say where and how hard.",
           (value) => edit(() => {
             project.field = value;
-            if (value !== "override") project.preload = "none";
+            if (value !== "override") {
+              project.preload = "none";
+              project.other_robots = [];
+              state.drawingPathFor = null;
+            }
           }, { replan: false })),
         project.field === "override" ? selectInput(config.preload.label, project.preload ?? "none", Object.entries(config.preload.choices), config.preload.help,
           (value) => edit(() => { project.preload = value; }, { replan: false })) : null),
       element("h3", { text: "Robot" }),
       element("div", { class: "form" },
         selectInput("Drivetrain", robot.preset, Object.entries(config.presets).map(([key, value]) => [key, value.label]),
-          "The simulated robot. Changing it measures the new robot once (a few seconds).", (value) => { edit(() => { robot.preset = value; }); robotChanged(); }),
+          "The simulated robot. Changing it measures the new robot once (a few seconds).", (value) => {
+            edit(() => {
+              robot.preset = value;
+              if (!tractionChoices(value).some(([key]) => key === robot.traction)) robot.traction = "none";
+            });
+            robotChanged();
+          }),
+        selectInput("Traction wheels", robot.traction, tractionChoices(robot.preset),
+          "Which driven wheels are traction wheels; the rest are omnis. Traction wheels grip sideways, so the robot slides less in turns but turns slower.",
+          (value) => { edit(() => { robot.traction = value; }); robotChanged(); }),
         selectInput("Odometry sensors", robot.tracking, Object.entries(config.tracking), "Drive encoders slip; tracking wheels do not.",
           (value) => { edit(() => { robot.tracking = value; }); robotChanged(); }),
         selectInput("Heading from", robot.heading_source, Object.entries(config.heading_sources), "The IMU is the usual choice.",
@@ -1655,6 +2015,7 @@
         const info = config.fields[key];
         return numberInput({ label: info.label, unit: info.unit, value: project.start[key], min: info.low, max: info.high, step: info.step, onCommit: (value) => edit(() => { project.start[key] = value; }) });
       })),
+      ...(project.field === "override" ? otherRobotsForm() : []),
       element("h3", { text: "Paths" }),
       groupForm("path_defaults", config.path_defaults),
       element("h3", { text: "Simulated conditions" }),
@@ -1662,9 +2023,89 @@
       element("h3", { text: "Speed-up and slow-down" }),
       groupForm("slew", config.slew),
       element("h3", { text: "Controller gains (PID)" }),
-      element("p", { class: "muted small", text: "Used by drive, turn, point, boomerang, arc and swing steps, and by the settle at the end of a path." }),
+      element("p", { class: "muted small", text: "Used by drive, turn, point, boomerang, arc and swing steps, and by the settle at the end of a path or a curve to a pose." }),
       element("div", { class: "form three" }, ...Object.entries(config.gains).map(([key, info]) =>
         numberInput({ label: info.label, value: project.gains[key], min: 0, max: 100, step: 0.05, onCommit: (value) => edit(() => { project.gains[key] = value; }) }))));
+  }
+
+  function tractionChoices(preset) {
+    const wheelsPerSide = state.config.presets[preset].wheels_per_side;
+    return Object.entries(state.config.traction).filter(([key]) => key !== "middle" || wheelsPerSide === 3);
+  }
+
+  const OTHER_ROBOT_WALL_GAP_IN = 10;
+  const OTHER_ROBOT_COLORS = { partner: "#0f766e", "opponent 1": "#a21caf", "opponent 2": "#b45309" };
+  const otherRobot = (role) => state.project.other_robots.find((robot) => robot.role === role);
+  const otherRobotLabel = (role) => state.config.other_robots.roles[role];
+
+  function addOtherRobot(role) {
+    const inside = fieldDrawing().half_in - OTHER_ROBOT_WALL_GAP_IN;
+    const clamp = (value) => Math.max(-inside, Math.min(inside, value));
+    const start = state.project.start;
+    const opposite = { x: clamp(-start.x), y: clamp(-start.y), heading: wrapDegrees(start.heading + 180) };
+    edit(() => {
+      const robot = { role, ...opposite, drive: "four_motor_450", traction: "none", path: [] };
+      for (const [key, info] of Object.entries(state.config.other_robots.fields)) robot[key] = info.default;
+      state.project.other_robots.push(robot);
+    }, { replan: false });
+    notify(`Added the ${otherRobotLabel(role).toLowerCase()} opposite the robot. Drag it on the field to place it.`);
+  }
+
+  function removeOtherRobot(role) {
+    if (state.drawingPathFor === role) state.drawingPathFor = null;
+    edit(() => { state.project.other_robots = state.project.other_robots.filter((robot) => robot.role !== role); }, { replan: false });
+  }
+
+  function toggleDrawingPath(role) {
+    state.drawingPathFor = state.drawingPathFor === role ? null : role;
+    if (state.drawingPathFor) notify(`Click the field to add points to the ${otherRobotLabel(role).toLowerCase()}'s path. Right-click a point to delete it.`);
+    renderAll();
+  }
+
+  function otherRobotForm(robot) {
+    const info = state.config.other_robots;
+    const label = otherRobotLabel(robot.role);
+    const change = (mutate) => edit(mutate, { replan: false });
+    const drawing = state.drawingPathFor === robot.role;
+    const pathText = robot.path.length ? `Drives a ${robot.path.length}-point path from where it starts.` : "No path: it holds still with its motors braking.";
+    return element("div", { class: "form", "data-other-robot": robot.role },
+      element("div", { class: "panel-head" }, element("strong", { text: label, style: { color: OTHER_ROBOT_COLORS[robot.role] } }),
+        element("button", { class: "small danger", onclick: () => removeOtherRobot(robot.role) }, "Remove")),
+      element("div", { class: "form three" }, ...["x", "y", "heading"].map((key) => {
+        const field = state.config.fields[key];
+        return numberInput({ label: field.label, unit: field.unit, value: robot[key], min: field.low, max: field.high, step: field.step,
+          onCommit: (value) => change(() => { robot[key] = value; }) });
+      })),
+      selectInput("Drivetrain", robot.drive, Object.entries(info.drives), "Its drivetrain, as one of the planner's robots.", (value) => change(() => {
+        robot.drive = value;
+        if (!tractionChoices(value).some(([key]) => key === robot.traction)) robot.traction = "none";
+      })),
+      selectInput("Traction wheels", robot.traction, tractionChoices(robot.drive), "Omni wheels roll sideways when pushed; traction wheels resist.",
+        (value) => change(() => { robot.traction = value; })),
+      element("div", { class: "form two" }, ...Object.entries(info.fields).map(([key, field]) =>
+        numberInput({ label: field.label, unit: field.unit, value: robot[key], min: field.low, max: field.high, step: field.step, help: field.help,
+          onCommit: (value) => change(() => { robot[key] = key === "start_ms" ? Math.round(value) : value; }) }))),
+      element("p", { class: "muted small", text: pathText }),
+      element("div", { class: "toolbar" },
+        element("button", { class: `small${drawing ? " primary" : ""}`, "aria-pressed": String(drawing), onclick: () => toggleDrawingPath(robot.role) },
+          drawing ? "Done drawing" : "Draw path"),
+        element("button", { class: "small", disabled: !robot.path.length, onclick: () => change(() => { robot.path = []; }) }, "Clear path")));
+  }
+
+  function otherRobotsForm() {
+    const info = state.config.other_robots;
+    const robots = state.project.other_robots;
+    const free = Object.keys(info.roles).filter((role) => !otherRobot(role));
+    const partner = free.filter((role) => role === "partner");
+    const opponents = free.filter((role) => role !== "partner");
+    return [
+      element("h3", { text: info.label }),
+      element("p", { class: "muted small", text: info.help }),
+      ...robots.map(otherRobotForm),
+      element("div", { class: "toolbar" },
+        element("button", { class: "small", id: "add-partner", disabled: !partner.length, onclick: () => addOtherRobot(partner[0]) }, "Add partner"),
+        element("button", { class: "small", id: "add-opponent", disabled: !opponents.length, onclick: () => addOtherRobot(opponents[0]) }, "Add opponent")),
+    ];
   }
 
   function renderTelemetry() {
@@ -2216,8 +2657,8 @@
         knobs.push({ kind: "handle-in", point: i, at: section.endHandle, anchor: section.end });
       });
       step.points.forEach((point, i) => knobs.push({ kind: "anchor", point: i, at: point }));
-    } else if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
-      if (["boomerang", "wall_reset"].includes(step.type)) {
+    } else if (["point", "turn_to_point", "boomerang", "pose", "wall_reset"].includes(step.type)) {
+      if (["boomerang", "pose", "wall_reset"].includes(step.type)) {
         const tip = along(step.heading, HEADING_KNOB_IN);
         knobs.push({ kind: "target-heading", at: { x: step.x + tip.x, y: step.y + tip.y }, pivot: step });
       }
@@ -2229,9 +2670,17 @@
     } else if (step.type === "drive") {
       knobs.push({ kind: "drive-end", at: all[index].end, pivot: start });
     }
+    for (const robot of state.project.other_robots) {
+      robot.path.forEach((point, i) => knobs.push({ kind: "other-robot-point", role: robot.role, point: i, at: point }));
+      const robotTip = along(robot.heading, HEADING_KNOB_IN);
+      knobs.push({ kind: "other-robot-heading", role: robot.role, at: { x: robot.x + robotTip.x, y: robot.y + robotTip.y } });
+    }
     const tip = along(state.project.start.heading, HEADING_KNOB_IN);
     knobs.push({ kind: "start-heading", at: { x: state.project.start.x + tip.x, y: state.project.start.y + tip.y } });
     knobs.push({ kind: "start", at: state.project.start, radius: Math.min(preset().body_width_in, preset().body_length_in) / 2 });
+    for (const robot of state.project.other_robots) {
+      knobs.push({ kind: "other-robot-start", role: robot.role, at: robot, radius: Math.min(robot.length_in, robot.width_in) / 2 });
+    }
     return knobs;
   }
 
@@ -2328,7 +2777,7 @@
     const preview = stepPreview(step, start, trackWidth());
     polyline(ctx, preview, selected ? "#2563eb" : "#7b8494", selected ? 2.5 : 1.8, [6, 5]);
     const color = selected ? "#2563eb" : "#7b8494";
-    if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
+    if (["point", "turn_to_point", "boomerang", "pose", "wall_reset"].includes(step.type)) {
       const p = toScreen(step);
       ctx.save();
       ctx.strokeStyle = color;
@@ -2370,6 +2819,7 @@
     const size = Number.isFinite(frame.body_length_in) ? { body_length_in: frame.body_length_in, body_width_in: frame.body_width_in } : null;
     if (state.layers.odometry && !frame.coordinate_reset) drawRobot(ctx, { x: frame.estimated_x, y: frame.estimated_y, heading: frame.estimated_heading }, { stroke: "#e07b00", dash: [4, 3], size });
     if (state.layers.truth) drawRobot(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, { fill: "rgba(255,255,255,.82)", stroke: "#18202c", width: 2, size });
+    if (state.layers.truth) drawOtherRobotsReplay(ctx, frame);
     if (state.layers.truth && Number.isFinite(frame.claw_gap_in)) drawCascade(ctx, { x: frame.true_x, y: frame.true_y, heading: frame.true_heading }, frame.claw_gap_in);
     if (Number.isFinite(frame.controller_carrot_x)) {
       const p = toScreen({ x: frame.controller_carrot_x, y: frame.controller_carrot_y });
@@ -2381,6 +2831,34 @@
       ctx.moveTo(p.x + 4, p.y - 4); ctx.lineTo(p.x - 4, p.y + 4);
       ctx.stroke();
       ctx.restore();
+    }
+  }
+
+  function otherRobotSize(robot) {
+    return { body_length_in: robot.length_in, body_width_in: robot.width_in };
+  }
+
+  function drawOtherRobots(ctx) {
+    for (const robot of state.project.other_robots) {
+      const color = OTHER_ROBOT_COLORS[robot.role];
+      const route = [robot, ...robot.path];
+      if (robot.path.length) polyline(ctx, route, color, state.drawingPathFor === robot.role ? 2 : 1.4, [6, 4]);
+      robot.path.forEach((point) => drawKnob(ctx, point, color, false, 5));
+      drawRobot(ctx, robot, { stroke: color, dash: [5, 3], width: 1.6, size: otherRobotSize(robot) });
+      const tip = along(robot.heading, HEADING_KNOB_IN);
+      polyline(ctx, [robot, { x: robot.x + tip.x, y: robot.y + tip.y }], color, 1.2);
+      drawKnob(ctx, { x: robot.x + tip.x, y: robot.y + tip.y }, color, false, 5);
+      drawLabel(ctx, { x: robot.x, y: robot.y }, otherRobotLabel(robot.role).replace(" robot", ""), color);
+    }
+  }
+
+  function drawOtherRobotsReplay(ctx, frame) {
+    const robots = state.shown?.project?.other_robots ?? [];
+    for (const robot of robots) {
+      const pose = frame.others?.[robot.role];
+      if (!pose) continue;
+      drawRobot(ctx, { x: pose[0], y: pose[1], heading: pose[2] },
+        { fill: "rgba(255,255,255,.82)", stroke: OTHER_ROBOT_COLORS[robot.role], width: 2, size: otherRobotSize(robot) });
     }
   }
 
@@ -2415,12 +2893,15 @@
     const startTip = along(start.heading, HEADING_KNOB_IN);
     polyline(ctx, [start, { x: start.x + startTip.x, y: start.y + startTip.y }], "rgba(37,99,235,.6)", 1.2);
     drawKnob(ctx, { x: start.x + startTip.x, y: start.y + startTip.y }, "#2563eb", false, 5);
+    drawOtherRobots(ctx);
     const span = timeline();
     if (span.kind === "plan" && state.time > 0) {
       const at = planStateAt(span.plan.states, state.time);
       drawRobot(ctx, { x: at[3], y: at[4], heading: at[5] }, { fill: "rgba(255,255,255,.75)", stroke: "#2563eb", width: 2 });
     }
+    drawBatchOverlay(ctx);
     drawRunOverlay(ctx);
+    drawRobotLog(ctx);
     drawActions(ctx, all, placed);
     if (state.aim && selectedStep().type === "turn_to_point") {
       const p = toScreen(state.aim);
@@ -2645,8 +3126,9 @@
     status.textContent = message;
     status.hidden = !message;
     if (state.viewer.ready) {
+      const others = (state.shown?.project?.other_robots ?? []).map((robot) => ({ ...robot, color: OTHER_ROBOT_COLORS[robot.role] }));
       $("viewer3d").contentWindow.postMessage({ type: "mclib-vexsim-frame", frame: state.shown ? frame : null,
-        pieces: piecesNow(), playing: state.playing, live: shownIsRunning() }, location.origin);
+        pieces: piecesNow(), playing: state.playing, live: shownIsRunning(), others }, location.origin);
     }
   }
 
@@ -2678,6 +3160,14 @@
     if (hit.kind === "fired-action") {
       const when = hit.late ? `had not run when the motion ended, so it ran then, at ${fmt(hit.t, 2)} s` : `ran at ${fmt(hit.t, 2)} s`;
       return `In this run, step ${hit.step + 1}: ${hit.text} ${when}. Click to jump there.`;
+    }
+    if (hit.kind.startsWith("other-robot-")) {
+      const label = otherRobotLabel(hit.role);
+      return {
+        "other-robot-start": `${label}: drag to move where it starts.`,
+        "other-robot-heading": `${label}'s heading knob: drag to turn it.`,
+        "other-robot-point": `Point ${hit.point + 1} of the ${label.toLowerCase()}'s path: drag to move, right-click to delete.`,
+      }[hit.kind];
     }
     const names = {
       anchor: `Point ${hit.point + 1}: drag to move, double-click for automatic heading, right-click to delete.`,
@@ -2795,6 +3285,17 @@
       case "start-heading":
         project.start.heading = snapAngle(bearing(project.start, position), shift);
         break;
+      case "other-robot-start":
+        Object.assign(otherRobot(drag.hit.role), snapped);
+        break;
+      case "other-robot-heading": {
+        const robot = otherRobot(drag.hit.role);
+        robot.heading = snapAngle(bearing(robot, position), shift);
+        break;
+      }
+      case "other-robot-point":
+        Object.assign(otherRobot(drag.hit.role).path[drag.hit.point], snapped);
+        break;
       default:
         break;
     }
@@ -2883,6 +3384,12 @@
     canvas.addEventListener("contextmenu", (event) => {
       const at = canvasPoint(event);
       const hit = hitTest(at.x, at.y);
+      if (hit?.kind === "other-robot-point") {
+        event.preventDefault();
+        edit(() => { otherRobot(hit.role).path.splice(hit.point, 1); }, { replan: false });
+        notify(`Deleted point ${hit.point + 1} of the ${otherRobotLabel(hit.role).toLowerCase()}'s path.`);
+        return;
+      }
       if (hit?.kind === "anchor") {
         event.preventDefault();
         deletePoint(hit.point);
@@ -2925,8 +3432,14 @@
     if (hit?.kind === "anchor") return;
     if (hit) return;
     const snapped = snap(position, shift);
+    if (state.drawingPathFor) {
+      const robot = otherRobot(state.drawingPathFor);
+      if (robot.path.length >= state.config.limits.max_points) return notify(`A path holds up to ${state.config.limits.max_points} points.`, "error");
+      edit(() => { robot.path.push(snapped); }, { replan: false });
+      return;
+    }
     if (step.type === "path") return addPoint(snapped);
-    if (["point", "turn_to_point", "boomerang", "wall_reset"].includes(step.type)) {
+    if (["point", "turn_to_point", "boomerang", "pose", "wall_reset"].includes(step.type)) {
       edit(() => Object.assign(step, aimedOrSnapped(step, position, shift)));
       return;
     }
@@ -3240,7 +3753,14 @@
       play(false);
       setTime(((event.clientX - rect.left - geometry.left) / geometry.plotW) * geometry.end);
     });
-    for (const tab of ["step", "robot", "telemetry"]) $(`tab-${tab}`).addEventListener("click", () => { state.tab = tab; renderPane(); });
+    for (const tab of ["step", "robot", "telemetry", "batch"]) $(`tab-${tab}`).addEventListener("click", () => { state.tab = tab; renderPane(); });
+    $("run-many").addEventListener("click", () => { state.tab = "batch"; renderPane(); });
+    $("robot-log-load").addEventListener("click", () => $("robot-log-file").click());
+    $("robot-log-file").addEventListener("change", async () => {
+      const file = $("robot-log-file").files[0];
+      $("robot-log-file").value = "";
+      if (file) openRobotLog(file.name, await file.text());
+    });
     for (const input of document.querySelectorAll("#layer-toggles input")) {
       input.addEventListener("change", () => { state.layers[input.dataset.layer] = input.checked; drawField(); });
     }
@@ -3311,6 +3831,7 @@
     fitView();
     await checkEngine();
     await refreshRuns();
+    await refreshBatches();
     schedulePlan(0);
   }
 

@@ -39,6 +39,20 @@ Chassis::Chassis(std::vector<std::int8_t> left_ports,
   tare();
 }
 
+Chassis::Chassis(std::vector<std::int8_t> left_ports,
+                 std::vector<std::int8_t> right_ports,
+                 device::Gearset gearset,
+                 std::vector<std::int8_t> left_ports_5_5w,
+                 std::vector<std::int8_t> right_ports_5_5w,
+                 const ChassisDimensions& dimensions,
+                 std::shared_ptr<device::Inertial> imu)
+    : m_left(std::move(left_ports), gearset, std::move(left_ports_5_5w)),
+      m_right(std::move(right_ports), gearset, std::move(right_ports_5_5w)),
+      m_imu(std::move(imu)),
+      m_dimensions(dimensions) {
+  tare();
+}
+
 void Chassis::tank(double left_percent, double right_percent) {
   m_left.setPercent(left_percent);
   m_right.setPercent(right_percent);

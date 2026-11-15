@@ -23,6 +23,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/vexsim/run.py
 | `--filter NAME/` | run matching scenarios, e.g. `safety/`, `wall/`, `six_motor_450/` |
 | `--motion-timeout-ms MS` | per-move time limit |
 | `--tracking-mode MODE` | `drive` (default): drive encoders only. `two`: forward and sideways tracking wheels. `vertical` / `horizontal`: one tracking wheel, drive encoders for the rest |
+| `--accelerometer KIND` | estimate the sideways slide from the IMU's accelerometer, in the `drive` and `vertical` modes, and in `drive` also check the wheels' forward travel against it. `ideal`: vexsim's reading as it is. `realistic`: with the errors a real IMU adds (see below) |
 
 Output includes a build log, `results.json`, and a physics CSV and controller
 trace CSV per scenario. The command exits nonzero if any check fails.
@@ -57,16 +58,39 @@ The job installs `mujoco` and `numpy` at the versions in
   Override cascade robot (four 450 RPM motors on 2.75 in omnis, 14 lb, one
   sideways tracking wheel at the centre). It has no forward
   tracking wheel, so it runs only in the `drive` and `horizontal` modes. With
-  its sideways wheel all 16 moves pass; with drive encoders alone the arcs and
-  the boomerang end 4.9-6.9 in off.
+  its sideways wheel all 18 moves pass; with drive encoders alone the arcs,
+  the boomerang and `moveToPose()` end 4.9-6.9 in off, and with the
+  accelerometer added (`imu/override_cascade/*`) 0.4-2.8 in.
+- `six_motor_450_middle_traction`: the six-motor drive again, with traction wheels
+  in the middle pair (vexsim's `with_traction_wheels()`). It slides less, so
+  with drive encoders alone 14 of its 18 moves pass, against 11 on omnis;
+  the diagonal move to a point, the boomerang and both `moveToPose()` moves
+  miss by 2.7, 1.9 and 1.8 in. It passes 18 with two tracking wheels, 15 in
+  `vertical` and 16 in `horizontal`.
+- `six_motor_55w`: the 55 W drive Override allows (R11). Each side has two
+  blue 11 W motors and one 5.5 W motor, all geared to 450 RPM at the wheels.
+  The runner drives it as a `MotorGroup` with the 5.5 W motors in their own
+  list does: they get `voltsFor5_5WMotor()` of each voltage, and their
+  readings are scaled by `readingScaleFor5_5WMotor()`. vexsim's 5.5 W motor
+  reaches 200 RPM at 8 V, as mclib assumes. It passes 11 of 18 moves in
+  `drive`, 17 in `two`, 11 in `vertical` and 17 in `horizontal`. That is the
+  same moves as `six_motor_450` except one: the boomerang with two tracking
+  wheels ends 1.75 in off against 1.5 allowed (0.48 in on `six_motor_450`).
+  Without the 8/12 voltage cut that boomerang ends 0.31 in off, but the
+  boomerangs in the other three modes end further off and the arc in
+  `vertical` fails (5.78 in).
 - Drive forward and reverse, turns, turn to point, move to point, boomerang,
-  arcs and swings, at default gains.
+  `moveToPose()` forward and in reverse, arcs and swings, at default gains.
+- `profiled/*`: the seven stopping moves (drive forward and reverse, both
+  turns, both moves to a point, the swing) after `useProfiledMoves()`, on the
+  four drives, against the same targets. They plan at 80% of the measured top
+  speed and 150 in/s².
 - The same two arcs through `followTrajectory()` (RAMSETE):
   `ramsete_arc` and `ramsete_reverse_arc`, plus `ramsete_s_curve` (90° right
   then 90° left, 24 in radius, to (48, 48)). `stress/ramsete_*` runs the arc
   at low battery, low grip and from a start 3.6 in and 8° off the path, and
   the `safety/*/9` cases inject each fault and a timeout into it. Before each, the runner measures
-  the preset's kS, kV and effective track width in the simulator the way
+  the preset's kS, kV, kA and effective track width in the simulator the way
   `docs/motion.md` describes, then plans at 70% of top speed.
   `--ramsete-b`, `--ramsete-zeta` and `--ramsete-accel` change the tuning.
 - Low battery, reduced traction and encoder-only heading.
@@ -76,6 +100,13 @@ The job installs `mujoco` and `numpy` at the versions in
   2% noise and a 78 in range, every 20 ms. The filter's position is fed back
   into odometry by at most 60% of the distance moved each tick. Tracking wheels
   get a lower odometry noise (0.0005 in²/in) than drive encoders (0.09).
+- `imu/*`: every move above again, with odometry estimating the sideways
+  slide from the accelerometer, in the `drive` and `vertical` modes, with
+  realistic accelerometer errors. `override_cascade` runs them in `drive`
+  mode.
+- `gps_late/*`: point moves, arcs and a RAMSETE arc with GPS readings that
+  arrive 50 ms after they were taken, and a `PoseFusion` told so through
+  `GpsInput::latency_ms`.
 - Cancellation, competition disable, IMU and encoder faults, and timeout during
   each of the eight motion functions. Faults are injected while the drive is
   powered.
@@ -102,6 +133,17 @@ These are simulator criteria. The library does not guarantee them on a robot.
 - Physics steps every 1 ms, internally at 0.5 ms or finer. The controller runs at
   the rate set by its own `pros::delay()` calls.
 - Sensors have vexsim's refresh delay, rounding and seeded IMU noise.
+- vexsim's accelerometer is cleaner than a real one: 3 mg of noise, read at
+  the centre of the robot, on a flat floor that never tilts the robot. The
+  runner moves the reading to an IMU 3 in ahead of and 2 in left of the
+  centre. `realistic` then adds a zero error (20 mg standard deviation; the
+  chip's datasheet allows 40 mg once soldered), 1% sensitivity and 1%
+  cross-axis error (datasheet), a floor that tilts up to 0.2° over 48 in, a
+  chassis that pitches and rolls 1% of the push into the reading, shaking up
+  to 25 mg at top speed, and an IMU position told to the odometry 0.25 in
+  off. Both axes, right and forward, get their own zero, sensitivity and
+  cross-axis errors.
+  The floor, pitch, roll and shake numbers are guesses, not measurements.
 - vexsim uses +X forward, +Y left, counter-clockwise positive. The adapter
   converts to mclib's frame.
 - Motor voltage is clamped to 12 V and rounded to whole millivolts, as in the

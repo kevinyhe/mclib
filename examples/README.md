@@ -17,13 +17,14 @@ run on a robot. The gains, distances and voltages in them are placeholders.
 | [driver_control.cpp](driver_control.cpp) | every way to drive in `opcontrol()`: stick shaping, arcade on two sticks or one, tank, curvature, mixing the sticks yourself, commands that borrow the drive, brake modes, and the same robot with no `ChassisController` |
 | [pose_fusion.cpp](pose_fusion.cpp) | correcting odometry from other sensors: distance sensors and GPS blended in while driving, a one-off fix from distance sensors while standing still, and a wall reset |
 | [holonomic_drive.cpp](holonomic_drive.cpp) | an X-drive or mecanum robot in driver control and in autonomous |
+| [fifty_five_watt_drive.cpp](fifty_five_watt_drive.cpp) | a drive with 11 W and 5.5 W motors, such as Override's 55 W drive: the ports, the gearing, an intake with both kinds, and checking the gearing from the motor speeds |
 
 ## Autonomous motion
 
 | File | Shows |
 | --- | --- |
 | [motions.cpp](motions.cpp) | every blocking motion, one use per routine: `driveTo`, turns, `moveToPoint`, `boomerang`, swings, arcs, `wallReset`, with time limits, voltage limits and chaining |
-| [trajectories.cpp](trajectories.cpp) | paths and the ways to follow them: splines, arcs, speed limits and speed zones, `followTrajectory()` with RAMSETE, pure pursuit, motion profiles, feedforward and the routines that measure it |
+| [trajectories.cpp](trajectories.cpp) | paths and the ways to follow them: splines, arcs, speed limits and speed zones, `followTrajectory()` with RAMSETE, `moveToPose()`, profiled `driveTo()`/`turnToAngle()`/`swing()`/`moveToPoint()`, pure pursuit, motion profiles, feedforward and the routines that measure it |
 | [background_motion_and_safety.cpp](background_motion_and_safety.cpp) | a motion running in the background, acting partway through it, ending it early, the cancel requests, what `disabled()` must do, sensor faults, and the autonomous time budget |
 | [routines_and_selector.cpp](routines_and_selector.cpp) | `Routine` step by step with every step and option, commands that run beside the steps, a routine exported from the path planner, the selector, and saving the pick to the SD card |
 

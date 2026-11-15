@@ -123,6 +123,7 @@ function stepEndPose(step, pose, trackWidth) {
     case "point":
       return { x: step.x, y: step.y, heading: wrapDegrees(bearing(pose, step) + (step.direction === -1 ? 180 : 0)) };
     case "boomerang":
+    case "pose":
     case "wall_reset":
       return { x: step.x, y: step.y, heading: step.heading };
     case "arc":
@@ -156,7 +157,9 @@ function designedPoses(project, trackWidth) {
 
 // What to draw for a step that is not a path: a line or arc of where it is
 // meant to go. Boomerang is drawn as a curve toward its approach point; the
-// real route depends on the controller.
+// real route depends on the controller. A curve to a pose is the cubic curve
+// mclib's planToPose() plans: each end runs `lead` times the straight-line
+// distance along its heading, reversed when the robot backs.
 function stepPreview(step, pose, trackWidth) {
   const end = stepEndPose(step, pose, trackWidth);
   switch (step.type) {
@@ -175,6 +178,22 @@ function stepPreview(step, pose, trackWidth) {
         const t = i / 32, u = 1 - t;
         points.push({ x: u * u * pose.x + 2 * u * t * control.x + t * t * step.x,
           y: u * u * pose.y + 2 * u * t * control.y + t * t * step.y });
+      }
+      return points;
+    }
+    case "pose": {
+      const reach = distance(pose, step) * step.lead;
+      const back = step.direction === -1 ? 180 : 0;
+      const leave = along(pose.heading + back, reach);
+      const arrive = along(step.heading + back, reach);
+      const first = { x: pose.x + leave.x, y: pose.y + leave.y };
+      const second = { x: step.x - arrive.x, y: step.y - arrive.y };
+      const points = [];
+      for (let i = 0; i <= 32; i++) {
+        const t = i / 32, u = 1 - t;
+        const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+        points.push({ x: a * pose.x + b * first.x + c * second.x + d * step.x,
+          y: a * pose.y + b * first.y + c * second.y + d * step.y });
       }
       return points;
     }

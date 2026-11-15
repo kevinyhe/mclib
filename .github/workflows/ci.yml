@@ -119,7 +119,7 @@ jobs:
           MCLIB_PLANNER_CACHE: ${{ runner.temp }}/planner/cache
         run: |
           cd tests/vexsim/planner
-          python3 -m unittest -v test_planner test_geometry test_server test_three_files
+          python3 -m unittest -v test_planner test_geometry test_server test_three_files test_batch test_robot_log
           cd "$GITHUB_WORKSPACE"
           python3 -m unittest -v tools.test_tune_drive.SimulatorTests
 

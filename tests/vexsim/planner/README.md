@@ -60,15 +60,16 @@ stops the run on screen.
 
 | Part | What it does |
 | --- | --- |
-| Top bar | name, New, Open, Save, Examples (a menu with each example's description), Undo, Redo, Mirror (left ↔ right or front ↔ back), Export C++, status, ? for help, Run. Short messages such as "Saved" or "Mirrored" show at the bottom of the field for a few seconds. |
+| Top bar | name, New, Open, Save, Examples (a menu with each example's description), Undo, Redo, Mirror (left ↔ right or front ↔ back), Export C++, status, ? for help, Run many, Run. Short messages such as "Saved" or "Mirrored" show at the bottom of the field for a few seconds. |
 | Routine (left) | the start pose and the steps in order, with each step's label in full, its plan or result, and its lift and claw actions. **Add a step** opens a list of step types with a search box: type part of a name, then Enter adds the first match after the selected step. Drag a step to move it. Its ⋯ button duplicates, moves or deletes it. |
-| Activity (left) | each stage of the current job with its time, then a log of what happened |
-| Field (centre) | the routine on a 144 in field. Drag to edit. Top view, or on the Override field a 3D view. |
+| Activity (left) | each stage of the current job with its time, then a log of what happened. With a robot log open, its name, its start time and how far it got from the run. |
+| Field (centre) | the routine on a 144 in field. Drag to edit. Top view, or on the Override field a 3D view. **Robot log…** draws a log from your robot. |
 | Playback | play, playback speed, which run to show, which run to compare with. Under them, a timeline with one block per step, from when the step started to when it ended (red underline: it broke a rule), diamonds where lift and claw actions ran, and a dashed red line at 15 s, when autonomous ends. Click or drag on it to move playback; clicking a block also selects that step. Before a run it shows the selected path's plan. When the routine has changed since the run shown, **Open its routine** puts the routine that run used back in the editor; Ctrl+Z goes back to yours. |
 | Graph | hidden until you pick a tab: Speed (planned and simulated), Voltage, Heading, Odometry error, or Lift and claw (claw height, the height the lift was sent to and the jaw gap, on the Override robot). Its time axis lines up with the timeline above it. Click it to jump there. Hide closes it again. |
 | Step tab (right) | the selected step's settings, its plan, and what it did in the last run. Each setting has its name on the left and its value on the right, with the unit inside the box. **Automatic** (or **Default**) next to a value means the planner works it out; click it to set your own. Lift and claw actions show one line each; click one to edit it. |
-| Robot & settings tab | drivetrain, odometry sensors, start pose, path defaults, simulated battery and grip, PID gains |
+| Robot & settings tab | drivetrain, traction wheels, odometry sensors, start pose, the other robots on the Override field, path defaults, simulated battery, grip and how far off the start the robot is placed, PID gains |
 | Telemetry tab | every recorded value at the playback time: position, speeds, controller, motors, sensors |
+| Run many tab | run the routine many times with the start and conditions changed, and see how the runs spread |
 
 ## Paths
 
@@ -95,11 +96,19 @@ itself cannot be planned; the message says which section and what to change.
 ## Other steps
 
 Drive straight, turn to heading, turn to face a point, drive to a point,
-drive to a pose (boomerang), arc, reverse arc, swing turn and wall reset.
-Each one calls the mclib function named next to its title. Drag its target
-or its round heading knob on the field, or type the values. A wall reset
-must be the last step. On the open floor there are no walls, so it locks
-the motors to make them stall.
+drive to a pose (boomerang), drive to a pose on a curve, arc, reverse arc,
+swing turn and wall reset. Each one calls the mclib function named next to
+its title. Drag its target or its round heading knob on the field, or type
+the values. A wall reset must be the last step. On the open floor there are
+no walls, so it locks the motors to make them stall.
+
+Drive to a pose on a curve calls `moveToPose()`. mclib plans a curve that
+leaves along the robot's heading and arrives along the target heading, each
+end straight for Lead times the distance, and follows it with RAMSETE like a
+path, with the Path settings' speed limit, acceleration, cornering, `b` and
+`zeta`. The field draws that curve. A target behind the robot, or one the
+curve would have to fold back to reach, is refused; turn first or lower the
+Lead. Export C++ writes the same call with `path_planner::poseLimits()`.
 
 On a game field the robot pushes on the real wall, and `wallReset()` only
 counts a stall when the motors draw the stall current and turn slower than
@@ -197,6 +206,58 @@ VEX's field CAD. New routines start at (0, -61.7) facing
 +Y, the robot's back 1 in off that wall, so the roller's flaps are 0.25 in
 in front of the left Toggle and do not touch it.
 
+## Traction wheels
+
+**Traction wheels** on the Robot & settings tab picks which driven wheels
+are traction wheels. The rest stay omnis.
+
+| Choice | Wheels |
+| --- | --- |
+| None | omnis on every corner |
+| The middle wheel each side | the middle pair on a 6-wheel drive (the 6-motor drivetrains only) |
+| Every driven wheel | all of them |
+
+Omnis roll sideways freely. Traction wheels grip sideways as hard as they
+grip forward (0.81 static, 0.66 sliding), so the robot slides less in
+turns but turns slower: the wheels at the ends have to scrub sideways to
+turn it. vexsim measured the 6-motor drive in a 12 V / 7 V curve: it slid
+sideways at 30 in/s on omnis, 6 in/s with middle traction wheels and 1 in/s
+with all traction, and turned at 155, 94 and 38 °/s. Changing the setting
+measures the robot again, once. The exported C++ says which wheels were
+traction wheels in its "Simulated on" line.
+
+## Other robots
+
+On the Override field, **Other robots** on the Robot & settings tab puts
+the partner's robot and up to two opponents' robots on the field, so you
+can check your routine does not hit them. **Add partner** and **Add
+opponent** place one opposite your robot; drag it on the field to move it,
+and its knob to turn it.
+
+Each is a box the size you give it (6 to 24 in each way, 6 to 50 in tall,
+2 to 40 lb) on a drivetrain from the list, with traction wheels if you
+pick them. It has no lift or claw, and no bumpers. Your robot, the Pins and
+Cups, the walls and the Goals all hit it. It holds still with its motors
+braking, as teams set them in autonomous. **Draw path**, then clicks on the
+field, give it a path; right-click a point to delete it. With a path, it
+waits for **Starts driving at**, then follows the path from where it really
+is (pure pursuit, 12 in ahead) at its **Drive voltage**, slows to 3 V over
+the last 24 in, and brakes 2 in from the end or once past it.
+
+A braking robot on omnis rolls away sideways when pushed and resists a push
+from the front. In vexsim, the Override robot driving at 8 V for 2 s pushed
+a 15 lb robot 35 in head-on and 49 in from the side.
+
+When your robot hits one, the step says so as for a wall: "Hit the partner
+robot at (6, -48) 0.45 s into the step, peak 72 N, drive current up to
+2.3 A." That was the Override robot driving 12 in into a parked 12 in
+partner, which it pushed 4.8 in. If a hit stopped your robot short, the
+hint names that robot.
+The run's summary says where each other robot ended up and whether it
+finished its path. A robot that starts inside a Goal, a stack, a wall or
+another robot is refused before the run, by name. The exported C++ lists
+the other robots in its header; it does not drive them.
+
 ## The Override robot: cascade lift, pneumatic claw and Toggle roller
 
 On the Override field the robot is vexsim's cascade robot, built like the
@@ -274,8 +335,10 @@ and **Export C++** copies it.
 
 The claw height is the middle of the jaws. A motor turn winds
 pi / 1.5 = 2.09 in of string and raises the claw five times that,
-10.47 in. The lift reads its height from the motors' angle and takes off
-the 0.25 in the strings stretch once the stages hang on them.
+10.47 in. The lift reads its height from one motor's encoder and takes off
+the 0.185 in the strings stretch once the stages hang on them. The encoder
+works as the drive's do: a reading is held for the smart port's 10 ms and
+counts the green cartridge's 900 ticks a turn, 0.012 in of claw height.
 
 | Claw preset | Jaws |
 | --- | --- |
@@ -311,7 +374,7 @@ Four ways to use them:
 To score a stack, drive the bite up to it with the lift down, close the
 claw, lift, drive the bite onto the Goal, lower the lift onto it and open
 the claw. [override_stack_to_goal.json](examples/override_stack_to_goal.json)
-does this. Four things make it work:
+does this. Five things make it work:
 
 - Arrive with the stack within 0.1 in of the claw's middle side to side.
   Further off, the front end of a jaw pushes the stack ahead and tips it.
@@ -324,17 +387,20 @@ does this. Four things make it work:
   front to back, because the rubber pads grip too well for the V to slide
   it back. A stack held 0.4 in or more ahead of the middle lands on the
   side of the Goal's Pin.
+- Lift the stack Off the floor before turning with it. At Down its Cup
+  stands on the foam, and turning drags it.
 - Carry it high, at Over a stack on a Neutral Goal (22.66 in), until the
   bite has taken the Goal. Carried at Over a Neutral Goal, 0.25 in over the
   Pin's tip, the Pin knocks the stack out of the jaws as the robot stops
   on the Goal, even at 10 in/s.
 - Give the drive onto the Goal a short time limit. The Goal stops the robot
-  about 1.1 s in, and the drive then pushes on it until the limit runs out.
+  about 1.3 s in, and the drive then pushes on it until the limit runs out.
 
 To turn a Toggle, back up to 2 in or less off the wall in the middle of
 the Toggle and add a **Turn a Toggle with the roller** step. It turns the
 roller as far as you set, read from its motor's encoder, while the drive
-pushes the robot back onto the wall, then stops both. Each flap turns the
+pushes the robot back onto the wall, then stops both. The encoder works as
+the lift's does: held for 10 ms and 900 ticks a turn. Each flap turns the
 Toggle one face, its top toward the wall. On red's wall (the left and
 bottom Toggles) the first face from yellow is blue and the second red. On
 blue's wall (top and right) the first is red and the second blue. With the
@@ -381,12 +447,12 @@ yellow Pin at (-24, -47), 9.8 in up, 0.00 s into the step: the claw
 opened." A held stack is one Pin and one Cup, inside <SG6> (Q&A 3166).
 
 The first step checks the robot against the rules: at most 18 in long, wide
-and tall at the start (SG1), 88 W of motors in all (R10) and 55 W on the
-drive (R11). The three lift motors are 33 W and the claw uses no motor, so
-a six-motor drive (66 W) breaks both: "The drive motors are rated 66 W and
-all the motors 99 W. The limits are 55 W for the drive (R11) and 88 W in
-all (R10)." New Override routines use the owner's four-motor drive (44 W,
-77 W in all). During the run a step breaks a rule if the robot gets wider or
+and tall at the start (SG1) and 55 W on the drive (R11). A six-motor drive
+of 11 W motors (66 W) breaks R11: "The drive motors are rated 66 W. The
+limit is 55 W (R11)." The 55 W drive of four 11 W and two 5.5 W motors is
+inside it. The planner does not check the 88 W limit on all the motors
+(R10). New Override routines use the owner's four-motor drive (44 W).
+During the run a step breaks a rule if the robot gets wider or
 longer than 24 in (SG2), taller than 50 in (SG3), or holds more than one
 Pin and one Cup (SG6).
 
@@ -451,12 +517,15 @@ and `vexsim/foam.py`. The planner adds these:
 | What | Guess | Why |
 | --- | --- | --- |
 | Lift presets | the claw heights in the table above | worked out from the Goal and Pin heights: "on" sets the held Cup's rim on the Pin's flange, "over" carries the Cup's bottom 0.25 in over the Pin's tip; vexsim's `LIFT_HEIGHTS` |
-| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V, plus 0.9 V to hold the stages up with the rubber bands' help | tuned in the simulator: every preset ends within 0.1 in, except On a Neutral Goal, where the stack resting on the Pin stops it up to 0.27 in high |
-| String stretch | 0.25 in | measured in the simulator: 0.24 in holding nothing, 0.26 to 0.31 in holding a stack |
+| Lift gains | kp 6.0 and kd 40 on inches of claw height, 12 V; `gravity_volts` 0.9 V to hold the stages up with the rubber bands' help; `hold_ki` 0.3 V per inch per 10 ms after arrival, capped at 1 V | tuned in the simulator. A lift step ends up to 0.19 in off the preset. 0.5 s later the claw is 0.01 to 0.05 in over it holding nothing and within 0.03 in holding a stack. Top ends 0.08 in low: the stages are on their stops at 46.63 in. Setting a stack on a Neutral Goal's Pin, the Pin stops the claw 0.15 to 0.19 in over On a Neutral Goal |
+| String stretch | 0.185 in | measured in the simulator 0.5 s after a move: 0.15 to 0.18 in holding nothing, 0.18 to 0.23 in holding a stack, less after a move down than after a move up. 0.185 in is the middle |
 | Claw step | 170 ms | the 160 ms opening stroke from vexsim's valve and 12 mm piston, guesses in its `GUESSES`, and a margin |
 | Motor writes | mclib's 10 ms tick falls 2.5 ms before the brain's next write, so each command waits 2.5 ms | PROS writes to the motors every 5 ms ([`DATA_WRITE_RATE`](https://docs.rs/pros-devices/0.2.0/src/pros_devices/smart/motor.rs.html)) but does not say when against the user's loop; the middle of 0 to 5 ms, vexsim's `sim.GUESSES` |
 | Standing still | under 0.5 in/s and 2°/s | when the odometry gap at rest is read; at 0.5 in/s odometry 10 ms late trails by 0.005 in |
 | Exported ports | lift on ports 7, -8 and 9 and roller on port 10 with green cartridges, claw valve on ADI port A | placeholders: change them in `include/planner/robot_cascade.hpp`, which the planner never replaces |
+| Air leak | the claw's tank, sealed, falls from 100 to 90 psi in an hour | VEX publishes no leak rate; a slow leak at the fittings; vexsim's `GUESSES["Air leak"]` |
+| Traction wheel grip | 0.81 static and 0.66 sliding, sideways as forward; grip peaks at 8% slip | the forward numbers are the VEX Forum tilt test; sideways and the slip peak are guesses; vexsim's `foam.GUESSES` |
+| Other robots | a box with no bumpers on a planner drivetrain, motors on brake while holding still, pure pursuit 12 in ahead on its true position, 6 V of turn per radian | how much a robot resists a push is set by its wheels and brake mode; a team's own code would follow its path on its odometry, with its own errors; vexsim's `other_robots.GUESSES` |
 
 ## What each step reports
 
@@ -497,6 +566,78 @@ for a step that ended moving (0.5 in/s or faster) it also gives the gap the
 next time the robot stood still (under 0.5 in/s and 2°/s), if that came
 before the end of the next step. A drive handed
 on at 75.9 in/s ended 0.79 in off and was 0.14 in off once still.
+
+## Run many
+
+One run shows one robot on one field. **Run many…** runs the routine many
+times, 20 by default, each with the robot and the field a little different,
+and shows how often each step lands and how the score spreads. Each run is a
+full simulation, the same as **Run simulation**, and up to
+`--parallel-runs` go at once. A single **Run simulation** goes ahead of the
+run-many's waiting runs.
+
+Each run changes, at random within the settings in the tab:
+
+| What | Default | How |
+| --- | --- | --- |
+| Where the robot stands | up to 0.5 in in X and in Y, and 1° | The robot stands off the start pose, but odometry and the inertial sensor start at the start pose, as when a robot placed by hand is a little off. |
+| Floor grip | up to 10% either way | the routine's grip times 0.9 to 1.1. Tiles differ from field to field, and vexsim's grip is a guess. |
+| Battery | up to 30% below the routine's | from the routine's charge down to 30% less |
+| Sensor noise | every run its own seed | |
+
+Each run's changes are kept as its routine's **Simulated conditions**:
+**Placed off the start** X, Y and heading, grip, battery and noise seed. Set
+them by hand to run one case again.
+
+The tab then lists:
+
+- red's score at the end of the autonomous period, as how many runs got
+  each score, and how many earned the Autonomous Win Point and Bonus;
+- where the runs ended: within how far of their middle, and the range of
+  headings;
+- how far the last step with a target ended from it, and how long each run
+  took;
+- for each step, how many runs **finished** it (a motion ended before its
+  time limit, the lift or roller reached its preset, the wall reset found
+  the wall), how many ended it **on target** (finished, and within 2 in and
+  5° of the target, set in the tab), and its miss, median and worst;
+- every run, worst first. Worst is a broken rule, then the lowest red score
+  at 15 s, then the lowest final score, then the fewest steps on target,
+  then the furthest last miss. **Show** puts a run on the field, with its
+  steps and playback; **Open its routine** then puts its routine, with its
+  conditions, in the editor.
+
+The field draws every run's path in thin blue and the worst in red.
+
+A placement that would put the robot inside a Toggle, a wall or a piece is
+cut back toward the start pose until the robot touches it, within 0.1 in and
+0.25°, the way a robot set down against it stands. Each cut is a new try at
+building the field, about 10 s, and a run takes up to four. The run's first
+step says how far it was placed and what it was moved back from, and its
+line in the list shows where it stood. A start pose that is itself inside
+something stops with that error, as **Run simulation** does.
+
+## Robot log
+
+**Robot log…** above the field opens a CSV your robot logged with mclib's
+telemetry `Logger`, and draws it in green over the plan and the run, with a
+robot at the playback time. The log needs `x_in` and `y_in` columns, and
+`heading_deg` for the heading gaps; [docs/telemetry.md](../../../docs/telemetry.md#log-a-routine-for-the-path-planner)
+has a program that logs them while it runs an exported routine. The page
+reads from the line that starts with `t_ms` and skips lines that start with
+`#`, so a log saved with `pros terminal > run.csv` opens too.
+
+The log's first row is put at the start of the routine. **Log starts at**
+under Activity moves it later or earlier.
+
+The log is what the robot's odometry believed. With a finished run shown,
+each step's card says how far the log got from the simulated odometry at the
+same time into the step, how far it ended from the simulated odometry and
+from the step's target, and for a path, how far it got from the plan.
+Activity names the step where the log got furthest from the simulated
+odometry. A `step` column, set to the planner's step number from 1 before
+each step, splits the log by the robot's own step times; without one the
+page uses the simulated run's.
 
 ## Saving and exporting
 
@@ -567,6 +708,8 @@ project on another computer.
 | Click the selected path's line | insert a point |
 | Hover over a planned path | show the distance and time from the path's start to that point, out of the path's total, and the planned speed there |
 | Drag a point, handle or target | move it (Shift: 6 in grid and 15° headings) |
+| Drag another robot or its knob | move or turn it |
+| Click the field while drawing another robot's path | add a point to that path; right-click one to delete it |
 | Click near a Goal, Loader or stack, on a Turn to face a point step | aim at its centre (Shift: the 6 in grid instead) |
 | Right-click a step's line (Override) | add a lift or claw action there |
 | Drag an action's diamond | change where it runs |
@@ -590,7 +733,7 @@ project on another computer.
 ## Examples
 
 Open one from the Examples menu. Between them they use every step type,
-drivetrain, odometry setup, lift height and action time, which
+drivetrain, odometry setup, traction wheel choice, other robot, lift height and action time, which
 `test_planner.py` checks, and the numbers in their descriptions were
 measured in the simulator. The game examples are all on the Override
 field.
@@ -603,17 +746,21 @@ field.
 | [mixed_steps.json](examples/mixed_steps.json) | a path, a turn, a backward drive, a boomerang and a wall reset |
 | [wheel_slip.json](examples/wheel_slip.json) | a boomerang that misses by about 6 in with drive encoders; switch to tracking wheels and run again to compare |
 | [points_arcs_and_swing.json](examples/points_arcs_and_swing.json) | the steps that are not paths: drive to a point, turn to face a point, an arc, a swing turn, a reverse arc and backing up to a point |
+| [curve_to_pose.json](examples/curve_to_pose.json) | Drive to a pose on a curve (`moveToPose()`) out and back, then the same move with `boomerang()`: 0.07 in and 0.5° off against 0.14 in and 1.7°, in about the same time |
 | [keep_moving.json](examples/keep_moving.json) | Keep moving into the next step on a drive, an arc and a point: 6.85 s against 9.48 s with every step stopping, with a voltage cap and a Min voltage |
 | [path_settings_and_gains.json](examples/path_settings_and_gains.json) | the S-curve with a higher speed limit, acceleration and cornering, and changed turn gains, with what each one bought |
 | [worn_field.json](examples/worn_field.json) | the S-curve at 60% battery and 70% grip: the robot slides 15.7 in off the path and runs into the time limit |
 | [no_inertial_sensor.json](examples/no_inertial_sensor.json) | a square with heading from the drive encoders: every 90° turn really turns about 70°; switch Heading to the inertial sensor and run again to compare |
+| [fifty_five_watt_drive.json](examples/fifty_five_watt_drive.json) | a drive, a turn and a boomerang on the 55 W drive (four 11 W and two 5.5 W motors): the boomerang ends 0.10 in off in 3.39 s, against 0.34 in in 3.68 s on the 66 W drive |
+| [traction_wheels.json](examples/traction_wheels.json) | the S-curve on drive encoders with traction wheels in the middle pair: it ends 0.86 in off with odometry 1.1 in off, against 5.75 in and 5.2 in on omnis |
 | [override_autonomous.json](examples/override_autonomous.json) | red's 15 s Override autonomous: the left Toggle with the roller, then the yellow stack at (23.5, -23.5) on the neutral left Goal: red 20, and 2 of the 6 Pin halves the Autonomous Win Point needs. Turning the bottom Toggle as well only starts at 18 s, past the end of the autonomous |
 | [override_five_halves.json](examples/override_five_halves.json) | both Toggles, the red preload and a yellow stack on the red left Goal, and a yellow stack on the neutral bottom Goal, with chained paths and lift and claw actions during them and one turn in place: red 30 at 15 s and 50 (5 Pin halves) at the end, 16.8 s. A start 0.25 in off can lose a stack |
-| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.1 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
+| [override_stack_to_goal.json](examples/override_stack_to_goal.json) | grip the yellow stack at (23.5, -23.5) and set it on the neutral left Goal, with lift actions during the drive to the Goal and the drive away; the Goal stops the robot 1.3 s into the 2 s drive to it. 0 points, because the left Toggle is still yellow |
 | [override_roller.json](examples/override_roller.json) | turn the left Toggle two faces with the roller, blue then red, pushing back at 3 V; 10 points, for the top half of the neutral left Goal's yellow Pin, and the Autonomous Bonus |
 | [override_match_load.json](examples/override_match_load.json) | wait 15 s, take a Match Load from the red right Loader, back 60 in along the wall, turn at 6 V and set it on the neutral bottom Goal; the red half up scores 5 points, and the run ends at 26.5 s. At 12 V the turn swings the stack forward in the jaws and it lands on the side of the Pin |
 | [override_center_goal.json](examples/override_center_goal.json) | grip the blue/red stack at (0, -23.5) and set it on the Center Goal, lifting during the drive; 5 points each for red and blue |
-| [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.94 in tall at Top |
+| [override_other_robots.json](examples/override_other_robots.json) | the Center Goal routine with the partner driving a path after 0.5 s and both opponents holding still, one on traction wheels; nothing touches them, and the routine scores as it does alone |
+| [override_lift_heights.json](examples/override_lift_heights.json) | the lift at each of its nine heights, for the time every move takes; 49.92 in tall at Top |
 | [override_wall_reset.json](examples/override_wall_reset.json) | a wall reset on red's wall at 2 V with the stall current lowered to 800 mA; at 6 V the wheels slip and the wall is never found |
 
 ## Files
@@ -627,10 +774,12 @@ field.
 | `path_helpers.hpp`, `path_bridge.cpp` | path planning and following in C++, shared with the export |
 | `cascade_helpers.hpp`, `cascade_bridge.cpp`, `mechanisms.py` | the Override lift and claw in C++, shared with the export; Match Loads, the score and the robot rules |
 | `fields.py` | the fields: building them in vexsim, drawing them, and reporting hits |
+| `other_robots.py` | the partner's and opponents' robots: from the routine to vexsim and back |
 | `export_cpp.py` | the C++ export |
+| `batch.py` | Run many: how each run is changed, and the report |
 | `three_files.py` | serves Three.js from the vexsim checkout to the 3D view |
 | `static/field3d.html`, `static/field3d.js` | the Override field in 3D |
-| `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `planner.css` |
+| `static/` | the page: `index.html`, `planner.js`, `geometry.js`, `robotlog.js` (reads and compares robot logs), `planner.css` |
 
 Each run is kept in its own folder under `--output`: the routine, progress,
 `result.json` with every check and the full recording, `trace.csv`, and
@@ -640,7 +789,8 @@ Each run is kept in its own folder under `--output`: the routine, progress,
 
 ```sh
 cd tests/vexsim/planner
-VEXSIM_PATH=../../../../vexsim python3 -m unittest -v test_planner test_geometry test_server test_three_files
+VEXSIM_PATH=../../../../vexsim python3 -m unittest -v test_planner test_geometry test_server test_three_files \
+  test_batch test_robot_log
 ```
 
 `test_planner` compiles mclib once. Set `MCLIB_PLANNER_CACHE` to a folder to
@@ -655,11 +805,14 @@ node tests/vexsim/planner/browser_smoke.mjs --playwright PATH/playwright/index.m
 ## Limits
 
 - Nothing starts in the Loaders; a **Match load** step puts a stack there.
-- The lift's encoders are exact: the planner reads the simulated shaft with
-  no 10 ms delay.
 - The claw's 200 mL tank starts at 100 psi and loses air on each stroke
-  (77 strokes take it to 25 psi). It never leaks.
-- Loose Pins and Cups do not touch the Toggles. A held one does.
-- Every simulated drive has omni wheels on all corners.
+  (77 strokes take it to 25 psi). It also leaks, 10 psi an hour, which a
+  routine never notices.
+- Traction wheels are the only other wheel. No drive has mecanum, X-drive
+  or tank treads.
+- The other robots are boxes with no lift, claw or intake, and drive their
+  paths perfectly on their true position. Nothing checks the rules between
+  robots: crossing the Autonomous Line, or contact with an opponent in
+  their zone.
 - A routine can hold 40 steps and a path 30 points. The time limits must add
   up to at most 120 s.

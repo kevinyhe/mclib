@@ -250,6 +250,72 @@ try {
   pass(`A second run with an extra point (${secondSummary}) can be compared with the first`);
   await shot("06-compare");
 
+  const secondRun = await page.locator("#run-picker").inputValue();
+  const shownRun = await (await fetch(new URL(`/api/runs/${secondRun}`, url))).json();
+  const logRows = shownRun.result.trace.filter((_, index) => index % 2 === 0).map((frame) =>
+    `${Math.round(5000 + frame.t * 1000)},${(frame.estimated_x + 1).toFixed(3)},${frame.estimated_y.toFixed(3)},${frame.estimated_heading.toFixed(2)}`);
+  const logFile = `${output}/smoke-robot-log.csv`;
+  await writeFile(logFile, ["PROS terminal output before the log", "t_ms,x_in,y_in,heading_deg", ...logRows, "# rows=0 dropped=0 discarded=0", ""].join("\n"));
+  await page.locator("#robot-log-file").setInputFiles(logFile);
+  await page.locator("#robot-log-panel:not([hidden])").waitFor();
+  const logPanel = await page.locator("#robot-log-panel").innerText();
+  assert.match(logPanel, /smoke-robot-log\.csv/);
+  assert.match(logPanel, new RegExp(`${logRows.length} rows over \\d+\\.\\d\\d s`));
+  assert.match(logPanel, /Furthest from the simulated odometry: 1\.0\d in, in step \d at \d+\.\d\d s/);
+  assert(await page.locator("#layer-robot-log").isVisible());
+  await page.locator("#step-list li").first().click();
+  const logCard = await page.locator("#pane-step .card.robot-log").innerText();
+  assert.match(logCard, /Robot log: smoke-robot-log\.csv/);
+  assert.match(logCard, /At the end of the step: 1\.\d\d in/);
+  assert.match(logCard, /Furthest from the planned path: \d+\.\d\d in/);
+  await shot("06b-robot-log");
+  pass(`A robot log 1 in to the right of the run draws over it and each step says how far apart they were: ${logPanel.split("\n").find((line) => /Furthest/.test(line))}`);
+  const startsAt = page.locator("#robot-log-panel input[type=number]");
+  await startsAt.fill("0.5");
+  await startsAt.press("Enter");
+  await page.waitForFunction(() => !/Furthest from the simulated odometry: 1\.\d\d in/.test(document.querySelector("#robot-log-panel").textContent));
+  pass("Moving the log's start 0.5 s later changes how far it is from the run");
+  const badLog = `${output}/smoke-bad-log.csv`;
+  await writeFile(badLog, "t_ms,left_cmd_V\n0,1\n20,2\n");
+  await page.locator("#robot-log-file").setInputFiles(badLog);
+  await page.waitForFunction(() => /smoke-bad-log\.csv was not opened\. The log needs x_in and y_in columns/.test(document.querySelector("#log").textContent));
+  assert.match(await page.locator("#robot-log-panel").innerText(), /smoke-robot-log\.csv/);
+  await page.locator("#robot-log-panel button", { hasText: "Close" }).click();
+  assert(await page.locator("#robot-log-panel").isHidden());
+  pass("A log without the pose is refused with the columns to log, and Close stops drawing the open one");
+
+  await page.locator("#run-many").click();
+  assert.equal(await page.locator("#tab-batch").getAttribute("aria-selected"), "true");
+  const batchTab = await page.locator("#tab-batch").boundingBox();
+  const rightColumn = await page.locator("aside.right").boundingBox();
+  assert(batchTab.x + batchTab.width <= rightColumn.x + rightColumn.width, "The Run many tab runs past the right column");
+  const runCount = page.locator("#pane-batch label.field-label", { hasText: /^Runs/ }).locator("input");
+  await runCount.fill("2");
+  await runCount.press("Enter");
+  await page.locator("#batch-start", { hasText: "Run 2 times" }).click();
+  await page.waitForFunction(() => /2 of 2 runs done/.test(document.querySelector("#batch-status")?.textContent ?? ""), null, { timeout: 600000 });
+  const stepTable = await page.locator("#pane-batch .batch-table").innerText();
+  assert.match(stepTable, /1 Path\s+\d\/2\s+\d\/2\s+\d+\.\d\d · \d+\.\d\d in/);
+  assert.match(stepTable, /2 Turn to heading\s+\d\/2\s+\d\/2\s+\d+\.\d · \d+\.\d°/);
+  const batchSummary = await page.locator("#batch-summary").innerText();
+  assert.match(batchSummary, /The runs ended within \d+\.\d in of \(-?\d+\.\d, -?\d+\.\d\), facing -?\d+\.\d° to -?\d+\.\d°\./);
+  assert.equal(await page.locator("#pane-batch .batch-runs li").count(), 2);
+  assert(await page.locator("#layer-batch").isVisible());
+  await shot("06c-run-many");
+  pass(`Run many ran the routine twice, each placed a little off: ${batchSummary.replace(/\n/g, " ")}`);
+  await page.locator("#pane-batch .batch-runs li.worst button", { hasText: "Show" }).click();
+  await page.waitForFunction(() => / of run-many \d+ · finished/.test(document.querySelector("#run-picker").selectedOptions[0].textContent));
+  assert.match(await page.locator("#run-summary").innerText(), /^Run \d of run-many \d+: ran all 2 steps/);
+  await page.locator("#step-list li").first().click();
+  assert.match(await page.locator("#pane-step .card.result").textContent(), /The robot stood \d\.\d\d in (right|left) and \d\.\d\d in (forward|back) of the start pose/);
+  await page.locator("#open-run-routine").click();
+  const opened = await draft();
+  assert(opened.conditions.placement_x_in !== 0 || opened.conditions.placement_y_in !== 0, JSON.stringify(opened.conditions));
+  await page.keyboard.press("Control+z");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("mclib.path-planner.draft.v1")).conditions.placement_x_in === 0);
+  await page.locator("#run-picker").selectOption(secondRun);
+  pass("Show puts the worst run on the field, its first step says where it stood, and Open its routine brings its conditions");
+
   await page.locator("#export-cpp").click();
   await page.locator("#cpp-dialog[open]").waitFor();
   const exportedFunction = (await page.locator("#cpp-title").innerText()).match(/^Export (run\w+)\(\)$/)[1];
@@ -715,6 +781,33 @@ try {
   await closeExport();
   pass(`The Match Load example waits 15 s, loads at 15.00 s, runs to ${matchLoadScore.match(/Score at (\S+ s)/)[1]} ` +
        "and scores red 5; Export C++ writes the wait as pros::delay(15000)");
+
+  await openExample("override_other_robots");
+  await page.waitForFunction(() => /the other robots on the field/.test(document.querySelector("#routine-name").value));
+  await page.locator("#tab-robot").click();
+  assert.match(await page.locator("#pane-robot").innerText(), /Partner robot[\s\S]*Opponent robot 1[\s\S]*Opponent robot 2/);
+  assert(await page.locator("#add-partner").isDisabled() && await page.locator("#add-opponent").isDisabled());
+  await dragField({ x: 60.5, y: 0 }, { x: 55, y: 6 });
+  project = await draft();
+  assert(near(project.other_robots[0].x, 55) && near(project.other_robots[0].y, 6), JSON.stringify(project.other_robots[0]));
+  const opponentTwo = page.locator('[data-other-robot="opponent 2"]');
+  await opponentTwo.locator("button", { hasText: "Draw path" }).click();
+  await clickField(-40, 10);
+  await clickField(-30, 20);
+  project = await draft();
+  assert.deepEqual(project.other_robots[2].path, [{ x: -40, y: 10 }, { x: -30, y: 20 }]);
+  assert.equal(project.steps[0].type, "drive", "Drawing another robot's path leaves the steps alone");
+  const pathPoint = await fieldPoint(-40, 10);
+  await page.mouse.click(pathPoint.x, pathPoint.y, { button: "right" });
+  project = await draft();
+  assert.deepEqual(project.other_robots[2].path, [{ x: -30, y: 20 }]);
+  await opponentTwo.locator("button", { hasText: "Done drawing" }).click();
+  const partnerTraction = page.locator('[data-other-robot="partner"] label.field-label', { hasText: /^Traction wheels/ }).locator("option");
+  assert.deepEqual(await partnerTraction.evaluateAll((options) => options.map((option) => option.value)), ["none", "all"]);
+  await shot("18-other-robots");
+  await page.locator("#tab-step").click();
+  pass("The other robots example lists the partner and both opponents; dragging moves one, Draw path adds points, " +
+       "right-click deletes one, and a 4-wheel drive offers no middle traction wheels");
 
   const offsite = requests.filter((value) => /^https?:/.test(value) && new URL(value).origin !== url.origin);
   assert.deepEqual(offsite, [], "The page must not load anything from the internet");

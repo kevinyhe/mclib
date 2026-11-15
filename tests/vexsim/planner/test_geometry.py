@@ -47,6 +47,7 @@ def every_step_project():
             dict(type="turn_to_point", x=30, y=30, direction=-1),
             dict(type="point", x=10, y=10, direction=1),
             dict(type="boomerang", x=-20, y=30, heading=270, direction=-1, lead=.4),
+            dict(type="pose", x=10, y=40, heading=90, direction=1, lead=.4),
             dict(type="arc", heading=60, radius=-20),
             dict(type="reverse_arc", heading=0, radius=15),
             dict(type="swing", heading=-90, direction=-1),

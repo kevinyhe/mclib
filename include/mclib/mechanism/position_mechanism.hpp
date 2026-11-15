@@ -44,7 +44,8 @@ struct PositionMechanismConfig {
    * it if the mechanism genuinely needs more authority to hold, and check the
    * motor temperature when you do.
    *
-   * Only matters when ki is non-zero, and ki defaults to 0.
+   * It also caps the hold_ki sum. With ki and hold_ki both 0, the defaults,
+   * it does nothing.
    */
   double integral_max_volts = 2.0;
 
@@ -68,10 +69,58 @@ struct PositionMechanismConfig {
    * |error| <= small_error, and PID::update() zeroes its accumulated error
    * over that same band, so the integral is 0 on every held tick. A loaded
    * mechanism settles wherever kp * error balances the load, up to small_error
-   * of steady droop. Lower small_error to shrink that, at the cost of a
-   * tighter arrival test.
+   * of steady droop. hold_ki integrates that out; lowering small_error
+   * shrinks it at the cost of a tighter arrival test.
    */
   bool hold_output = true;
+
+  /**
+   * @brief Integral gain for the hold after arrival. Defaults to 0.
+   *
+   * The PID zeroes its own integral inside small_error, so the hold above is
+   * P only and can sit anywhere in that band. hold_ki takes that error out:
+   * from the tick after arrival, on every tick with the error inside
+   * small_error, hold_ki * error is added to a sum, and the sum is added to
+   * the output. Outside the band the sum stays as it is, so a mechanism
+   * held off its target by something in the way is not pushed harder and
+   * harder. The sum is capped at integral_max_volts (0 means no cap) and
+   * cleared by moveTo(), a manual voltage, a sensor fault and onDisabled().
+   * Volts per unit of error per tick.
+   */
+  double hold_ki = 0.0;
+
+  /// @brief How gravity_volts changes with the mechanism's position.
+  enum class GravityModel {
+    /// The same at every height: a lift, elevator or cascade.
+    Lift,
+    /// gravity_volts * cos(arm angle): all of it with the arm level, none
+    /// with the arm straight up or down, pulling back down past straight up.
+    Arm,
+  };
+
+  /**
+   * @brief Volts that hold the load still against gravity. Defaults to 0.
+   *
+   * Added to the PID output on every closed-loop tick, before the
+   * max_voltage clamp, so the PID only has to make up what is left. It stays
+   * on after arrival, also with hold_output false, so a settled mechanism
+   * stays up. It is not added under a manual voltage, on a sensor fault, or
+   * after onDisabled().
+   *
+   * To measure it, raise the voltage slowly until the mechanism starts to
+   * rise, then lower it until the mechanism starts to sink. gravity_volts is
+   * the average of the two; half their difference is friction. For an Arm,
+   * do this with the arm level.
+   */
+  double gravity_volts = 0.0;
+  GravityModel gravity_model = GravityModel::Lift;
+
+  /// Arm only: the position reading with the arm level, pointing out from
+  /// its pivot.
+  double arm_level_position = 0.0;
+  /// Arm only: position units per degree the arm turns. 1 for a rotation
+  /// sensor on the arm's axle; 5 for motor degrees through a 5:1 reduction.
+  double arm_units_per_degree = 1.0;
 };
 
 /**
@@ -204,6 +253,8 @@ private:
    */
   void holdTarget(double target);
   double clampVoltage(double volts) const;
+  double gravityVolts(double position) const;
+  double holdVolts(double error);
 
   PositionSource m_position_source;
   VoltageSink m_voltage_sink;
@@ -213,6 +264,7 @@ private:
   double m_manual_voltage = 0.0;
   bool m_arrived = false;
   bool m_sensor_fault = false;
+  double m_hold_volts = 0.0;
 };
 
 }  // namespace mechanism

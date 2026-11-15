@@ -49,19 +49,48 @@ void PoseFilter::reset(const Pose2D& pose, double position_sigma_in,
   m_cov = Mat3::Zero();
   m_cov(0, 0) = m_cov(1, 1) = position_sigma_in * position_sigma_in;
   m_cov(2, 2) = std::pow(heading_sigma_deg * kDeg, 2);
-  m_accepted = m_rejected = 0;
+  m_accepted = m_rejected = m_too_old = 0;
+  m_history.clear();
 }
 
-void PoseFilter::predict(const Pose2D& previous_odom, const Pose2D& current_odom) {
-  // The odometry step in the robot frame it started from: forward along the
-  // heading, right across it (compass frame: forward is (sin, cos), right
-  // is (cos, -sin)).
+namespace {
+// The odometry step in the robot frame it started from: forward along the
+// heading, right across it (compass frame: forward is (sin, cos), right is
+// (cos, -sin)).
+template <class Step>
+Step odometryStep(const Pose2D& previous_odom, const Pose2D& current_odom) {
   const double dx = current_odom.x - previous_odom.x;
   const double dy = current_odom.y - previous_odom.y;
   const double s0 = std::sin(previous_odom.theta), c0 = std::cos(previous_odom.theta);
-  const double forward = dx * s0 + dy * c0;
-  const double right = dx * c0 - dy * s0;
-  const double turn = wrapAngle(current_odom.theta - previous_odom.theta);
+  return {dx * s0 + dy * c0, dx * c0 - dy * s0,
+          wrapAngle(current_odom.theta - previous_odom.theta)};
+}
+
+bool notAfter(std::uint32_t a_ms, std::uint32_t b_ms) {
+  return static_cast<std::int32_t>(a_ms - b_ms) <= 0;
+}
+}  // namespace
+
+void PoseFilter::predict(const Pose2D& previous_odom, const Pose2D& current_odom) {
+  m_history.clear();
+  applyStep(odometryStep<Step>(previous_odom, current_odom));
+}
+
+void PoseFilter::predict(const Pose2D& previous_odom, const Pose2D& current_odom,
+                         std::uint32_t now_ms) {
+  const Step step = odometryStep<Step>(previous_odom, current_odom);
+  applyStep(step);
+  m_history.push_back(Tick{now_ms, step, {}, m_pose, m_cov});
+  // Keep the newest step that is history_ms old or older: a reading taken
+  // history_ms ago lands on it.
+  while (m_history.size() > 1 &&
+         static_cast<std::uint32_t>(now_ms - m_history[1].time_ms) >= m_config.history_ms) {
+    m_history.pop_front();
+  }
+}
+
+void PoseFilter::applyStep(const Step& step) {
+  const double forward = step.forward, right = step.right, turn = step.turn;
 
   // Apply the same step from the filter's own pose.
   const double s = std::sin(m_pose.theta), c = std::cos(m_pose.theta);
@@ -92,9 +121,96 @@ void PoseFilter::predict(const Pose2D& previous_odom, const Pose2D& current_odom
 }
 
 bool PoseFilter::updateDistance(const snapshot::SensorGeometry& geometry, double measured_in) {
-  if (!(measured_in > 0.0) || !std::isfinite(measured_in)) return false;
+  return updateNow(DistanceReading{geometry, measured_in});
+}
+
+bool PoseFilter::updateDistance(const snapshot::SensorGeometry& geometry, double measured_in,
+                                std::uint32_t taken_ms) {
+  return updateAt(DistanceReading{geometry, measured_in}, taken_ms);
+}
+
+bool PoseFilter::updateGps(const Pose2D& measured, double position_sigma_in,
+                           double heading_sigma_deg) {
+  return updateNow(GpsReading{measured, position_sigma_in, heading_sigma_deg});
+}
+
+bool PoseFilter::updateGps(const Pose2D& measured, double position_sigma_in,
+                           double heading_sigma_deg, std::uint32_t taken_ms) {
+  return updateAt(GpsReading{measured, position_sigma_in, heading_sigma_deg}, taken_ms);
+}
+
+bool PoseFilter::updateNow(const Reading& reading) {
+  const Outcome outcome = applyReading(reading);
+  if (outcome == Outcome::Rejected) ++m_rejected;
+  if (outcome != Outcome::Used) return false;
+  ++m_accepted;
+  if (!m_history.empty()) {
+    Tick& latest = m_history.back();
+    latest.readings.push_back(reading);
+    latest.pose = m_pose;
+    latest.cov = m_cov;
+  }
+  return true;
+}
+
+bool PoseFilter::updateAt(const Reading& reading, std::uint32_t taken_ms) {
+  if (m_history.empty() || notAfter(m_history.back().time_ms, taken_ms)) {
+    return updateNow(reading);
+  }
+  if (static_cast<std::uint32_t>(m_history.back().time_ms - taken_ms) > m_config.history_ms) {
+    ++m_too_old;
+    return false;
+  }
+  std::size_t at = m_history.size();
+  for (std::size_t i = m_history.size(); i-- > 0;) {
+    if (notAfter(m_history[i].time_ms, taken_ms)) {
+      at = i;
+      break;
+    }
+  }
+  if (at == m_history.size()) {
+    ++m_too_old;
+    return false;
+  }
+
+  const Pose2D pose_now = m_pose;
+  const Mat3 cov_now = m_cov;
+  m_pose = m_history[at].pose;
+  m_cov = m_history[at].cov;
+  const Outcome outcome = applyReading(reading);
+  if (outcome != Outcome::Used) {
+    m_pose = pose_now;
+    m_cov = cov_now;
+    if (outcome == Outcome::Rejected) ++m_rejected;
+    return false;
+  }
+  ++m_accepted;
+  m_history[at].readings.push_back(reading);
+  m_history[at].pose = m_pose;
+  m_history[at].cov = m_cov;
+  for (std::size_t i = at + 1; i < m_history.size(); ++i) {
+    Tick& tick = m_history[i];
+    applyStep(tick.step);
+    for (const Reading& later : tick.readings) applyReading(later);
+    tick.pose = m_pose;
+    tick.cov = m_cov;
+  }
+  return true;
+}
+
+PoseFilter::Outcome PoseFilter::applyReading(const Reading& reading) {
+  if (const auto* distance = std::get_if<DistanceReading>(&reading)) {
+    return applyDistance(*distance);
+  }
+  return applyGps(std::get<GpsReading>(reading));
+}
+
+PoseFilter::Outcome PoseFilter::applyDistance(const DistanceReading& reading) {
+  const snapshot::SensorGeometry& geometry = reading.geometry;
+  const double measured_in = reading.measured_in;
+  if (!(measured_in > 0.0) || !std::isfinite(measured_in)) return Outcome::Ignored;
   const double expected = expectedRange(geometry, m_pose, m_config.field_mask);
-  if (!std::isfinite(expected)) return false;
+  if (!std::isfinite(expected)) return Outcome::Ignored;
 
   // Jacobian by central differences through the same raycast, so there is
   // one copy of the sensor geometry, not two.
@@ -108,7 +224,7 @@ bool PoseFilter::updateDistance(const snapshot::SensorGeometry& geometry, double
     const double hm = expectedRange(geometry, minus, m_config.field_mask);
     // Near a corner the two sides can hit different walls or none; the
     // derivative there means nothing.
-    if (!std::isfinite(hp) || !std::isfinite(hm)) return false;
+    if (!std::isfinite(hp) || !std::isfinite(hm)) return Outcome::Ignored;
     H(i) = (hp - hm) / (2 * steps[i]);
   }
 
@@ -118,8 +234,7 @@ bool PoseFilter::updateDistance(const snapshot::SensorGeometry& geometry, double
   const double S = (H * m_cov * H.transpose())(0, 0) + R;
   if (innovation * innovation > m_config.gate * m_config.gate * S) {
     // Most likely something other than a wall is in front of the sensor.
-    ++m_rejected;
-    return false;
+    return Outcome::Rejected;
   }
 
   const Eigen::Vector3d K = m_cov * H.transpose() / S;
@@ -127,15 +242,16 @@ bool PoseFilter::updateDistance(const snapshot::SensorGeometry& geometry, double
   m_pose.y += K(1) * innovation;
   m_pose.theta = wrapAngle(m_pose.theta + K(2) * innovation);
   m_cov = josephUpdate(m_cov, K, H, Eigen::MatrixXd::Constant(1, 1, R));
-  ++m_accepted;
-  return true;
+  return Outcome::Used;
 }
 
-bool PoseFilter::updateGps(const Pose2D& measured, double position_sigma_in,
-                           double heading_sigma_deg) {
+PoseFilter::Outcome PoseFilter::applyGps(const GpsReading& reading) {
+  const Pose2D& measured = reading.measured;
+  const double position_sigma_in = reading.position_sigma_in;
+  const double heading_sigma_deg = reading.heading_sigma_deg;
   if (!std::isfinite(measured.x) || !std::isfinite(measured.y) ||
       !(position_sigma_in > 0.0) || !std::isfinite(position_sigma_in)) {
-    return false;
+    return Outcome::Ignored;
   }
   const bool use_heading = heading_sigma_deg > 0.0 && std::isfinite(heading_sigma_deg) &&
                            std::isfinite(measured.theta);
@@ -155,8 +271,7 @@ bool PoseFilter::updateGps(const Pose2D& measured, double position_sigma_in,
   const Eigen::MatrixXd S_inv = S.inverse();
   const double distance2 = innovation.dot(S_inv * innovation);
   if (distance2 > m_config.gate * m_config.gate * n) {
-    ++m_rejected;
-    return false;
+    return Outcome::Rejected;
   }
 
   const Eigen::MatrixXd K = m_cov * H.transpose() * S_inv;
@@ -165,20 +280,25 @@ bool PoseFilter::updateGps(const Pose2D& measured, double position_sigma_in,
   m_pose.y += step(1);
   m_pose.theta = wrapAngle(m_pose.theta + step(2));
   m_cov = josephUpdate(m_cov, K, H, R);
-  ++m_accepted;
-  return true;
+  return Outcome::Used;
 }
 
 PoseFusion::PoseFusion(PoseFusionConfig config, std::vector<DistanceSensorInput> sensors)
     : m_config(config),
       m_sensors(std::move(sensors)),
       m_last_read_ms(m_sensors.size(), 0),
-      m_filter(config.filter) {}
+      m_filter(config.filter),
+      m_config_error(std::any_of(m_sensors.begin(), m_sensors.end(),
+                                 [&config](const DistanceSensorInput& sensor) {
+                                   return sensor.latency_ms > config.filter.history_ms;
+                                 })) {}
 
-void PoseFusion::setGps(GpsInput gps) {
+bool PoseFusion::setGps(GpsInput gps) {
+  if (gps.latency_ms > m_config.filter.history_ms) return false;
   sync::LockGuard lock(m_mutex);
   m_gps = std::move(gps);
   m_last_gps_ms = 0;
+  return true;
 }
 
 Pose2D PoseFusion::toField(const Pose2D& odometry) const {
@@ -197,6 +317,7 @@ void PoseFusion::reset(const Pose2D& odometry_pose, double position_sigma_in,
 }
 
 std::optional<Vec2> PoseFusion::step(const Pose2D& odometry_pose, std::uint32_t now_ms) {
+  if (m_config_error) return std::nullopt;
   if (!std::isfinite(odometry_pose.x) || !std::isfinite(odometry_pose.y) ||
       !std::isfinite(odometry_pose.theta)) {
     return std::nullopt;
@@ -206,13 +327,13 @@ std::optional<Vec2> PoseFusion::step(const Pose2D& odometry_pose, std::uint32_t 
   const Pose2D now = toField(odometry_pose);
   // How far odometry moved this tick, from where the last correction left it.
   const double moved = std::hypot(now.x - m_previous.x, now.y - m_previous.y);
-  m_filter.predict(m_previous, now);
+  m_filter.predict(m_previous, now, now_ms);
   for (std::size_t i = 0; i < m_sensors.size(); ++i) {
     const DistanceSensorInput& sensor = m_sensors[i];
     if (!sensor.read_in) continue;
     if (static_cast<std::uint32_t>(now_ms - m_last_read_ms[i]) < sensor.period_ms) continue;
     m_last_read_ms[i] = now_ms;
-    m_filter.updateDistance(sensor.geometry, sensor.read_in());
+    m_filter.updateDistance(sensor.geometry, sensor.read_in(), now_ms - sensor.latency_ms);
   }
   if (m_gps && m_gps->read &&
       static_cast<std::uint32_t>(now_ms - m_last_gps_ms) >= m_gps->period_ms) {
@@ -224,7 +345,7 @@ std::optional<Vec2> PoseFusion::step(const Pose2D& odometry_pose, std::uint32_t 
         if (std::isfinite(reported) && reported > sigma) sigma = reported;
       }
       m_filter.updateGps({gps->x + m_gps->origin_x_in, gps->y + m_gps->origin_y_in, gps->theta},
-                         sigma);
+                         sigma, -1.0, now_ms - m_gps->latency_ms);
     }
   }
 
@@ -255,6 +376,11 @@ int PoseFusion::accepted() const {
 int PoseFusion::rejected() const {
   sync::LockGuard lock(m_mutex);
   return m_filter.rejected();
+}
+
+int PoseFusion::tooOld() const {
+  sync::LockGuard lock(m_mutex);
+  return m_filter.tooOld();
 }
 
 double PoseFusion::positionSigmaIn() const {

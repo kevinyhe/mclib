@@ -9,6 +9,7 @@ import ctypes as C
 import math
 
 from fields import piece_pose, to_planner
+from other_robots import planner_frames
 
 LIFT_PRESETS = {
     "down": "Down: claw 6.62 in up, on a Cup standing on the floor",
@@ -58,12 +59,14 @@ RETIRED_PRELOADS = ("behind", "beside")
 MOVE_RESULTS = ("Used the whole time limit", "Reached the preset")
 #: <SC7>: the Autonomous Bonus goes to whoever leads when the period ends
 AUTONOMOUS_S = 15.0
-#: <SG1>, <SG2>, <SG3>, <SG6>, <R10>, <R11>
+#: <SG1>, <SG2>, <SG3>, <SG6>, <R11>
 START_SIZE_IN = 18.0
 MAX_SIZE_IN = 24.0
 MAX_HEIGHT_IN = 50.0
-MAX_MOTOR_WATTS = 88.0
 MAX_DRIVE_WATTS = 55.0
+
+#: Encoder ticks per output turn of a V5 motor, by cartridge, as vexsim gives the drive motors
+ENCODER_TICKS_PER_REV = {"red": 1800.0, "green": 900.0, "blue": 300.0}
 
 READ_MOTOR_DEGREES = C.CFUNCTYPE(C.c_double)
 WRITE_MOTOR_VOLTS = C.CFUNCTYPE(None, C.c_double)
@@ -101,18 +104,25 @@ def declare_cascade(lib):
 
 
 class CascadeRig:
-    """cascade::Rig in the C++, reading and driving the world's lift motors
-    and opening and closing its claw's valve. The three lift motors share a
-    shaft: the rig reads one and drives all three. Errors in the callbacks go
-    to the bridge, which cancels the running motion and raises once C++
-    returns."""
+    """cascade::Rig in the C++, reading and driving the world's lift and
+    roller motors and opening and closing its claw's valve. The three lift
+    motors share a shaft: the rig reads one motor's encoder and drives all
+    three. The encoders are vexsim's, updated after each physics step like
+    the drive's, so the lift and the roller read a held, quantised position
+    the way the drive does. step_world() steps the world and the encoders.
+    Errors in the callbacks go to the bridge, which cancels the running
+    motion and raises once C++ returns."""
 
     def __init__(self, lib, bridge, world):
+        from vexsim.sensors import Encoder
         self.lib = lib
         self.bridge = bridge
+        self.world = world
         self.lift_motors = world.mechanism.lift.motors
+        self.lift_encoder = Encoder(ticks_per_rev=ENCODER_TICKS_PER_REV[self.lift_motors[0].cartridge])
         self.claw = world.mechanism.claw
         self.roller_motor = world.mechanism.roller.motor
+        self.roller_encoder = Encoder(ticks_per_rev=ENCODER_TICKS_PER_REV[self.roller_motor.cartridge])
         self.read_callback = READ_MOTOR_DEGREES(self.read_lift)
         self.write_callback = WRITE_MOTOR_VOLTS(self.write_lift)
         self.valve_callback = SET_CLAW_VALVE(self.set_claw_valve)
@@ -123,9 +133,14 @@ class CascadeRig:
                                  self.read_roller_callback, self.write_roller_callback,
                                  preset_number("claw", claw_start))
 
+    def step_world(self, dt):
+        self.world.step(dt)
+        self.lift_encoder.update(self.lift_motors[0].position, self.world.sim.t)
+        self.roller_encoder.update(self.roller_motor.position, self.world.sim.t)
+
     def read_lift(self):
         try:
-            return math.degrees(self.lift_motors[0].position)
+            return math.degrees(self.lift_encoder.position)
         except Exception as error:
             self.bridge.exceptions.append(str(error))
             return math.nan
@@ -144,7 +159,7 @@ class CascadeRig:
 
     def read_roller(self):
         try:
-            return math.degrees(self.roller_motor.position)
+            return math.degrees(self.roller_encoder.position)
         except Exception as error:
             self.bridge.exceptions.append(str(error))
             return math.nan
@@ -205,9 +220,9 @@ def mechanism_reading(world, mechanism):
     return f"the jaws are {gap:.2f} in apart and hold {held}", gap
 
 
-def start_overlap_error(overlaps):
-    """Why the robot cannot start where it stands: the Pins, Cups, walls,
-    Goals and Loaders it is inside."""
+def start_overlap_error(overlaps, robot="the robot"):
+    """Why @p robot (the robot, or another robot by name) cannot start where
+    it stands: the Pins, Cups, walls, Goals, Loaders and robots it is inside."""
     from vexsim.pieces import Piece
     from vexsim.units import INCH
     things = []
@@ -217,8 +232,9 @@ def start_overlap_error(overlaps):
             x, y = to_planner(*overlap.what.center()[:2])
             where = f" at ({x:.1f}, {y:.1f})"
         things.append(f"{overlap.name}{where}, {overlap.depth / INCH:.2f} in deep")
-    return ("The robot starts inside " + "; ".join(things) + ". Move the start pose so the robot is clear of "
-            + ("it" if len(things) == 1 else "them") + ": the simulator would throw the robot out.")
+    mover = "the start pose" if robot == "the robot" else "it"
+    return (f"{robot[:1].upper()}{robot[1:]} starts inside " + "; ".join(things) + f". Move {mover} so {robot} is "
+            "clear of " + ("it" if len(things) == 1 else "them") + f": the simulator would throw {robot} out.")
 
 
 def describe_match_load(step):
@@ -243,6 +259,7 @@ def frame_telemetry(world):
     frame = world.telemetry()
     frame["pieces"] = {str(key): piece_pose(values) for key, values in frame["pieces"].items()}
     frame["holding"] = None if frame["holding"] is None else describe_held(world)
+    frame["others"] = planner_frames(frame["others"])
     score = world.score(autonomous=True)
     frame.update(score_red=score["red"].total, score_blue=score["blue"].total)
     return frame
@@ -331,7 +348,6 @@ class RuleWatch:
         self.largest = list(self.start)
         self.held = [0, 0]
         self.drive_watts = drive_watts
-        self.mechanism_watts = sum(world.robot.motor_watts().values())
 
     def _extent(self):
         return [value / self.inch for value in self.world.robot.extent(self.world.sim.chassis)]
@@ -362,10 +378,8 @@ class RuleWatch:
                             height=round(self.largest[2], 2), size_limit=MAX_SIZE_IN, height_limit=MAX_HEIGHT_IN,
                             passed=max(self.largest[:2]) <= MAX_SIZE_IN and self.largest[2] <= MAX_HEIGHT_IN),
             most_held=dict(pins=self.held[0], cups=self.held[1], passed=self.held[0] <= 1 and self.held[1] <= 1),
-            motors_w=dict(drive=self.drive_watts, total=self.drive_watts + self.mechanism_watts,
-                          drive_limit=MAX_DRIVE_WATTS, total_limit=MAX_MOTOR_WATTS,
-                          passed=self.drive_watts <= MAX_DRIVE_WATTS and
-                          self.drive_watts + self.mechanism_watts <= MAX_MOTOR_WATTS))
+            motors_w=dict(drive=self.drive_watts, drive_limit=MAX_DRIVE_WATTS,
+                          passed=self.drive_watts <= MAX_DRIVE_WATTS))
 
 
 def toggle_faces(world):

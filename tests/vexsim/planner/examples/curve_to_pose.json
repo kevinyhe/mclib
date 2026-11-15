@@ -1,0 +1,14 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Curve to a pose",
+  "description": "Drive to a pose on a curve (moveToPose()) out to (-12, -24) facing 90°, back to the start on a reverse curve, then the first move again with boomerang() to compare, on a four-motor base with two tracking wheels. In the simulator the curve ends 0.07 in and 0.5° off in 2.36 s, the reverse curve 0.04 in and 0.4° off in 2.41 s, and the boomerang 0.14 in and 1.7° off in 2.34 s. 8.0 s.",
+  "field": "open",
+  "robot": {"preset": "four_motor_450", "tracking": "two"},
+  "start": {"x": -36, "y": -48, "heading": 0},
+  "steps": [
+    {"type": "pose", "note": "out to the right, arriving facing right", "x": -12, "y": -24, "heading": 90, "lead": 0.4},
+    {"type": "pose", "note": "back to the start, arriving facing forward", "x": -36, "y": -48, "heading": 0, "direction": -1, "lead": 0.4},
+    {"type": "boomerang", "note": "the first move again with boomerang()", "x": -12, "y": -24, "heading": 90, "lead": 0.4}
+  ]
+}

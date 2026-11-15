@@ -50,6 +50,10 @@ struct Motor {
   double rpm = 0.0;
   /// @brief Current reading, in milliamps.
   std::int32_t current_ma = 0;
+  /// @brief What get_type() reports, as the pros::MotorType value: 0 for an
+  ///        11 W motor, 1 for a 5.5 W motor, INT32_MAX when it is not
+  ///        reporting.
+  std::int32_t type = 0;
 
   /// @brief The last command in volts, before reversal.
   double volts() const { return millivolts / 1000.0; }
@@ -63,6 +67,12 @@ extern std::map<int, Motor> motors;
 
 /// @brief IMU rotation in degrees, by port.
 extern std::map<int, double> imu_rotation_deg;
+
+/// @brief IMU accelerometer reading per port, in g along the sensor's x, y, z.
+struct ImuAccel {
+  double x = 0.0, y = 0.0, z = 0.0;
+};
+extern std::map<int, ImuAccel> imu_accel_g;
 
 /// @brief Controller stick values, -127..127, by pros::controller_analog_e_t.
 extern std::map<int, int> analog;

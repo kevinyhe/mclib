@@ -7,7 +7,9 @@
 #include "mclib/control/robot_state.hpp"
 #include "mclib/chassis/chassis_math.hpp"
 #include "mclib/control/characterize.hpp"
+#include "mclib/device/types.hpp"
 #include "mclib/control/pose_filter.hpp"
+#include "mclib/control/profiled_moves.hpp"
 #include "mclib/telemetry/file_sink.hpp"
 #include "mclib/telemetry/logger.hpp"
 #include "mclib/control/ramsete.hpp"
@@ -31,7 +33,7 @@ void (*sim_after_refresh_hook)(std::uint32_t millis) = nullptr;
 }
 
 struct Sample {
-  double heading, left, right, current_ma, velocity_rpm;
+  double heading, left, right, current_ma, left_rpm, right_rpm;
   std::uint32_t millis;
   int disabled, cancel;
   double vertical, horizontal;
@@ -40,6 +42,11 @@ struct Sample {
   double gps_x, gps_y, gps_heading;
   int gps_valid;
   double battery_mv;
+  // What the IMU's accelerometer reads toward the robot's right, in/s^2;
+  // NaN when the scenario gives odometry no accelerometer.
+  double accel_right_ips2;
+  // The same toward the robot's front.
+  double accel_forward_ips2;
 };
 using Advance = void (*)(std::uint32_t, Sample*);
 using Output = void (*)(int side, int mode, double volts);
@@ -64,6 +71,7 @@ struct FusionRig {
   std::unique_ptr<mclib::control::PoseFusion> fusion;
   std::optional<mclib::control::OdometryFusion> on_odometry;
   std::vector<double> readings;  // latest, -1 = none since last tick
+  std::optional<mclib::control::GpsInput> gps;
 } fusion_rig;
 mclib::path::TrajectoryConstraints ramsete_limits;
 
@@ -101,7 +109,7 @@ struct SimDrive : mclib::control::DriveHardware {
   double headingDeg() override { return rawHeading() + heading_offset; }
   void setHeadingDeg(double heading) override { heading_offset = heading - rawHeading(); }
   std::vector<double> driveCurrentsMa() override { return {sample.current_ma}; }
-  std::vector<double> driveVelocitiesRpm() override { return {sample.velocity_rpm}; }
+  std::vector<double> driveVelocitiesRpm() override { return {sample.left_rpm, sample.right_rpm}; }
   const mclib::units::DriveGeometry& driveGeometry() const override { return geometry; }
 } drive;
 
@@ -110,7 +118,8 @@ void refresh(std::uint32_t ms) {
   if (sample.cancel) mclib::control::requestCancel();
   last_integrated_pose = mclib::control::odometryTick(
       {drive.headingDeg() * std::acos(-1.0) / 180,
-       drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal});
+       drive.leftPositionDeg(), drive.rightPositionDeg(), sample.vertical, sample.horizontal,
+       static_cast<double>(sample.millis), sample.accel_right_ips2, sample.accel_forward_ips2});
   if (fusion_rig.on_odometry) fusion_rig.on_odometry->step(sample.millis);
   if (sim_after_refresh_hook) sim_after_refresh_hook(sample.millis);
 }
@@ -188,6 +197,15 @@ namespace mclib::time {
 std::uint32_t systemMillis() { return sample.millis; }
 }
 
+// A drive side with 11 W and 5.5 W motors drives and reads its 5.5 W motors
+// through these, as device::MotorGroup does on a robot.
+extern "C" double sim_volts_for_5_5w_motor(double volts) {
+  return mclib::device::voltsFor5_5WMotor(volts);
+}
+extern "C" double sim_reading_scale_for_5_5w_motor(int gearset) {
+  return mclib::device::readingScaleFor5_5WMotor(static_cast<mclib::device::Gearset>(gearset));
+}
+
 extern "C" void sim_init(Advance step, Output write, double diameter_in,
                           double track_in, double ratio, int encoder_heading) {
   using namespace mclib::units;
@@ -199,8 +217,10 @@ extern "C" void sim_init(Advance step, Output write, double diameter_in,
   last_motion_result = 0;
   ramsete_config = {};
   ramsete_limits = {};
-  // The arc switch is library-global; each simulated robot starts without it.
+  // The arc and profiled-move switches are library-global; each simulated
+  // robot starts without them.
   mclib::control::useEncoderArcs();
+  mclib::control::usePidMoves();
   fusion_rig = FusionRig{};
   wall_check.reset();
   wall_reading_in = -1;
@@ -325,7 +345,15 @@ extern "C" void sim_gps_enable(double odom_along_var_per_in, double odom_side_va
   // The simulated robot starts at the field centre and so does odometry, so
   // the map frame is odometry + 72; the GPS origin is the field centre.
   gps.origin_x_in = gps.origin_y_in = kFieldOffsetIn;
+  fusion_rig.gps = gps;
   fusion_rig.fusion->setGps(gps);
+}
+
+// Tell the filter each GPS reading was taken @p latency_ms before it is
+// read, after sim_gps_enable(). Returns 0 when the filter refuses it.
+extern "C" int sim_set_gps_latency(double latency_ms) {
+  fusion_rig.gps->latency_ms = static_cast<std::uint32_t>(latency_ms);
+  return fusion_rig.fusion->setGps(*fusion_rig.gps) ? 1 : 0;
 }
 
 // Make wallReset() (action 8) check a distance sensor against the wall.
@@ -448,6 +476,28 @@ extern "C" void sim_set_ramsete(double ks_v, double kv_v_per_ips, double b, doub
   ramsete_limits.track_width = drive.geometry.track_width;
 }
 
+// driveTo(), turnToAngle(), swing() and moveToPoint() on a planned speed,
+// with kS, kV and the track width from sim_set_ramsete().
+extern "C" int sim_use_profiled_moves(double ka_v_per_ips2, double turn_ks_v,
+                                      double turn_kv_v_per_ips, double turn_ka_v_per_ips2,
+                                      double kp_v_per_in, double kd_v_per_ips, double max_ips,
+                                      double accel_ips2, double decel_ips2, double jerk_ips3) {
+  using namespace mclib::units;
+  mclib::control::ProfiledMoveConfig config;
+  config.follower.gains = ramsete_config.feedforward;
+  config.follower.gains.kA = ka_v_per_ips2 * volt / mclib::control::inps2;
+  config.turn_gains = {turn_ks_v * volt, turn_kv_v_per_ips * volt / inps,
+                       turn_ka_v_per_ips2 * volt / mclib::control::inps2};
+  config.follower.kp = kp_v_per_in * volt / inch;
+  config.follower.kd = kd_v_per_ips * volt / inch;
+  config.limits.max_velocity = max_ips * inps;
+  config.limits.max_acceleration = accel_ips2 * mclib::control::inps2;
+  config.limits.max_deceleration = decel_ips2 * mclib::control::inps2;
+  config.limits.max_jerk = jerk_ips3 * mclib::control::inps3;
+  config.track_width = ramsete_config.track_width;
+  return mclib::control::useProfiledMoves(config) ? 0 : -1;
+}
+
 extern "C" int sim_run(int action, double a, double b, double heading,
                         double timeout_ms, int direction, int exit,
                         double volts, double current_threshold_ma) {
@@ -468,6 +518,8 @@ extern "C" int sim_run(int action, double a, double b, double heading,
                                min_volts)); break;
     case 7: record(boomerang(a * inch, b * inch, direction, heading * degree, boomerang_lead,
                              limit, exit, volts * volt, true, min_volts)); break;
+    case 14: record(moveToPose(a * inch, b * inch, direction, heading * degree, boomerang_lead,
+                               ramsete_config, ramsete_limits, limit, exit, volts * volt)); break;
     case 9:
     case 10:
     case 13: {
@@ -578,6 +630,19 @@ extern "C" void sim_set_horizontal_tracker(double circumference, double forward_
   config.horizontal_offset_forward = forward_offset * inch;
   mclib::control::setOdometryConfig(config);
   refresh(0);
+}
+
+// Add the accelerometer's sideways slide to odometry, the IMU this far ahead
+// of and right of the tracking centre. Returns 0 when odometry refuses it,
+// as it does with a horizontal tracking wheel.
+extern "C" int sim_use_accelerometer(double imu_forward_in, double imu_right_in) {
+  auto config = mclib::control::getOdometryConfig();
+  config.use_accelerometer = true;
+  config.slide.imu_forward_in = imu_forward_in;
+  config.slide.imu_right_in = imu_right_in;
+  if (!mclib::control::setOdometryConfig(config)) return 0;
+  refresh(0);
+  return 1;
 }
 
 // Which tracking wheels odometry reads, after sim_set_trackers().
