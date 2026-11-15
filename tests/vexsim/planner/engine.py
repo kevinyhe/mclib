@@ -743,6 +743,91 @@ def stopped_by_hit(contacts, entry, end, target):
             "Move the route clear of it, or end the step before it.")
 
 
+PLACEMENT_KEYS = ("placement_x_in", "placement_y_in", "placement_heading_deg")
+TOUCHING_IN = .1
+TOUCHING_DEG = .25
+
+
+def placement_of(conditions, scale=1):
+    return {key: conditions[key] * scale for key in PLACEMENT_KEYS}
+
+
+def placement_words(placement):
+    x, y, heading = (placement[key] for key in PLACEMENT_KEYS)
+    return (f"{abs(x):.2f} in {'right' if x >= 0 else 'left'} and {abs(y):.2f} in {'forward' if y >= 0 else 'back'} "
+            f"of the start pose, turned {abs(heading):.2f}° {'clockwise' if heading >= 0 else 'anticlockwise'}")
+
+
+def placement_lines(asked, used, moved_back_from):
+    lines = []
+    if moved_back_from:
+        lines.append(f"Placed {placement_words(asked)}, the robot would start inside {', '.join(moved_back_from)}, "
+                     "so it was moved back toward the start pose until it touched.")
+    if any(used.values()):
+        lines.append(f"The robot stood {placement_words(used)}. Odometry and the heading started at the start pose.")
+    return lines
+
+
+def physics_bridge(lib, project, placement):
+    """The simulator with the robot standing at the start pose moved by
+    `placement`. Odometry and the inertial sensor are set to the start pose
+    itself, the way a robot set down a little off its mark is told it is on it."""
+    conditions, start, robot = project["conditions"], project["start"], project["robot"]
+    standing = (start["x"] + placement["placement_x_in"], start["y"] + placement["placement_y_in"],
+                start["heading"] + placement["placement_heading_deg"])
+    bridge = harness.PhysicsBridge(lib, robot["preset"], soc=conditions["battery_percent"] / 100,
+                                   friction=conditions["grip_percent"] / 100,
+                                   encoder_heading=robot["heading_source"] == "encoders",
+                                   seed=conditions["noise_seed"], tracking_mode=robot["tracking"],
+                                   tuning=project["gains"], start_pose=standing,
+                                   sim_time_limit=LIMITS["max_simulated_s"])
+    if any(placement.values()):
+        lib.sim_set_pose(start["x"], start["y"], start["heading"])
+    bridge.set_slew(project["slew"]["speed_up_v"], project["slew"]["slow_down_v"])
+    return bridge
+
+
+def close_enough_to_touching(asked, fraction):
+    return (math.hypot(asked["placement_x_in"], asked["placement_y_in"]) * fraction <= TOUCHING_IN
+            and abs(asked["placement_heading_deg"]) * fraction <= TOUCHING_DEG)
+
+
+def placed_world(lib, project):
+    """The simulator and field with the robot where it was placed. A placement
+    that puts the robot inside a field element or a piece is cut back toward
+    the start pose, halving the gap each try, until the robot is within
+    TOUCHING_IN and TOUCHING_DEG of touching it. Returns the bridge, the world,
+    the placement used and what the robot was moved back from."""
+    from vexsim.override import StartOverlapError
+
+    def build(scale):
+        placement = placement_of(project["conditions"], scale)
+        bridge = physics_bridge(lib, project, placement)
+        return bridge, make_world(project["field"], bridge.sim, project["preload"]), placement
+
+    asked = placement_of(project["conditions"])
+    try:
+        return (*build(1), None)
+    except StartOverlapError as error:
+        if not any(asked.values()):
+            raise StageError(start_overlap_error(error.overlaps)) from error
+        moved_back_from = sorted({overlap.name for overlap in error.overlaps})
+    clear, inside, built = 0, 1, None
+    while not close_enough_to_touching(asked, inside - clear):
+        middle = (clear + inside) / 2
+        try:
+            built = build(middle)
+            clear = middle
+        except StartOverlapError:
+            inside, built = middle, None
+    if built is None:
+        try:
+            built = build(clear)
+        except StartOverlapError as error:
+            raise StageError(start_overlap_error(error.overlaps)) from error
+    return (*built, moved_back_from)
+
+
 def execute(raw, destination, vexsim, cache):
     """Runs the whole routine in vexsim with mclib's C++ and reports what
     each step did. A step that breaks a rule is the last one run."""
@@ -801,21 +886,8 @@ def _execute(raw, destination, vexsim, cache, progress):
                          "stops. "
                          f"The simulator runs at most {LIMITS['max_simulated_s']} s. Lower some time limits "
                          "or split the routine.")
-    conditions = project["conditions"]
-    start = project["start"]
-    bridge = harness.PhysicsBridge(lib, robot["preset"], soc=conditions["battery_percent"] / 100,
-                                   friction=conditions["grip_percent"] / 100,
-                                   encoder_heading=robot["heading_source"] == "encoders",
-                                   seed=conditions["noise_seed"], tracking_mode=robot["tracking"],
-                                   tuning=project["gains"], start_pose=(start["x"], start["y"], start["heading"]),
-                                   sim_time_limit=LIMITS["max_simulated_s"])
-    bridge.set_slew(project["slew"]["speed_up_v"], project["slew"]["slow_down_v"])
+    bridge, world, placement, moved_back_from = placed_world(lib, project)
     recorder = Recorder(destination)
-    from vexsim.override import StartOverlapError
-    try:
-        world = make_world(project["field"], bridge.sim, project["preload"])
-    except StartOverlapError as error:
-        raise StageError(start_overlap_error(error.overlaps)) from error
     rig = CascadeRig(lib, bridge, world) if project["field"] == "override" else None
     rules = RuleWatch(world, PRESETS[robot["preset"]]["drive_watts"]) if rig else None
     rule_breaks = []
@@ -920,7 +992,7 @@ def _execute(raw, destination, vexsim, cache, progress):
             if not step["chain"]:
                 hold = [frame for frame in recorder.trace if frame["step"] == index and frame["phase"] == "hold"]
                 readings += stopping_readings(hold, index == total - 1)
-        info = []
+        info = placement_lines(placement_of(project["conditions"]), placement, moved_back_from) if index == 0 else []
         if rig and index == 0:
             legal_lines, broken_lines = start_rules(rules.report())
             info += legal_lines
@@ -981,7 +1053,7 @@ def _execute(raw, destination, vexsim, cache, progress):
         if rig:
             info.extend(claw_events(world, started, bridge.sim.t))
             info.extend(toggle_events(world, faces_before))
-        rows.append(dict(index=index, type=step["type"], executed=True,
+        rows.append(dict(index=index, type=step["type"], executed=True, configuration_error=configuration_error,
                          contacts=[contact_dict(contact, started) for contact in contacts],
                          readings=readings, rule_breaks=step_breaks, notes=notes, info=info, target=target,
                          timeout_ms=timeout_ms,
@@ -1018,7 +1090,7 @@ def _execute(raw, destination, vexsim, cache, progress):
                   plans=plans or [None] * len(rows), settings=path_settings(project, feedforward) if feedforward else None,
                   designed_poses=poses, project=project, source_fingerprint=fingerprint,
                   stages=progress.stages, pieces=pieces, score=score_summary(world) if rig else None,
-                  autonomous=autonomous)
+                  autonomous=autonomous, placement=dict(placement, moved_back_from=moved_back_from))
     write_json(destination / "result.json", result)
     with (destination / "trace.csv").open("w", newline="") as handle:
         fields = list(dict.fromkeys(key for frame in recorder.trace for key in frame if key != "pieces"))

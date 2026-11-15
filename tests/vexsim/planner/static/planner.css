@@ -301,6 +301,8 @@ kbd {
 .swatch.truth { background: var(--text); }
 .swatch.odometry { background: repeating-linear-gradient(90deg, var(--odometry) 0 4px, transparent 4px 7px); }
 .swatch.compare { background: repeating-linear-gradient(90deg, var(--compare) 0 2px, transparent 2px 5px); }
+.swatch.robot-log { background: repeating-linear-gradient(90deg, var(--ok) 0 8px, transparent 8px 10px); }
+.swatch.batch { background: linear-gradient(90deg, rgba(37, 99, 235, .45) 0 70%, #c2362f 70%); }
 .field-head #fit { margin-left: auto; }
 .field-wrap {
   position: relative;
@@ -412,6 +414,7 @@ kbd {
 
 /* Right column */
 .tabs { border-bottom: 1px solid var(--border); padding: 0 6px; }
+.right > .tabs button { padding-inline: 7px; white-space: nowrap; }
 .pane { padding: 12px 16px 24px; overflow: auto; flex: 1; }
 .pane-title { display: flex; align-items: baseline; gap: 8px; }
 .pane-title h2 { font-size: 15px; flex: 1; min-width: 0; }
@@ -568,3 +571,27 @@ details.description[open] .more { display: none; }
   .field-wrap { min-height: 320px; }
   .routine-panel { max-height: none; }
 }
+
+/* Run many */
+.batch-buttons { display: flex; gap: 8px; margin: 10px 0; }
+.batch-picker { margin: 4px 0 8px; }
+.batch-status { margin: 8px 0; font-weight: 600; }
+.batch-summary { margin: 6px 0; padding-left: 18px; }
+.batch-summary li { margin: 3px 0; }
+.batch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.batch-table th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); padding: 3px 4px; }
+.batch-table td { border-bottom: 1px solid var(--border); padding: 3px 4px; vertical-align: top; }
+.batch-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.batch-table tr.short td:nth-child(3) { color: var(--bad); font-weight: 600; }
+.batch-runs { list-style: none; margin: 6px 0; padding: 0; }
+.batch-runs li { border-bottom: 1px solid var(--border); padding: 6px 0 6px 8px; border-left: 3px solid transparent; }
+.batch-runs li.worst { border-left-color: var(--bad); }
+.batch-runs li.shown { background: var(--accent-soft); }
+.batch-run-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* Robot log */
+.robot-log-panel { margin: 6px 0; padding: 6px 8px; border-left: 3px solid var(--ok); background: var(--panel-2); }
+.robot-log-panel p { margin: 3px 0; }
+.robot-log-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; overflow-wrap: anywhere; }
+.robot-log-offset { margin: 4px 0; }
+.card.robot-log { border-left: 3px solid var(--ok); }

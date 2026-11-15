@@ -1005,6 +1005,24 @@ class EngineTests(unittest.TestCase):
         self.assertRegex(error["error"], r"^The robot starts inside the red left Goal, \d\.\d\d in deep\.")
         self.assertFalse((output / "result.json").exists())
 
+    def test_10d_a_placement_into_a_toggle_is_cut_back_until_the_robot_touches_it(self):
+        project = dict(field="override", preload="none", robot=dict(preset="override_cascade", tracking="horizontal"),
+                       start=dict(x=0, y=-61.7, heading=0), conditions=dict(placement_y_in=-.8),
+                       steps=[dict(type="drive", distance=2)])
+        done, output = self.run_routine(project)
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
+        result = strict_json((output / "result.json").read_text())
+        placement = result["placement"]
+        self.assertEqual(placement["moved_back_from"], ["the left Toggle"])
+        self.assertEqual((placement["placement_x_in"], placement["placement_heading_deg"]), (0, 0))
+        self.assertGreater(placement["placement_y_in"], -.8)
+        self.assertLess(placement["placement_y_in"], 0)
+        info = result["steps"][0]["info"]
+        self.assertEqual(info[0], "Placed 0.00 in right and 0.80 in back of the start pose, turned 0.00° clockwise, "
+                                  "the robot would start inside the left Toggle, so it was moved back toward the "
+                                  "start pose until it touched.")
+        self.assertRegex(info[1], r"^The robot stood 0\.00 in right and 0\.\d\d in back of the start pose")
+
     def test_11_a_step_stopped_by_a_goal_names_the_goal_not_the_controller(self):
         project = dict(field="override", preload="none", robot=dict(preset="override_cascade", tracking="horizontal"),
                        start=dict(x=8, y=-47.1, heading=90), steps=[dict(type="drive", distance=30, timeout_ms=2500)])

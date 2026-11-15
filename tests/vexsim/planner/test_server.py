@@ -56,6 +56,21 @@ class StubPlanner:
     def cancel(self, identity):
         return self.get(identity)
 
+    def submit_batch(self, body):
+        if set(body) != {"project", "settings"}:
+            raise ValueError("Send the routine and the run-many settings.")
+        validate_project(body["project"])
+        return dict(id="c" * 32, number=1, status="queued", settings=server.repeat_settings(body["settings"]))
+
+    def get_batch(self, identity):
+        return dict(id=identity, status="queued") if identity == "c" * 32 else None
+
+    def list_batches(self):
+        return []
+
+    def cancel_batch(self, identity):
+        return self.get_batch(identity)
+
     def close(self):
         pass
 
@@ -115,6 +130,23 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.json("GET", "/api/examples/..%2fserver")[0], 404)
         status, project = self.json("POST", "/api/validate", ONE_POINT)
         self.assertEqual((status, project["steps"][0]["volts"]), (200, 12))
+
+    def test_run_many_checks_its_settings_and_routine(self):
+        status, answer = self.json("POST", "/api/batches", dict(project=ONE_POINT, settings=dict(count=1)))
+        self.assertEqual((status, answer["error"]), (400, "Run many: Runs must be between 2 and 50, not 1"))
+        status, answer = self.json("POST", "/api/batches", dict(project=ONE_POINT, settings=dict(speed=3)))
+        self.assertEqual((status, answer["error"]), (400, "Run many has fields the planner does not know: speed"))
+        status, answer = self.json("POST", "/api/batches", dict(project=ONE_POINT, settings=dict(count=2.5)))
+        self.assertEqual((status, answer["error"]), (400, "Run many: Runs must be a whole number"))
+        status, answer = self.json("POST", "/api/batches", dict(project=dict(steps=[dict(type="turn", heading="left")]),
+                                                               settings={}))
+        self.assertEqual((status, answer["step"]), (400, 0))
+        status, answer = self.json("POST", "/api/batches", dict(project=ONE_POINT, settings={}))
+        self.assertEqual((status, answer["settings"]["count"]), (202, 20))
+        self.assertEqual(self.json("GET", "/api/batches/" + "c" * 32)[0], 200)
+        self.assertEqual(self.json("GET", "/api/batches/" + "d" * 32)[0], 404)
+        self.assertEqual(self.json("POST", "/api/batches/" + "c" * 32 + "/cancel", {})[0], 200)
+        self.assertEqual(self.json("GET", "/api/batches"), (200, dict(batches=[])))
 
     def test_bad_routines_come_back_with_the_step(self):
         status, answer = self.json("POST", "/api/runs", dict(steps=[dict(type="turn", heading="left")]))
@@ -281,6 +313,123 @@ class QueueTests(unittest.TestCase):
             with self.assertRaises(ProjectError):
                 planner.submit(dict(steps=[dict(type="path", points=[], sections=[])]))
             self.assertEqual(planner.list(), [])
+        finally:
+            planner.close()
+
+
+FAKE_RUN = r"""
+import json, sys
+arguments = sys.argv[1:]
+project = json.load(open(arguments[arguments.index("--project") + 1]))
+output = arguments[arguments.index("--output") + 1]
+conditions = project["conditions"]
+row = dict(index=0, type="drive", executed=True, configuration_error=None, rule_breaks=[], coordinate_reset=False,
+           move_result=None, duration_s=1.0, timeout_ms=4000, position_error_in=abs(conditions["placement_x_in"]) * 4,
+           heading_error_deg=0.5)
+trace = [dict(t=tenth / 10, true_x=conditions["placement_x_in"], true_y=tenth, true_heading=0) for tenth in range(13)]
+placement = {key: conditions[key] for key in ("placement_x_in", "placement_y_in", "placement_heading_deg")}
+json.dump(dict(legal=True, steps=[row], trace=trace, project=project, autonomous=None, score=None,
+               placement=dict(placement, moved_back_from=None),
+               summary=dict(steps=1, ran_steps=1, skipped_steps=0, broke_rule_in_step=None, simulated_s=1.2)),
+          open(output + "/result.json", "w"))
+"""
+ONE_DRIVE = dict(steps=[dict(type="drive", distance=24)])
+
+
+def fake_engine(*arguments, vexsim, cache):
+    return [sys.executable, "-c", FAKE_RUN, *map(str, arguments)]
+
+
+class RunManyTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.output = Path(self.folder.name)
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def wait_for(self, read, statuses):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            value = read()
+            if value["status"] in statuses:
+                return value
+            time.sleep(.05)
+        self.fail(f"never reached {statuses}")
+
+    def test_each_run_varies_the_start_and_the_report_puts_the_worst_first(self):
+        with mock.patch.object(server, "engine_command", fake_engine):
+            planner = server.Planner(self.output, self.output, parallel_runs=3)
+            try:
+                batch = planner.submit_batch(dict(project=ONE_DRIVE, settings=dict(count=6, placement_in=1)))
+                batch = self.wait_for(lambda: planner.get_batch(batch["id"]), {"finished"})
+                runs = batch["runs"]
+                self.assertEqual([run["status"] for run in runs], ["finished"] * 6)
+                placements = [run["conditions"]["placement_x_in"] for run in runs]
+                self.assertTrue(all(abs(x) <= 1 for x in placements), placements)
+                self.assertEqual(len(set(run["conditions"]["noise_seed"] for run in runs)), 6)
+                step = batch["report"]["steps"][0]
+                self.assertEqual((step["ran"], step["finished"]), (6, 6))
+                self.assertEqual(step["on_target"], sum(abs(x) * 4 <= 2 for x in placements))
+                worst = max(runs, key=lambda run: abs(run["conditions"]["placement_x_in"]))
+                self.assertEqual(batch["report"]["worst_first"][0], worst["number"])
+                child = planner.get(worst["id"])
+                self.assertEqual(child["project"]["conditions"], worst["conditions"])
+                self.assertEqual(child["batch"]["number"], batch["number"])
+                self.assertEqual(planner.list(), [])
+                self.assertEqual([item["id"] for item in planner.list_batches()], [batch["id"]])
+            finally:
+                planner.close()
+
+    def test_one_run_many_at_a_time_and_cancel_stops_its_runs(self):
+        with mock.patch.object(server, "engine_command", sleeping_engine):
+            planner = server.Planner(self.output, self.output, parallel_runs=2)
+            try:
+                batch = planner.submit_batch(dict(project=ONE_DRIVE, settings=dict(count=4)))
+                self.wait_for(lambda: planner.get_batch(batch["id"]), {"running"})
+                with self.assertRaisesRegex(server.BusyError, "A run-many is still going"):
+                    planner.submit_batch(dict(project=ONE_DRIVE, settings=dict(count=2)))
+                planner.cancel_batch(batch["id"])
+                cancelled = self.wait_for(lambda: planner.get_batch(batch["id"]), {"cancelled"})
+                self.assertEqual({run["status"] for run in cancelled["runs"]}, {"cancelled"})
+                deadline = time.monotonic() + 5
+                while planner.processes and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertEqual(planner.processes, {})
+                self.assertEqual(planner.submit_batch(dict(project=ONE_DRIVE, settings=dict(count=2)))["number"], 2)
+            finally:
+                planner.close()
+
+    def test_a_single_run_goes_before_the_waiting_runs_of_a_run_many(self):
+        with mock.patch.object(server, "engine_command", sleeping_engine):
+            planner = server.Planner(self.output, self.output, parallel_runs=1)
+            try:
+                batch = planner.submit_batch(dict(project=ONE_DRIVE, settings=dict(count=3)))
+                first = self.wait_for(lambda: planner.get_batch(batch["id"]), {"running"})["runs"][0]
+                single = planner.submit(ONE_POINT)
+                planner.cancel(first["id"])
+                self.wait_for(lambda: planner.get(single["id"]), {"running"})
+                self.assertEqual(planner.get_batch(batch["id"])["runs"][1]["status"], "queued")
+            finally:
+                planner.close()
+
+    def test_a_run_many_left_unfinished_is_restored_with_its_runs_as_errors(self):
+        identity, done, waiting = "e" * 32, "f" * 32, "0" * 32
+        folder = self.output / identity
+        folder.mkdir()
+        (folder / "project.json").write_text(json.dumps(validate_project(ONE_DRIVE)))
+        runs = [dict(id=done, number=1, status="cancelled", outcome=None, conditions={}),
+                dict(id=waiting, number=2, status="running", outcome=None, conditions={})]
+        (folder / "batch.json").write_text(json.dumps(dict(id=identity, number=4, name="r", created_at=0, settings={},
+                                                           seed=1, cancelled=False, runs=runs)))
+        planner = server.Planner(self.output, self.output)
+        try:
+            batch = planner.get_batch(identity)
+            self.assertEqual(batch["status"], "finished")
+            self.assertEqual(batch["runs"][1]["error"], server.STOPPED_EARLY)
+            self.assertEqual(planner.get(waiting)["status"], "error")
+            with mock.patch.object(server, "engine_command", sleeping_engine):
+                self.assertEqual(planner.submit_batch(dict(project=ONE_DRIVE, settings=dict(count=2)))["number"], 5)
         finally:
             planner.close()
 

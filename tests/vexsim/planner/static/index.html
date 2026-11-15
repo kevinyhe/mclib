@@ -7,6 +7,7 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="planner.css">
   <script src="geometry.js" defer></script>
+  <script src="robotlog.js" defer></script>
   <script src="planner.js" defer></script>
 </head>
 <body>
@@ -30,6 +31,7 @@
       <div id="engine-pill" class="pill" role="status" title="Planning needs mclib compiled and the robot measured">Starting…</div>
       <button id="cancel-run" class="danger" hidden title="Stop the simulation that is running">Cancel</button>
       <button id="help" class="icon-button" aria-label="Keyboard and mouse help" title="Keyboard and mouse help (?)">?</button>
+      <button id="run-many" title="Run the routine many times with the robot placed a little off the start and the grip and battery changed, and see how often each step lands">Run many…</button>
       <button id="run" class="primary" title="Simulate the whole routine in vexsim with mclib's C++ (Ctrl+Enter)">Run simulation</button>
     </div>
   </header>
@@ -45,6 +47,7 @@
       <section class="panel activity-panel" aria-labelledby="activity-title">
         <div class="panel-head"><h2 id="activity-title">Activity</h2><span id="activity-clock" class="muted small"></span></div>
         <div id="run-summary" class="run-summary" hidden></div>
+        <div id="robot-log-panel" class="robot-log-panel" hidden></div>
         <details id="activity-details" class="activity-details">
           <summary>Stages and messages</summary>
           <ol id="stage-list" class="stage-list" aria-label="What the planner is doing"></ol>
@@ -64,7 +67,11 @@
           <label title="Where the simulated robot really went"><input type="checkbox" data-layer="truth" checked><i class="swatch truth"></i>Simulated</label>
           <label title="Where the robot's odometry thought it was"><input type="checkbox" data-layer="odometry" checked><i class="swatch odometry"></i>Odometry</label>
           <label title="The path of the run chosen under Compare with"><input type="checkbox" data-layer="compare" checked><i class="swatch compare"></i>Compare</label>
+          <label id="layer-robot-log" title="The robot log: where the robot's odometry put it" hidden><input type="checkbox" data-layer="robotLog" checked><i class="swatch robot-log"></i>Robot log</label>
+          <label id="layer-batch" title="Every run of the run-many in the Run many tab; the worst in red" hidden><input type="checkbox" data-layer="batch" checked><i class="swatch batch"></i>Run many</label>
         </div>
+        <button id="robot-log-load" class="small" title="Draw a CSV your robot logged with mclib's telemetry Logger over the plan and the run. It needs x_in and y_in columns.">Robot log…</button>
+        <input id="robot-log-file" type="file" accept="text/csv,.csv,.txt" hidden>
         <button id="fit" class="small" title="Fit the routine in view (F)">Fit</button>
       </div>
       <div id="field-wrap" class="field-wrap">
@@ -121,10 +128,12 @@
         <button id="tab-step" role="tab" aria-selected="true" data-tab="step">Step</button>
         <button id="tab-robot" role="tab" aria-selected="false" data-tab="robot">Robot & settings</button>
         <button id="tab-telemetry" role="tab" aria-selected="false" data-tab="telemetry">Telemetry</button>
+        <button id="tab-batch" role="tab" aria-selected="false" data-tab="batch">Run many</button>
       </div>
       <div id="pane-step" class="pane"></div>
       <div id="pane-robot" class="pane" hidden></div>
       <div id="pane-telemetry" class="pane" hidden></div>
+      <div id="pane-batch" class="pane" hidden></div>
     </aside>
   </main>
 
