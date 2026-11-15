@@ -3,7 +3,7 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow
 [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.4
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. The planner
 and the scenarios need its `with_traction_wheels()`, `OtherRobot` and
