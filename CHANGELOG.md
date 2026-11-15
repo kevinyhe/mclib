@@ -6,7 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 ## Unreleased
 
 Update vexsim for the path planner: `git -C ../vexsim pull`. The planner
-and the scenarios need its `with_traction_wheels()` and `OtherRobot`.
+and the scenarios need its `with_traction_wheels()`, `OtherRobot` and
+`six_motor_55w`.
 
 ### Added
 
@@ -116,6 +117,12 @@ and the scenarios need its `with_traction_wheels()` and `OtherRobot`.
 - `device::gearsetRpm()`, `device::voltsFor5_5WMotor()`,
   `device::readingScaleFor5_5WMotor()`, `device::kMotor5_5WRpm` and
   `device::kMotor5_5WFullVolts`.
+- The physics scenarios and the path planner have the 55 W drive
+  (`six_motor_55w`): two 11 W motors and one 5.5 W motor a side. The runner
+  drives and reads its 5.5 W motors through `voltsFor5_5WMotor()` and
+  `readingScaleFor5_5WMotor()`. It passes the same moves as `six_motor_450`
+  except the boomerang with two tracking wheels, 1.75 in off against 1.5.
+  Planner example `fifty_five_watt_drive.json`.
 
 ### Changed
 
@@ -140,6 +147,8 @@ and the scenarios need its `with_traction_wheels()` and `OtherRobot`.
   `startOdometry()` refuses it.
 - The planner's claw tank leaks, 10 psi an hour (vexsim's
   `GUESSES["Air leak"]`). A routine never notices.
+- The path planner checks the drive against R11's 55 W and no longer adds
+  every motor up against R10's 88 W.
 
 ### Fixed
 
