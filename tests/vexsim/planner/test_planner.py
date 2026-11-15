@@ -1201,8 +1201,11 @@ class EngineTests(unittest.TestCase):
         with self.subTest("override_center_goal"):
             result = results["override_center_goal"]
             info = [line for row in result["steps"] for line in row["info"]]
-            self.assertEqual(len([line for line in info if line.startswith("Gripped a Cup with a blue/red Pin")]), 1, info)
+            self.assertEqual(len([line for line in info if line.startswith("Gripped a blue/red Pin")]), 1, info)
             self.assertEqual(len([line for line in info if line.startswith("Dropped")]), 1, info)
+            carry = [frame["holding"] for frame in result["trace"] if frame["step"] == 2]
+            first_tenth_of_a_second = 10
+            self.assertEqual(set(carry[first_tenth_of_a_second:]), {"a Cup with a blue/red Pin"}, carry)
 
             def on_the_goal(pose):
                 return math.hypot(pose[0], pose[1]) < 0.3

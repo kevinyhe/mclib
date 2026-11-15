@@ -821,7 +821,7 @@ def _execute(raw, destination, vexsim, cache, progress):
     rule_breaks = []
     pieces = piece_list(world.pieces) if rig else None
     if world is not None:
-        bridge.step_world = world.step
+        bridge.step_world = rig.step_world if rig else world.step
 
     autonomous = None
     tips = TipWatch(bridge.sim)

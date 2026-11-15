@@ -2,7 +2,7 @@
   "format": "mclib-path-planner",
   "version": 1,
   "name": "Override: a stack onto the Center Goal",
-  "description": "Drives the bite straight onto the blue/red stack at (0, -23.5), closes the claw on its Cup and Pin, and carries it 24.5 in to the Center Goal with the lift rising to Over the Center Goal from the start of the drive. Then the lift comes down to On the Center Goal, the claw opens, and the robot backs away and lowers the lift. The stack ends standing on the Center Goal's Pin, and the simulator scores it 5 for red and 5 for blue. 7.1 s.",
+  "description": "Drives the bite straight onto the blue/red stack at (0, -23.5) and closes the claw on its Pin. The bottom bands take the Cup too as the lift starts to rise, and the robot carries the stack 24.5 in to the Center Goal with the lift rising to Over the Center Goal from the start of the drive. Then the lift comes down to On the Center Goal, the claw opens, and the robot backs away and lowers the lift. The stack ends standing on the Center Goal's Pin, and the simulator scores it 5 for red and 5 for blue. 7.1 s.",
   "field": "override",
   "preload": "none",
   "robot": {"preset": "override_cascade", "tracking": "horizontal"},

@@ -6,6 +6,7 @@
 #include "mclib/mechanism/position_mechanism.hpp"
 
 #include "mclib/time.hpp"
+#include "mclib/utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -57,6 +58,7 @@ void PositionMechanism::hold() {
 void PositionMechanism::setManualVoltage(double volts) {
   m_manual = true;
   m_manual_voltage = clampVoltage(volts);
+  m_hold_volts = 0.0;
 }
 
 void PositionMechanism::stop() {
@@ -69,6 +71,7 @@ void PositionMechanism::onDisabled() {
   setManualVoltage(0.0);
   m_pid.reset();
   m_arrived = false;
+  m_hold_volts = 0.0;
   if (m_voltage_sink) m_voltage_sink(0.0);
 }
 
@@ -178,6 +181,7 @@ void PositionMechanism::applyState(const double& target) {
   m_sensor_fault = !std::isfinite(current) || !std::isfinite(target);
   if (m_sensor_fault) {
     m_arrived = false;
+    m_hold_volts = 0.0;
     m_pid.reset();
     m_voltage_sink(0.0);
     return;
@@ -207,7 +211,8 @@ void PositionMechanism::applyState(const double& target) {
   }
 
   m_pid.setTarget(target);
-  m_voltage_sink(clampVoltage(m_pid.update(current)));
+  const double pid_volts = m_pid.update(current);
+  m_voltage_sink(clampVoltage(pid_volts + gravityVolts(current) + holdVolts(target - current)));
 
   if (m_pid.targetArrived()) {
     m_arrived = true;
@@ -229,8 +234,30 @@ void PositionMechanism::beginClosedLoop(double target) {
   m_manual = false;
   m_manual_voltage = 0.0;
   m_arrived = false;
+  m_hold_volts = 0.0;
   m_pid.reset();
   m_pid.setTarget(target);
+}
+
+double PositionMechanism::gravityVolts(double position) const {
+  if (m_config.gravity_model == PositionMechanismConfig::GravityModel::Lift) {
+    return m_config.gravity_volts;
+  }
+  const double arm_angle_deg =
+      (position - m_config.arm_level_position) / m_config.arm_units_per_degree;
+  return m_config.gravity_volts * std::cos(degToRad(arm_angle_deg));
+}
+
+double PositionMechanism::holdVolts(double error) {
+  if (!m_arrived) return 0.0;
+  if (std::fabs(error) <= m_config.small_error) {
+    m_hold_volts += m_config.hold_ki * error;
+  }
+  if (m_config.integral_max_volts > 0.0) {
+    m_hold_volts = std::clamp(m_hold_volts, -m_config.integral_max_volts,
+                              m_config.integral_max_volts);
+  }
+  return m_hold_volts;
 }
 
 double PositionMechanism::clampVoltage(double volts) const {

@@ -77,6 +77,14 @@ const mclib::mechanism::PositionMechanismConfig lift_config{
     // close to the target. False outputs 0 V on arrival and starts again once
     // the lift has dropped past small_error.
     .hold_output = true,
+    // Takes out what the hold leaves inside small_error: after arrival, volts
+    // per inch of error added up every pass, capped at integral_max_volts.
+    .hold_ki = 0.1,
+    // Volts that hold the lift still on their own. They are added to the
+    // loop's output, so the loop only fixes what is left and the lift sits
+    // closer to its target. To measure: raise the voltage until the lift
+    // starts to rise, lower it until it starts to sink, and average the two.
+    .gravity_volts = 0.8,
 };
 
 mclib::mechanism::PositionMechanism lift(
@@ -195,8 +203,19 @@ mclib::mechanism::PresetPositionMechanism<ArmPreset> arm(
     [] { return arm_sensor.getPositionDeg(); },
     [](double volts) { arm_motors.setVoltage(volts); },
     // The same config as the lift's. Fields left out keep their defaults.
+    // An arm needs gravity_volts with the arm level and less the further it
+    // turns from level: gravity_volts * cos(angle). Stowed, this arm hangs
+    // 30 degrees below level, so the sensor reads 30 with the arm level.
     mclib::mechanism::PositionMechanismConfig{
-        .kp = 0.12, .kd = 0.4, .max_voltage = 10.0, .small_error = 1.5});
+        .kp = 0.12,
+        .kd = 0.4,
+        .max_voltage = 10.0,
+        .small_error = 1.5,
+        .gravity_volts = 1.0,
+        .gravity_model =
+            mclib::mechanism::PositionMechanismConfig::GravityModel::Arm,
+        .arm_level_position = 30.0,
+    });
 
 const double arm_move_limit_ms = 1500.0;
 const double arm_press_down_degrees = 20.0;
