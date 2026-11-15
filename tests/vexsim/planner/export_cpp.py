@@ -10,7 +10,7 @@ import re
 
 from mechanisms import ACTION_TIMES, MECHANISM_ENUMS, MECHANISMS, PRELOADS, cpp_preset, describe_match_load
 from geometry import designed_poses, path_layout
-from project import MECHANISM_STEPS, PRESETS, STEP_TYPES, TRACKING, carries_speed, step_time_limit
+from project import MECHANISM_STEPS, PRESETS, STEP_TYPES, TRACKING, TRACTION, carries_speed, step_time_limit
 
 HERE = Path(__file__).resolve().parent
 PLACEHOLDER_FEEDFORWARD = dict(ks=0.7, kv=0.13, top_ips=60.0, track_in=13.5)
@@ -333,6 +333,18 @@ def step_lines(project, index, step, start_pose, plan, top_ips):
     return with_actions(step, call) if step["actions"] else [f"  {call};"]
 
 
+def simulated_on(project):
+    """The comment lines that say what the routine was simulated with."""
+    robot = project["robot"]
+    wheels = "" if robot["traction"] == "none" else f"; traction wheels: {TRACTION[robot['traction']].lower()}"
+    lines = [f"// Simulated on: {PRESETS[robot['preset']]['label']}; {TRACKING[robot['tracking']].lower()}{wheels}."]
+    others = [f"the {other['role']} robot " + (f"driving a {len(other['path'])}-point path" if other["path"]
+                                                else "holding still") for other in project["other_robots"]]
+    if others:
+        lines.append(f"// Simulated with {', '.join(others)}. Real ones will be placed and driven differently.")
+    return lines
+
+
 def routine_code(project, settings, plans):
     top_ips = (settings["feedforward"] if settings else PLACEHOLDER_FEEDFORWARD)["top_ips"]
     defaults, robot, start = project["path_defaults"], project["robot"], project["start"]
@@ -347,7 +359,7 @@ def routine_code(project, settings, plans):
         includes += ["planner/path_helpers.hpp", "planner/robot_drive.hpp"]
     lines = [f"// \"{comment_text(project['name'])}\", exported from the mclib path planner.",
              "// The planner replaces this file on every export.",
-             f"// Simulated on: {PRESETS[robot['preset']]['label']}; {TRACKING[robot['tracking']].lower()}.",
+             *simulated_on(project),
              "// Units: inches and degrees. 0 deg faces +Y (forward); clockwise is positive.",
              f"// Place the robot at ({number(start['x'])}, {number(start['y'])}) facing "
              f"{number(start['heading'])} deg before autonomous starts.",

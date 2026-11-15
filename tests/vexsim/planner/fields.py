@@ -43,17 +43,20 @@ def piece_list(pieces):
             for piece in pieces.pieces()]
 
 
-def make_world(field, sim, preload="none"):
+def make_world(field, sim, preload="none", others=()):
     """The object whose step() advances the drivetrain and everything around it,
     or None for the open floor. @p preload is the colour of the half of
-    the preload Pin that points up in the closed claw, or "none". Raises
-    vexsim's StartOverlapError if the robot starts inside anything."""
+    the preload Pin that points up in the closed claw, or "none". @p others
+    are the project's other robots. Raises vexsim's StartOverlapError if
+    a robot starts inside anything."""
     if field == "open":
         return None
     if field == "override":
+        from other_robots import vexsim_robots
         from vexsim.cascade import CascadeRobot
         from vexsim.override import OverrideWorld
-        return OverrideWorld(sim, preload=None if preload == "none" else preload, robot=CascadeRobot())
+        return OverrideWorld(sim, preload=None if preload == "none" else preload, robot=CascadeRobot(),
+                             others=vexsim_robots(others))
     raise ValueError(f"unknown field {field!r}")
 
 

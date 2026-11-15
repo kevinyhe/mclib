@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## Unreleased
 
+Update vexsim for the path planner: `git -C ../vexsim pull`. The planner
+and the scenarios need its `with_traction_wheels()` and `OtherRobot`.
+
 ### Added
 
 - `PositionMechanismConfig::gravity_volts`: volts that hold the load still,
@@ -80,6 +83,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   In the physics simulator with tracking wheels, to (24, 24) at 90°, it
   ended closer than `boomerang()` on every drive (0.13-0.60 in against
   0.40-2.97 in) and was faster on all but the Override cascade drive.
+- The path planner puts the partner's robot and up to two opponents' robots
+  on the Override field (**Other robots** on the Robot & settings tab). Each
+  is a box on a drivetrain that holds still braking, or waits and then
+  drives a path drawn on the field. Steps report hits on them as on a wall,
+  and the run says where each one ended up.
+- **Traction wheels** in the planner: none, the middle pair on the 6-motor
+  drive, or every driven wheel. The planner measures the robot again for
+  each choice, and the exported C++ names it.
+- `tests/vexsim/run.py` runs the motion scenarios on the 6-motor drive with
+  traction wheels in the middle (`six_motor_450_middle_traction/...`).
+- Planner examples `traction_wheels.json` and `override_other_robots.json`.
 
 ### Changed
 
@@ -102,6 +116,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
   `latency_ms` longer than the filter remembers. A `PoseFusion` given such a
   distance sensor has a configuration error, does nothing, and
   `startOdometry()` refuses it.
+- The planner's claw tank leaks, 10 psi an hour (vexsim's
+  `GUESSES["Air leak"]`). A routine never notices.
 
 ### Fixed
 

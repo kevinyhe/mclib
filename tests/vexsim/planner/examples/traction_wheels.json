@@ -1,0 +1,14 @@
+{
+  "format": "mclib-path-planner",
+  "version": 1,
+  "name": "Traction wheels in the middle",
+  "description": "The S-curve on the 6-motor drive with drive encoders alone and traction wheels in the middle pair, then a turn to 180°. The path ends 0.86 in from its end point with odometry 1.1 in off. Switch Traction wheels to None and run again: on omnis the robot slides in the curves and ends 5.75 in off, with odometry 5.2 in off. The turn takes 0.95 s with traction wheels and 0.92 s on omnis.",
+  "robot": {"preset": "six_motor_450", "tracking": "drive", "traction": "middle"},
+  "steps": [
+    {"type": "path",
+     "points": [{"x": 24, "y": -12}, {"x": 0, "y": 24}, {"x": -24, "y": 56}],
+     "sections": [{"speed_percent": null, "reverse": false}, {"speed_percent": null, "reverse": false},
+                  {"speed_percent": null, "reverse": false}]},
+    {"type": "turn", "heading": 180}
+  ]
+}
