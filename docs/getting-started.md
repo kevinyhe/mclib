@@ -72,6 +72,38 @@ Geometry has no defaults. `units::Wheel` is built from a measurement:
 
 `mclib/robot_geometry.hpp` is an optional place to keep these values.
 
+### A drive with 5.5 W motors
+
+Override caps the motors that drive the base at 55 W (R11), for example four
+11 W motors and two 5.5 W motors. List the 5.5 W motors in their own lists,
+after the gearset:
+
+```cpp
+mclib::Chassis chassis(
+    {-1, 2},                             // left 11 W motors
+    {3, -4},                             // right 11 W motors
+    mclib::device::Gearset::Blue,        // the 11 W motors' cartridge
+    {-5},                                // left 5.5 W motors
+    {6},                                 // right 5.5 W motors
+    mclib::ChassisDimensions{mclib::units::Wheel::fromDiameter(3.25_in),
+                             11.5_in,
+                             36.0 / 48.0},  // wheel revs per 11 W motor rev
+    imu);
+```
+
+Gear every motor to turn the wheels at the same speed at full power. A 5.5 W
+motor tops out at 200 rpm, so next to blue 600 rpm motors it needs three
+times their speed-up, and next to green ones it shares their gearing.
+
+mclib reads each 5.5 W motor on the 11 W motors' shaft, so the gear ratio
+above is the only one to give. It sends a 5.5 W motor 8/12 of the voltage,
+because it reaches full speed at about 8 V. Then both kinds run at the same
+fraction of full speed, and the 5.5 W motors do not run ahead of the 11 W
+ones and fight them. A 5.5 W motor listed with the 11 W motors reads a
+third of the distance on a blue drive; mclib prints its port once.
+`device::MotorGroup` takes the same three lists for a mechanism.
+`examples/fifty_five_watt_drive.cpp` is a whole program.
+
 ## Odometry
 
 Odometry runs on its own task and is the only writer of the pose.

@@ -76,6 +76,30 @@ public:
           std::shared_ptr<device::Inertial> imu = nullptr);
 
   /**
+   * @brief A drive with 11 W and 5.5 W motors on each side, such as a 55 W
+   *        Override drive: four 11 W motors and two 5.5 W motors.
+   *
+   * Gear every motor to turn the wheels at the same speed at full power.
+   * @p gearset is the 11 W motors' cartridge, and the gear ratio in
+   * @p dimensions is wheel turns per turn of an 11 W motor's shaft. The
+   * three-list device::MotorGroup constructor says how the 5.5 W motors are
+   * read and driven.
+   *
+   * @code
+   * mclib::Chassis drive({-1, 2}, {3, -4}, mclib::device::Gearset::Blue,
+   *                      {-5}, {6},  // the 5.5 W motors
+   *                      mclib::config::robot_drive_geometry, imu);
+   * @endcode
+   */
+  Chassis(std::vector<std::int8_t> left_ports,
+          std::vector<std::int8_t> right_ports,
+          device::Gearset gearset,
+          std::vector<std::int8_t> left_ports_5_5w,
+          std::vector<std::int8_t> right_ports_5_5w,
+          const ChassisDimensions& dimensions,
+          std::shared_ptr<device::Inertial> imu = nullptr);
+
+  /**
    * @brief Drive both sides as a fraction of full power, -1..1.
    *
    * Positive is forward on both sides, so `tank(+x, -x)` turns **clockwise**.

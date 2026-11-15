@@ -170,6 +170,9 @@ std::vector<double> Motor::get_temperature_all(void) const { return {0.0}; }
 std::int8_t Motor::size(void) const { return 1; }
 std::int8_t Motor::get_port(const std::uint8_t index) const { return _port; }
 std::vector<std::int8_t> Motor::get_port_all(void) const { return {_port}; }
+MotorType Motor::get_type(const std::uint8_t index) const {
+  return static_cast<MotorType>(motorAt(_port).type);
+}
 
 // ---------------------------------------------------------------- MotorGroup
 
@@ -360,7 +363,6 @@ MotorUnits Motor::get_encoder_units(const std::uint8_t index) const { return {};
 MotorGears Motor::get_gearing(const std::uint8_t index) const { return {}; }
 std::int32_t Motor::get_voltage_limit(const std::uint8_t index) const { return {}; }
 std::int32_t Motor::is_reversed(const std::uint8_t index) const { return {}; }
-MotorType Motor::get_type(const std::uint8_t index) const { return {}; }
 std::int32_t Motor::set_current_limit(const std::int32_t limit, const std::uint8_t index) const { return {}; }
 std::int32_t Motor::set_encoder_units(const MotorUnits units, const std::uint8_t index) const { return {}; }
 std::int32_t Motor::set_encoder_units(const pros::motor_encoder_units_e_t units, const std::uint8_t index) const { return {}; }

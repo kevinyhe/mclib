@@ -17,6 +17,7 @@ run on a robot. The gains, distances and voltages in them are placeholders.
 | [driver_control.cpp](driver_control.cpp) | every way to drive in `opcontrol()`: stick shaping, arcade on two sticks or one, tank, curvature, mixing the sticks yourself, commands that borrow the drive, brake modes, and the same robot with no `ChassisController` |
 | [pose_fusion.cpp](pose_fusion.cpp) | correcting odometry from other sensors: distance sensors and GPS blended in while driving, a one-off fix from distance sensors while standing still, and a wall reset |
 | [holonomic_drive.cpp](holonomic_drive.cpp) | an X-drive or mecanum robot in driver control and in autonomous |
+| [fifty_five_watt_drive.cpp](fifty_five_watt_drive.cpp) | a drive with 11 W and 5.5 W motors, such as Override's 55 W drive: the ports, the gearing, an intake with both kinds, and checking the gearing from the motor speeds |
 
 ## Autonomous motion
 
