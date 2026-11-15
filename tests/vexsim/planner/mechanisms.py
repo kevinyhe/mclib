@@ -59,11 +59,10 @@ RETIRED_PRELOADS = ("behind", "beside")
 MOVE_RESULTS = ("Used the whole time limit", "Reached the preset")
 #: <SC7>: the Autonomous Bonus goes to whoever leads when the period ends
 AUTONOMOUS_S = 15.0
-#: <SG1>, <SG2>, <SG3>, <SG6>, <R10>, <R11>
+#: <SG1>, <SG2>, <SG3>, <SG6>, <R11>
 START_SIZE_IN = 18.0
 MAX_SIZE_IN = 24.0
 MAX_HEIGHT_IN = 50.0
-MAX_MOTOR_WATTS = 88.0
 MAX_DRIVE_WATTS = 55.0
 
 #: Encoder ticks per output turn of a V5 motor, by cartridge, as vexsim gives the drive motors
@@ -349,7 +348,6 @@ class RuleWatch:
         self.largest = list(self.start)
         self.held = [0, 0]
         self.drive_watts = drive_watts
-        self.mechanism_watts = sum(world.robot.motor_watts().values())
 
     def _extent(self):
         return [value / self.inch for value in self.world.robot.extent(self.world.sim.chassis)]
@@ -380,10 +378,8 @@ class RuleWatch:
                             height=round(self.largest[2], 2), size_limit=MAX_SIZE_IN, height_limit=MAX_HEIGHT_IN,
                             passed=max(self.largest[:2]) <= MAX_SIZE_IN and self.largest[2] <= MAX_HEIGHT_IN),
             most_held=dict(pins=self.held[0], cups=self.held[1], passed=self.held[0] <= 1 and self.held[1] <= 1),
-            motors_w=dict(drive=self.drive_watts, total=self.drive_watts + self.mechanism_watts,
-                          drive_limit=MAX_DRIVE_WATTS, total_limit=MAX_MOTOR_WATTS,
-                          passed=self.drive_watts <= MAX_DRIVE_WATTS and
-                          self.drive_watts + self.mechanism_watts <= MAX_MOTOR_WATTS))
+            motors_w=dict(drive=self.drive_watts, drive_limit=MAX_DRIVE_WATTS,
+                          passed=self.drive_watts <= MAX_DRIVE_WATTS))
 
 
 def toggle_faces(world):

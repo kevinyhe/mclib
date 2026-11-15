@@ -637,6 +637,7 @@
     "six_motor_450_middle_traction/turn_left",
     "six_motor_450_middle_traction/turn_right",
     "six_motor_450_middle_traction/turn_to_point",
+    "six_motor_55w/arc",
     "six_motor_55w/drive_forward",
     "six_motor_55w/drive_reverse",
     "six_motor_55w/point_diagonal",

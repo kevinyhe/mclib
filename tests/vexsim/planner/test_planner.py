@@ -994,9 +994,8 @@ class EngineTests(unittest.TestCase):
         rules = result["autonomous"]["rules"]
         self.assertEqual(rules["most_held"], dict(pins=1, cups=1, passed=True))
         self.assertLessEqual(max(rules["start_in"][key] for key in ("length", "width", "height")), 18.0)
-        self.assertEqual(rules["motors_w"], dict(drive=44, total=88.0, drive_limit=55.0, total_limit=88.0, passed=True))
-        self.assertIn("The drive motors are rated 44 W and all the motors 88 W. The limits are 55 W for the drive "
-                      "(R11) and 88 W in all (R10).", result["steps"][0]["info"])
+        self.assertEqual(rules["motors_w"], dict(drive=44, drive_limit=55.0, passed=True))
+        self.assertIn("The drive motors are rated 44 W. The limit is 55 W (R11).", result["steps"][0]["info"])
 
     def test_9_override_autonomous_example_turns_the_left_toggle_and_scores_a_stack(self):
         done, output = self.run_routine(example("override_autonomous"))
@@ -1163,23 +1162,20 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(done.returncode, 1, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
         first, second = result["steps"]
-        self.assertIn("The drive motors are rated 66 W and all the motors 110 W. The limits are 55 W for the drive "
-                      "(R11) and 88 W in all (R10).", first["rule_breaks"])
+        self.assertIn("The drive motors are rated 66 W. The limit is 55 W (R11).", first["rule_breaks"])
         self.assertFalse(second["executed"])
         self.assertEqual(second["skipped_because"], "Not run: step 1 broke a rule, so the run stopped there.")
         self.assertEqual(result["summary"]["broke_rule_in_step"], 0)
         self.assertEqual(result["autonomous"]["rules"]["motors_w"]["passed"], False)
 
-    def test_13_a_55_w_drive_is_inside_r11_but_over_r10_with_the_cascade(self):
+    def test_13_a_55_w_drive_is_inside_r11(self):
         project = dict(field="override", preload="none", robot=dict(preset="six_motor_55w"),
                        start=dict(x=0, y=-61.7, heading=0), steps=[dict(type="drive", distance=5)])
         done, output = self.run_routine(project)
-        self.assertEqual(done.returncode, 1, done.stderr[-3000:])
+        self.assertEqual(done.returncode, 0, done.stderr[-3000:])
         result = strict_json((output / "result.json").read_text())
-        self.assertIn("The drive motors are rated 55 W and all the motors 99 W. The limits are 55 W for the drive "
-                      "(R11) and 88 W in all (R10).", result["steps"][0]["rule_breaks"])
-        self.assertEqual(result["autonomous"]["rules"]["motors_w"],
-                         dict(drive=55, total=99.0, drive_limit=55.0, total_limit=88.0, passed=False))
+        self.assertIn("The drive motors are rated 55 W. The limit is 55 W (R11).", result["steps"][0]["info"])
+        self.assertEqual(result["autonomous"]["rules"]["motors_w"], dict(drive=55, drive_limit=55.0, passed=True))
 
     def run_together(self, projects):
         def run(item):

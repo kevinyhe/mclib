@@ -625,9 +625,8 @@ def start_rules(report):
     start, motors = report["start_in"], report["motors_w"]
     size = f"{start['length']:.2f} in long, {start['width']:.2f} in wide and {start['height']:.2f} in tall"
     lines = [(f"The robot starts {size}. Each must be at most {start['limit']:g} in (SG1).", start["passed"]),
-             (f"The drive motors are rated {motors['drive']:g} W and all the motors {motors['total']:g} W. "
-              f"The limits are {motors['drive_limit']:g} W for the drive (R11) and {motors['total_limit']:g} W "
-              "in all (R10).", motors["passed"])]
+             (f"The drive motors are rated {motors['drive']:g} W. The limit is {motors['drive_limit']:g} W (R11).",
+              motors["passed"])]
     return [line for line, legal in lines if legal], [line for line, legal in lines if not legal]
 
 

@@ -2,7 +2,7 @@
   "format": "mclib-path-planner",
   "version": 1,
   "name": "55 W drive",
-  "description": "A drive, a turn and a boomerang on the 55 W drive Override allows (R11): four 11 W motors and two 5.5 W motors, with two tracking wheels. In the simulator the drive ends 0.19 in off in 1.42 s, the turn 1.6° off in 0.76 s, and the boomerang 1.53 in and 0.7° off in 2.67 s. On the six-motor 66 W drive the same boomerang ends 0.34 in off in 3.68 s; switch Drivetrain and run again to compare. On the Override field this drive and the cascade's 44 W make 99 W, over R10's 88 W. 5.8 s.",
+  "description": "A drive, a turn and a boomerang on the 55 W drive Override allows (R11): four 11 W motors and two 5.5 W motors, with two tracking wheels. In the simulator the drive ends 0.03 in off in 1.63 s, the turn 0.5° off in 0.47 s, and the boomerang 0.10 in and 0.3° off in 3.39 s. On the six-motor 66 W drive the same boomerang ends 0.34 in off in 3.68 s; switch Drivetrain and run again to compare. 6.4 s.",
   "field": "open",
   "robot": {"preset": "six_motor_55w", "tracking": "two"},
   "start": {"x": -36, "y": -48, "heading": 0},

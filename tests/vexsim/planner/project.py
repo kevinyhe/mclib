@@ -39,8 +39,7 @@ TRACTION = {
     "middle": "The middle wheel each side (6-wheel drives)",
     "all": "Every driven wheel",
 }
-#: The Override robot's drive: four 11 W motors, 44 W. The lift's three 11 W motors make 77 W of the 88 W; the
-#: claw is pneumatic
+#: The Override robot's drive: four 11 W motors, 44 W
 OVERRIDE_PRESET = "override_cascade"
 OVERRIDE_TRACKING = "horizontal"
 TRACKING = {
