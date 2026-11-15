@@ -149,8 +149,8 @@ public:
      * Makes the step chained, as withoutExit() does. A later withExit()
      * turns off the early exit and the chaining; a later withStop() turns off
      * only the early exit. For driveTo(), curveCircle(),
-     * curveCircleReverse(), moveToPoint(), boomerang() and
-     * followTrajectory(). On any other step, or with a negative @p range, it
+     * curveCircleReverse(), moveToPoint(), boomerang(), followTrajectory()
+     * and moveToPose(). On any other step, or with a negative @p range, it
      * is a configuration error.
      *
      * @code
@@ -186,7 +186,7 @@ public:
      *
      * The distance left is the one the motion steers by: straight-line to
      * the target for moveToPoint() and boomerang(), along the path for
-     * followTrajectory() and driveTo(), and along the outer wheel's path for
+     * followTrajectory(), moveToPose() and driveTo(), and along the outer wheel's path for
      * curveCircle() (the robot centre's path when useRamseteForArcs() is on
      * and the step is not chained). The same steps as withEarlyExit(QLength);
      * on any other it is a configuration error. Otherwise as atTime().
@@ -250,6 +250,13 @@ public:
     MotionStep followTrajectory(const path::Trajectory& trajectory,
                                 const control::RamseteConfig& config,
                                 QTime timeout);
+    MotionStep moveToPose(Point point,
+                          int dir,
+                          QAngle final_heading,
+                          double lead,
+                          const control::RamseteConfig& config,
+                          const path::TrajectoryConstraints& limits,
+                          QTime timeout);
 
   private:
     friend class Routine;
@@ -539,6 +546,31 @@ public:
   MotionStep followTrajectory(const path::Trajectory& trajectory,
                               const control::RamseteConfig& config,
                               QTime timeout);
+
+  /**
+   * @brief Drive a planned curve to a pose with RAMSETE. See moveToPose() in
+   *        control/motion.hpp.
+   *
+   * The step keeps its own copy of @p config and @p limits, and plans the
+   * curve from wherever the robot is when the step starts. It honours
+   * `withMaxVoltage()`, `withoutExit()` and `withEarlyExit()`; the other
+   * options do not apply.
+   */
+  MotionStep moveToPose(ChassisController& chassis,
+                        Point point,
+                        int dir,
+                        QAngle final_heading,
+                        double lead,
+                        const control::RamseteConfig& config,
+                        const path::TrajectoryConstraints& limits,
+                        QTime timeout);
+  MotionStep moveToPose(Point point,
+                        int dir,
+                        QAngle final_heading,
+                        double lead,
+                        const control::RamseteConfig& config,
+                        const path::TrajectoryConstraints& limits,
+                        QTime timeout);
 
   void clear();
   bool empty() const;

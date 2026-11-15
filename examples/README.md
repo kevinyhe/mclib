@@ -23,7 +23,7 @@ run on a robot. The gains, distances and voltages in them are placeholders.
 | File | Shows |
 | --- | --- |
 | [motions.cpp](motions.cpp) | every blocking motion, one use per routine: `driveTo`, turns, `moveToPoint`, `boomerang`, swings, arcs, `wallReset`, with time limits, voltage limits and chaining |
-| [trajectories.cpp](trajectories.cpp) | paths and the ways to follow them: splines, arcs, speed limits and speed zones, `followTrajectory()` with RAMSETE, pure pursuit, motion profiles, feedforward and the routines that measure it |
+| [trajectories.cpp](trajectories.cpp) | paths and the ways to follow them: splines, arcs, speed limits and speed zones, `followTrajectory()` with RAMSETE, `moveToPose()`, profiled `driveTo()`/`turnToAngle()`/`swing()`/`moveToPoint()`, pure pursuit, motion profiles, feedforward and the routines that measure it |
 | [background_motion_and_safety.cpp](background_motion_and_safety.cpp) | a motion running in the background, acting partway through it, ending it early, the cancel requests, what `disabled()` must do, sensor faults, and the autonomous time budget |
 | [routines_and_selector.cpp](routines_and_selector.cpp) | `Routine` step by step with every step and option, commands that run beside the steps, a routine exported from the path planner, the selector, and saving the pick to the SD card |
 

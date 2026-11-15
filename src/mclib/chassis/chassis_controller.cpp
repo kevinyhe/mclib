@@ -510,6 +510,24 @@ std::unique_ptr<Command> ChassisController::makeFollowTrajectoryCommand(
       });
 }
 
+std::unique_ptr<Command> ChassisController::makeMoveToPoseCommand(
+    QLength x,
+    QLength y,
+    int dir,
+    QAngle final_heading,
+    double lead,
+    const control::RamseteConfig& config,
+    const path::TrajectoryConstraints& limits,
+    QTime time_limit,
+    bool exit,
+    QVoltage max_output,
+    QLength early_exit_range) {
+  return makeAsyncControlCommand([=]() {
+    moveToPose(x, y, dir, final_heading, lead, config, limits, time_limit, exit, max_output,
+               early_exit_range);
+  });
+}
+
 std::unique_ptr<Command> ChassisController::makeArcadeDriveCommand(
     device::Controller& controller,
     control::DriveCurveConfig forward_curve,
